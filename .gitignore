@@ -1,6 +1,5 @@
 # Plaintext secrets — never commit
 secrets/*.yaml
-!secrets/.sops.yaml
 !secrets/example.example.yaml
 ~/.config/aipc/age.key
 

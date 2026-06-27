@@ -4,6 +4,6 @@
 #   age-keygen -o ~/.config/aipc/age.key
 creation_rules:
   - path_regex: secrets/.*\.yaml$
-    age: age1PLACEHOLDER_REPLACE_AFTER_KEYGEN
+    age: age1kj9fxk3nkzedjdq3tfvtx22vfkjm57fysy5r5w007cn39355gpnqel46pm
     encrypted_regex: >-
       (_key|_token|_secret|^api_|^data$|^stringData$)
