@@ -1,0 +1,36 @@
+# aipc_setup
+
+Custom bootc image and Ansible playbook for an AMD Ryzen AI MAX+ 395 (Strix Halo) machine
+running 128 GB unified DDR5X memory, gfx1151 iGPU, and XDNA 2 NPU.
+
+## Design
+
+See [`docs/architecture.md`](docs/architecture.md) for the full multi-phase design.
+
+All capability proposals, implementation notes, and spec diffs live under [`openspec/`](openspec/).
+
+## Repo layout
+
+```
+modules/          source of truth — one directory per capability module
+targets/          generated artefacts (bootc Containerfile, Ansible playbook)
+tools/            aipc CLI: render, doctor, secrets
+secrets/          SOPS-encrypted secrets (age private key never in repo)
+docs/             long-form documentation
+.github/          CI workflows
+```
+
+## Quick start
+
+```sh
+# On the Mac, after age key generation (see docs/secrets-setup.md):
+pip install -e tools
+aipc render bootc --image-ref ghcr.io/<user>/aipc:test --build-date $(date +%F)
+aipc render ansible
+aipc doctor
+```
+
+## Phase 0 status
+
+Implements `system-unified-memory`, `system-base`, and `secrets-sops` modules.
+Run `aipc doctor` on the AI PC after `bootc switch` to confirm all three are green.

@@ -1,0 +1,27 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -e tools pytest shellcheck-py yamllint ruff
+      - name: Ruff
+        run: ruff check tools
+      - name: ShellCheck
+        run: |
+          find modules \( -name 'verify.sh' -o -name 'post-install.sh' \) \
+            -exec shellcheck -S warning {} +
+          find modules -path '*/env/*.sh' -exec shellcheck -S warning {} +
+          shellcheck -S warning tools/bootstrap.sh
+      - name: YAMLlint
+        run: yamllint -d relaxed modules .github
+      - name: Pytest
+        run: pytest tools/tests

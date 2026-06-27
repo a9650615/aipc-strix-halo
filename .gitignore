@@ -1,0 +1,27 @@
+# Plaintext secrets — never commit
+secrets/*.yaml
+!secrets/.sops.yaml
+!secrets/example.example.yaml
+~/.config/aipc/age.key
+
+# Generated render targets
+targets/bootc/Containerfile.generated
+targets/ansible/site.generated.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp

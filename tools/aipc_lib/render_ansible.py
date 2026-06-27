@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+import yaml
+
+from aipc_lib.modules import Module
+
+
+def render(mods: list[Module]) -> str:
+    tasks: list[dict] = []
+
+    all_pkgs = [pkg for m in mods for pkg in m.packages]
+    if all_pkgs:
+        tasks.append({
+            "name": "Install all packages",
+            "dnf": {"name": all_pkgs, "state": "present"},
+        })
+
+    for m in mods:
+        for karg in m.kargs:
+            tasks.append({
+                "name": f"Append karg {karg} ({m.name})",
+                "command": f"bootc kargs --append={karg}",
+            })
+
+        files_dir = m.path / "files"
+        if files_dir.is_dir():
+            tasks.append({
+                "name": f"Copy files for {m.name}",
+                "copy": {"src": f"modules/{m.name}/files/", "dest": "/"},
+            })
+
+        post = m.path / "post-install.sh"
+        if post.exists():
+            tasks.append({
+                "name": f"Run post-install for {m.name}",
+                "script": f"modules/{m.name}/post-install.sh",
+            })
+
+    play = [{"hosts": "aipc", "become": True, "tasks": tasks}]
+    return yaml.dump(play, default_flow_style=False, sort_keys=False)

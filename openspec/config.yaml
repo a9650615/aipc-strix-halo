@@ -1,0 +1,45 @@
+schema: spec-driven
+
+context: |
+  Project: aipc_setup — reproducible setup for an AMD Ryzen AI MAX+ 395
+  (Strix Halo) workstation with 128 GB unified DDR5X-8000.
+
+  Goals (see docs/architecture.md for the full design across 7 phases / 44 modules):
+    - Local-first AI: always-on voice assistant (Pipecat + openWakeWord + SenseVoice +
+      Paraformer-zh-streaming + CosyVoice 2 + Kokoro)
+    - LLM gateway: LiteLLM in front of Lemonade SDK (NPU) + Ollama (iGPU) + vLLM
+      (on demand); main brain Hermes-3-70B or Qwen2.5-72B (bake-off in Phase 0)
+    - Memory + RAG: mem0 + Qdrant + Postgres/pgvector; ingest desktop docs, code,
+      browser, screen-OCR, email/calendar
+    - Agents: LangGraph orchestrator + Open Interpreter + browser-use +
+      Computer-Use (Qwen2-VL) + MCP gateway
+    - Gaming: gamescope session + AI overlay + smart-prompt strategy RAG
+    - Dev: VSCode + Zed + Neovim; Node + Python distrobox; Continue.dev + Cline +
+      Aider + Goose + Claude Code, all on the LiteLLM gateway
+
+  OS / image:
+    - Pure Linux. Base: bazzite-dx (Universal Blue, Fedora bootc).
+    - Single source of truth: modules/. Two render targets:
+      targets/bootc/Containerfile (primary) and targets/ansible/site.yml (fallback).
+    - Image distribution: ghcr.io/<user>/aipc:{rolling, stable, YYYY-MM-DD}.
+    - Secrets: SOPS + age. Age private key never enters the repo or CI.
+
+  Conventions:
+    - Conventional commits (feat:, fix:, docs:, chore:, ci:).
+    - Python 3 + Click for tools/.
+    - Shell scripts pass `shellcheck -S warning`.
+    - YAML passes `yamllint -d relaxed`.
+    - Every module under modules/ has verify.sh; exit 0 on OK with a one-line
+      diagnosis on stderr when failing.
+
+rules:
+  proposal:
+    - Always include a Capabilities section; an empty list is acceptable but
+      "no capabilities" must be stated explicitly.
+    - Mark Windows-wipe, BIOS, and Secure Boot changes as user-visible defaults.
+  design:
+    - Decisions section MUST include alternatives considered for each decision.
+    - Risks section uses "Risk → Mitigation" pairing.
+  tasks:
+    - Each task SHOULD complete in one session (<= 2 hours).
+    - Tasks that touch the AI PC explicitly say "(AI PC)" in the heading group.

@@ -1,0 +1,49 @@
+#!/bin/sh
+# sops-env — source this file to load SOPS-encrypted YAML as SECRET_* env vars.
+# Usage: . /usr/local/lib/aipc/sops-env <encrypted-yaml-path>
+#
+# Fails closed: if /etc/aipc/age.key is absent it prints a diagnostic and
+# returns non-zero without writing any decrypted output.
+
+_aipc_sops_env() {
+  _age_key="/etc/aipc/age.key"
+  _yaml="${1:-}"
+
+  if [ -z "${_yaml}" ]; then
+    printf 'sops-env: usage: . sops-env <encrypted-yaml-path>\n' >&2
+    return 1
+  fi
+
+  if [ ! -r "${_age_key}" ]; then
+    printf 'sops-env: age key not found at %s — run: aipc secrets install-key\n' "${_age_key}" >&2
+    return 1
+  fi
+
+  if [ ! -r "${_yaml}" ]; then
+    printf 'sops-env: encrypted file not found: %s\n' "${_yaml}" >&2
+    return 1
+  fi
+
+  # Decrypt and export each top-level scalar key as SECRET_<KEY>=<value>
+  _decrypted=$(SOPS_AGE_KEY_FILE="${_age_key}" sops --decrypt "${_yaml}" 2>/dev/null) || {
+    printf 'sops-env: sops decryption failed for %s\n' "${_yaml}" >&2
+    return 1
+  }
+
+  # Parse key: value lines and export as SECRET_<UPPER_KEY>
+  while IFS=': ' read -r _k _v; do
+    case "${_k}" in
+      \#*|'') continue ;;
+    esac
+    # Strip surrounding quotes if present
+    _v=$(printf '%s' "${_v}" | sed "s/^['\"]//;s/['\"]$//")
+    # shellcheck disable=SC2163
+    export "SECRET_$(printf '%s' "${_k}" | tr '[:lower:]' '[:upper:]')=${_v}"
+  done <<EOF
+${_decrypted}
+EOF
+
+  unset _age_key _yaml _decrypted _k _v
+}
+
+_aipc_sops_env "$@"

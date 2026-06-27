@@ -1,0 +1,11 @@
+---
+# SOPS creation rules for the aipc project.
+# The age public key below must be replaced with the output of:
+#   age-keygen -o ~/.config/aipc/age.key   (prints public key to stdout)
+# See docs/secrets-setup.md for full instructions.
+creation_rules:
+  - path_regex: secrets/.*\.yaml$
+    age:
+      # age1PLACEHOLDER_REPLACE_AFTER_KEYGEN
+    encrypted_regex: >-
+      (_key|_token|_secret|^api_|^data$|^stringData$)
