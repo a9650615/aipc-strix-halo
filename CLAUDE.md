@@ -134,6 +134,7 @@ Direct calls to Ollama / Lemonade / vLLM endpoints are allowed only inside the c
 - Prefer existing patterns in the repo over importing new dependencies.
 - Idempotency in `post-install.sh` is mandatory (image rebuilds may re-execute parts during recovery).
 - Each `verify.sh` exits non-zero on failure with a one-line diagnosis on stderr.
+- `verify.sh` exit codes: `0` = pass, `2` = intentionally disabled/optional (reported as OPTIONAL by `aipc doctor`), any other non-zero = fail.
 
 ---
 

@@ -50,6 +50,11 @@
   on-disk status (present / missing / size).
 - [ ] 3.3 Add `aipc models sync --check` (dry-run) that exits non-zero if any
   declared model is missing, without downloading — usable from post-install.sh.
+- [ ] 3.4 Render `modules/llm-litellm/files/etc/aipc/litellm/config.yaml` from
+  `modules/llm-models/files/etc/aipc/models/models.yaml` at build time
+  (renderer-side, not post-install). Single source of truth = the manifest.
+  Until done, hand-alignment per Task A must be re-checked when either file
+  changes.
 
 ## 4. Extend aipc doctor For ai-runtime
 
