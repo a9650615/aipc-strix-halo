@@ -40,7 +40,9 @@ def render(
 
         post = m.path / "post-install.sh"
         if post.exists():
-            lines.append(f"RUN /bin/sh -eux modules/{m.name}/post-install.sh")
+            tmp = f"/tmp/post-install-{m.name}.sh"
+            lines.append(f"COPY modules/{m.name}/post-install.sh {tmp}")
+            lines.append(f"RUN /bin/sh -eux {tmp} && rm -f {tmp}")
 
         if m.kargs or files_dir.is_dir() or modprobe_dir.is_dir() or env_dir.is_dir() or post.exists():
             lines.append("")
