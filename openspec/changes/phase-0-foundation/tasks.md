@@ -5,17 +5,17 @@
 - [x] 1.3 Write MIT `LICENSE` with current year
 - [x] 1.4 Write `.editorconfig` (2-space default, 4 for Python, tab for Makefile)
 - [x] 1.5 Write `README.md` pointing readers to `docs/architecture.md` and `openspec/`
-- [ ] 1.6 `git init -b main`, first commit, `gh repo create aipc_setup --public --source=. --push`
+- [x] 1.6 `git init -b main`, first commit, `gh repo create aipc_setup --public --source=. --push`
 
 ## 2. Secrets Tooling (Mac)
 
-- [ ] 2.1 Install `sops` and `age` on the Mac via Homebrew
-- [ ] 2.2 Generate age keypair at `~/.config/aipc/age.key` (mode 0600); record the public key
-- [ ] 2.3 Write `secrets/.sops.yaml` with the user's age public key and an `encrypted_regex` that covers `*_key`, `*_token`, `*_secret`, `api_*`, `data`, `stringData`
-- [ ] 2.4 Create `secrets/example.example.yaml` with placeholder values and encrypt it in place with `sops`
-- [ ] 2.5 Confirm `sops --decrypt secrets/example.example.yaml` round-trips with `SOPS_AGE_KEY_FILE` pointing at the Mac key
-- [ ] 2.6 Write `docs/secrets-setup.md` (key location, USB transfer, rotation, recovery)
-- [ ] 2.7 Commit and push
+- [x] 2.1 Install `sops` and `age` on the Mac via Homebrew
+- [x] 2.2 Generate age keypair at `~/.config/aipc/age.key` (mode 0600); record the public key
+- [x] 2.3 Write `secrets/.sops.yaml` with the user's age public key and an `encrypted_regex` that covers `*_key`, `*_token`, `*_secret`, `api_*`, `data`, `stringData`
+- [x] 2.4 Create `secrets/example.example.yaml` with placeholder values and encrypt it in place with `sops`
+- [x] 2.5 Confirm `sops --decrypt secrets/example.example.yaml` round-trips with `SOPS_AGE_KEY_FILE` pointing at the Mac key
+- [x] 2.6 Write `docs/secrets-setup.md` (key location, USB transfer, rotation, recovery)
+- [x] 2.7 Commit and push
 
 ## 3. Modules (Mac)
 
@@ -38,7 +38,7 @@
 - [x] 4.8 Implement `tools/aipc_lib/doctor.py` and `tools/aipc_lib/secrets.py` (SOPS wrappers)
 - [x] 4.9 Wire everything together in `tools/aipc_lib/cli.py` with Click subcommands `render bootc`, `render ansible`, `doctor`, `secrets {view,edit}`
 - [x] 4.10 Smoke-test: `pip install -e tools`, run `aipc --help`, `aipc render bootc --image-ref test --build-date 2026-06-27`, confirm `targets/bootc/Containerfile.generated` is non-empty
-- [ ] 4.11 Commit and push
+- [x] 4.11 Commit and push
 
 ## 5. Bootstrap And CI (Mac)
 
@@ -46,7 +46,7 @@
 - [x] 5.2 `shellcheck tools/bootstrap.sh` clean, `chmod +x`, commit
 - [x] 5.3 Write `.github/workflows/ci.yml` (Python 3.12, install `tools`, run `pytest`, `ruff`, `shellcheck` over all `verify.sh` + `post-install.sh` + `env/*.sh` + `bootstrap.sh`, `yamllint -d relaxed`)
 - [x] 5.4 Write `.github/workflows/build-image.yml` (`redhat-actions/buildah-build` → `redhat-actions/push-to-registry`, tags `:rolling` + `:YYYY-MM-DD` + optionally `:stable` on manual dispatch)
-- [ ] 5.5 `yamllint` workflows clean, commit, push
+- [x] 5.5 `yamllint` workflows clean, commit, push
 - [ ] 5.6 Wait for first CI run; if build fails, inspect `targets/bootc/Containerfile.generated` from the run logs and patch the offending module
 
 ## 6. AI PC Migration (one-time)
