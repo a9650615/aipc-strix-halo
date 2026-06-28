@@ -16,10 +16,15 @@ def render(mods: list[Module]) -> str:
         })
 
     for m in mods:
-        for karg in m.kargs:
+        if m.kargs:
+            kargs_toml = ", ".join(f'"{k}"' for k in m.kargs)
             tasks.append({
-                "name": f"Append karg {karg} ({m.name})",
-                "command": f"bootc kargs --append={karg}",
+                "name": f"{m.name}: install kargs file",
+                "copy": {
+                    "dest": f"/usr/lib/bootc/kargs.d/{m.name}.toml",
+                    "mode": "0644",
+                    "content": f'kargs = [{kargs_toml}]\n',
+                },
             })
 
         files_dir = m.path / "files"

@@ -46,11 +46,22 @@ def test_dnf_task_has_all_packages(two_mods: list[Module]) -> None:
     assert "pkg-b1" in pkg_list
 
 
-def test_kargs_command_task(two_mods: list[Module]) -> None:
+def test_kargs_copy_task(two_mods: list[Module]) -> None:
     parsed = yaml.safe_load(render(two_mods))
     tasks = parsed[0]["tasks"]
-    cmd_tasks = [t for t in tasks if "command" in t or "ansible.builtin.command" in t]
-    assert any("karg=1" in str(t) for t in cmd_tasks)
+    copy_tasks = [t for t in tasks if "copy" in t]
+    kargs_task = next(
+        (t for t in copy_tasks if t.get("copy", {}).get("dest", "") == "/usr/lib/bootc/kargs.d/mod-a.toml"),
+        None,
+    )
+    assert kargs_task is not None
+    assert 'kargs = ["karg=1"]' in kargs_task["copy"]["content"]
+
+
+def test_no_bogus_bootc_kargs_subcommand(two_mods: list[Module]) -> None:
+    """bootc has no `kargs` subcommand — render must never emit it."""
+    out = render(two_mods)
+    assert "bootc kargs" not in out
 
 
 def test_post_install_script_task(tmp_path: Path) -> None:
