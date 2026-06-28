@@ -180,12 +180,33 @@ Co-authored-by: <model-id> <noreply@anthropic.com>
 Agent-Role: 大哥 | 副官 | 執行兵
 Agent-Run: <human-readable run label, e.g. phase-0-build-fix-2026-06-28T07>
 Spec-Task: <change-name>#<task-id>   (omit if not tied to a spec task)
+Agent-Orchestrator: <orchestrator-id>   (optional; omit when worker and orchestrator are the same)
 ```
 
 - `Co-authored-by:` is GitHub-recognised; the UI shows the avatar.
 - `Agent-Role:` matches §0. Use the role you actually performed in that commit, not your title.
 - `Agent-Run:` is a freeform label so multiple commits from the same dispatch can be grouped (`git log --grep "Agent-Run: phase-0-build-fix"`).
 - `Spec-Task:` references the OpenSpec change + task id (e.g. `phase-1-ai-runtime#1.3`). If the work falls outside any spec task, omit AND open a change first (see §1 — "stop and propose").
+- `Agent-Orchestrator:` When the model named in `Co-authored-by:` was dispatched by a different model or a different Claude Code instance, fill this with a short, greppable identifier of the dispatching session (e.g. `claude-code-instance-A` or `claude-sonnet-4.6/session-B`). Same model + same session: omit.
+
+**Example — same session (omit `Agent-Orchestrator:`):**
+
+```
+Co-authored-by: claude-sonnet-4-6 <noreply@anthropic.com>
+Agent-Role: 副官
+Agent-Run: phase-0-review-fix-2026-06-28
+Spec-Task: phase-0-foundation#R4
+```
+
+**Example — nested dispatch (fill `Agent-Orchestrator:`):**
+
+```
+Co-authored-by: Qwen3.7-max <noreply@anthropic.com>
+Agent-Role: 副官
+Agent-Run: phase1-lemonade-port-fix-2026-06-28
+Spec-Task: phase-1-ai-runtime#1.4
+Agent-Orchestrator: claude-opus-4-7
+```
 
 When a 大哥 (Opus) instructs sonnet/qwen subagents to do work, the **subagent commits the change with its own trailer**. The 大哥 does not commit on the subagent's behalf.
 

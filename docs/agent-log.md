@@ -26,3 +26,4 @@ Columns:
 | 2026-06-28 | 大哥 | opus-4.7 | claude-md-roles-and-attribution | n/a (process) | (this commit) | CLAUDE.md §0 Roles + §11 Attribution added; this log seeded with prior runs back-filled |
 | 2026-06-28 | 副官 | Qwen3.7-max | phase1-lemonade-port-fix-2026-06-28 | phase-1-ai-runtime#1.4 | b3a14ec | verify.sh default port corrected 8000→8001 to match quadlet |
 | 2026-06-28 | 副官 | claude-sonnet-4-6 | phase-0-review-fix-2026-06-28 | phase-0-foundation#R4, phase-1-ai-runtime#R3 | cb7b0ec..8e1c61a | ansible renderer kargs parity (TOML copy task replaces bogus bootc subcommand); regression guard added; HSA_OVERRIDE_GFX_VERSION spec typo 11.0.0→11.5.1 |
+| 2026-06-28 | 副官 | claude-sonnet-4-6 | claude-md-orchestrator-trailer-2026-06-28 | n/a (repo process) | (this commit) | CLAUDE.md §11: optional Agent-Orchestrator trailer added (template line + explanatory bullet + two examples); dispatched by claude-opus-4-7 |
