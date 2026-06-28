@@ -24,3 +24,4 @@ Columns:
 | 2026-06-28 | 副官 | sonnet | phase-1-spec-retro | phase-1-ai-runtime (all 4 artifacts) | b7ecd58 | OpenSpec change written to retroactively cover the 4 pre-existing llm-* modules; 5 gap tasks identified (R3 keep-alive, R4 vLLM eviction, R5 models.yaml, R6/R7 ai-rocm/ai-xdna missing, R8 doctor alias check) |
 | 2026-06-28 | 大哥 | opus-4.7 | phase-1-modules-disable-gate | n/a (CI un-block) | f47a8c9 | 4 llm-* modules marked `.disabled`; renderer skips them. Removes Phase 1 build-time bugs from Phase 0 image; legit Phase 1 fix work tracked as tasks 1.x. |
 | 2026-06-28 | 大哥 | opus-4.7 | claude-md-roles-and-attribution | n/a (process) | (this commit) | CLAUDE.md §0 Roles + §11 Attribution added; this log seeded with prior runs back-filled |
+| 2026-06-28 | 副官 | Qwen3.7-max | phase1-lemonade-port-fix-2026-06-28 | phase-1-ai-runtime#1.4 | b3a14ec | verify.sh default port corrected 8000→8001 to match quadlet |
