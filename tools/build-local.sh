@@ -26,7 +26,7 @@ docker run --rm --privileged \
   -v "${REPO_ROOT}:/build" \
   -v "aipc-buildah-storage:/var/lib/containers" \
   quay.io/buildah/stable \
-  buildah build \
+  buildah --storage-driver vfs build \
     --layers \
     --format oci \
     $(for t in ${TAGS}; do printf -- '-t aipc:%s ' "$t"; done) \
