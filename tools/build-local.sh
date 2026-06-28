@@ -21,24 +21,39 @@ docker run --rm \
 
 [ -f "${REPO_ROOT}/targets/bootc/Containerfile" ] || fail "render failed — Containerfile not generated"
 
+# ponytail: vfs full-copies every layer (no overlay) so --layers blows the disk
+# fast. Without it + post-build prune the volume stays bounded to ~final image
+# size. KEEP_CACHE=1 retains intermediates for incremental rebuilds (grows fast
+# — purge with `docker volume rm aipc-buildah-storage`).
+PRUNE_CMD='buildah --storage-driver vfs rmi --prune --force || true'
+[ -n "${KEEP_CACHE:-}" ] && PRUNE_CMD=': skip prune (KEEP_CACHE set)'
+
+TAG_ARGS=$(for t in ${TAGS}; do printf -- '-t aipc:%s ' "$t"; done)
+
 echo "==> Step 2/2: build image (in buildah container, privileged)"
 docker run --rm --privileged \
   -v "${REPO_ROOT}:/build" \
   -v "aipc-buildah-storage:/var/lib/containers" \
   quay.io/buildah/stable \
-  buildah --storage-driver vfs build \
-    --layers \
-    --format oci \
-    $(for t in ${TAGS}; do printf -- '-t aipc:%s ' "$t"; done) \
-    -f targets/bootc/Containerfile \
-    /build
+  sh -euc "
+    buildah --storage-driver vfs build \
+      --format oci \
+      ${TAG_ARGS} \
+      -f targets/bootc/Containerfile \
+      /build
+    ${PRUNE_CMD}
+  "
 
 echo ""
 echo "==> Build complete. Tags:"
 for t in ${TAGS}; do
   echo "  aipc:${t}"
 done
+
+vol_size=$(docker system df -v 2>/dev/null | awk '/aipc-buildah-storage/ {print $3}')
+[ -n "${vol_size}" ] && echo "==> buildah volume size: ${vol_size}"
+
 echo ""
 echo "To push to ghcr.io:"
 echo "  docker run --rm -v aipc-buildah-storage:/var/lib/containers quay.io/buildah/stable \\"
-echo "    buildah push --creds <user>:<token> aipc:rolling docker://ghcr.io/a9650615/aipc:rolling"
+echo "    buildah --storage-driver vfs push --creds <user>:<token> aipc:rolling docker://ghcr.io/a9650615/aipc:rolling"
