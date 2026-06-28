@@ -1,0 +1,13 @@
+[Unit]
+Description=Decrypt cloud LLM API keys from SOPS
+ConditionPathExists=/etc/aipc/secrets/cloud-llm.yaml
+Before=litellm.service
+Wants=litellm.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/aipc/decrypt-cloud-keys.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

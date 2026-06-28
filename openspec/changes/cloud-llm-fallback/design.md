@@ -81,9 +81,9 @@ LiteLLM routes to provider APIs
 
 | Alias | Provider | LiteLLM Model ID | Env Var |
 |-------|----------|-------------------|---------|
-| main-cloud | Anthropic | anthropic/claude-sonnet-4-20250514 | ANTHROPIC_API_KEY |
-| coder-cloud | Anthropic | anthropic/claude-sonnet-4-20250514 | ANTHROPIC_API_KEY |
-| thinking-cloud | Anthropic | anthropic/claude-opus-4-20250514 | ANTHROPIC_API_KEY |
+| main-cloud | Anthropic | anthropic/claude-sonnet-4-6 | ANTHROPIC_API_KEY |
+| coder-cloud | Anthropic | anthropic/claude-sonnet-4-6 | ANTHROPIC_API_KEY |
+| thinking-cloud | Anthropic | anthropic/claude-opus-4-8 | ANTHROPIC_API_KEY |
 | gpt4o-cloud | OpenAI | openai/gpt-4o | OPENAI_API_KEY |
 | gemini-cloud | Google | gemini/gemini-2.5-pro | GEMINI_API_KEY |
 
