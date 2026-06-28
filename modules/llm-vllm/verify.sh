@@ -9,9 +9,10 @@ fail() {
   exit 1
 }
 
-# Optional module — if service is disabled, that's fine
+# Optional module — if service is disabled, exit 2 (OPTIONAL, not failure)
 if ! systemctl is-enabled --quiet vllm.service 2>/dev/null; then
-  exit 0
+  echo "llm-vllm: vllm.service not enabled (optional)"
+  exit 2
 fi
 
 # If enabled, it must be active

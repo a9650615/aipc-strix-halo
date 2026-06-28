@@ -1,0 +1,3 @@
+rocm-smi
+amd-smi
+rocm-hip-runtime

@@ -17,6 +17,30 @@ agent tools, scripts).
 
 Adding a new logical model = a LiteLLM config entry, nothing else.
 
+## Container image pin
+
+`quadlet/litellm.service` pins `ghcr.io/berriai/litellm` to a digest
+(currently v1.89.4 stable). Floating tags like `:main-latest` are forbidden —
+the image is rebuilt on every `bootc switch`, so a tag drift would silently
+change behaviour across hosts.
+
+To update the pin:
+
+1. Pick a target version on the [GitHub packages page](https://github.com/orgs/berriai/packages/container/litellm/versions).
+2. Copy the digest (`sha256:…`) for the chosen version.
+3. Replace the `Image=` line in `quadlet/litellm.service`.
+4. Re-render both targets and confirm parity (see `AGENTS.md §4`).
+
+## Timeouts
+
+`config.yaml` sets `router_settings.timeout: 600` and
+`litellm_settings.request_timeout: 600` — both are per-request ceilings, not
+idle-backend eviction. LiteLLM's proxy has no native "unload after N seconds
+of zero traffic" key; backend idle eviction must be configured on the backend
+itself (vLLM's `--timeout-keep-alive`, Lemonade's model unload policy,
+Ollama's `OLLAMA_KEEP_ALIVE`). `cooldown_time: 60` / `allowed_fails: 3` only
+trip on failures, not idleness.
+
 ## Dependencies
 
 - `llm-ollama` (iGPU backend for most models).

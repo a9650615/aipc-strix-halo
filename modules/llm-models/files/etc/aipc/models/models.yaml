@@ -1,0 +1,45 @@
+# llm-models — canonical alias registry
+# This file is the single source of truth for logical model names.
+# llm-litellm renders its router config from here; backends pre-pull weights
+# listed here. See CLAUDE.md §7.
+
+models:
+  - alias: router-1b
+    backend: ollama
+    model_id: qwen2.5:1.5b-instruct-q4_K_M
+    size_gb: 1.0
+
+  - alias: intent-3b
+    backend: lemonade
+    model_id: amd/Qwen2.5-3B-Instruct-ryzen-ai
+    size_gb: 2.5
+
+  - alias: main-70b
+    backend: ollama
+    model_id: qwen2.5:72b-instruct-q4_K_M
+    size_gb: 42.0
+
+  - alias: coder-fast
+    backend: ollama
+    model_id: qwen2.5-coder:7b
+    size_gb: 4.5
+
+  - alias: coder-strong
+    backend: ollama
+    model_id: qwen2.5-coder:32b
+    size_gb: 19.0
+
+  - alias: coder-thinking
+    backend: ollama
+    model_id: deepseek-r1:14b
+    size_gb: 9.0
+
+  - alias: embed-bge
+    backend: lemonade
+    model_id: BAAI/bge-m3
+    size_gb: 2.2
+
+  - alias: vlm-qwen2vl
+    backend: ollama
+    model_id: qwen2-vl:7b
+    size_gb: 4.5

@@ -41,6 +41,12 @@ model_list:
       model: ollama/qwen2-vl:7b-instruct-q4_K_M
       api_base: http://127.0.0.1:11434
 
+router_settings:
+  timeout: 600
+  num_retries: 2
+  allowed_fails: 3
+  cooldown_time: 60
+
 litellm_settings:
   drop_params: false
   num_retries: 2
