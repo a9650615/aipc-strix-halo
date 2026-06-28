@@ -1,0 +1,9 @@
+# ponytail: ROCm 7.0 repo stanza copied from repo.radeon.com/rocm/yum/7.0/rocm-7.0.repo;
+# verify baseurl/gpg key on first AI PC boot before removing module's .disabled marker.
+[ROCm-7.0]
+name=ROCm-7.0
+baseurl=https://repo.radeon.com/rocm/rhel9/7.0/main
+enabled=1
+priority=50
+gpgcheck=1
+gpgkey=https://repo.radeon.com/rocm/rocm.gpg.key

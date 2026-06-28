@@ -1,2 +1,0 @@
-amd-xdna-dkms
-xdna-smi
