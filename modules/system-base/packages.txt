@@ -2,7 +2,6 @@ bootc
 btrfs-progs
 snapper
 age
-sops
 git-delta
 jq
 yq
