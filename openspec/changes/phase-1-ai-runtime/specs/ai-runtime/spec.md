@@ -62,7 +62,7 @@ The `llm-ollama` module SHALL run the `ollama/ollama:rocm` container as a
 systemd service on `127.0.0.1:11434`. The container SHALL set
 `OLLAMA_KEEP_ALIVE=-1` so the model declared as `main-70b` in `models.yaml`
 remains loaded in GTT indefinitely. `HSA_OVERRIDE_GFX_VERSION` SHALL be set to
-`11.0.0` to enable gfx1151 inference.
+`11.5.1` to enable gfx1151 inference.
 
 #### Scenario: Ollama service active with iGPU passthrough
 
