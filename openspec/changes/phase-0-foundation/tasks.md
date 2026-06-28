@@ -47,7 +47,7 @@
 - [x] 5.3 Write `.github/workflows/ci.yml` (Python 3.12, install `tools`, run `pytest`, `ruff`, `shellcheck` over all `verify.sh` + `post-install.sh` + `env/*.sh` + `bootstrap.sh`, `yamllint -d relaxed`)
 - [x] 5.4 Write `.github/workflows/build-image.yml` (`redhat-actions/buildah-build` → `redhat-actions/push-to-registry`, tags `:rolling` + `:YYYY-MM-DD` + optionally `:stable` on manual dispatch)
 - [x] 5.5 `yamllint` workflows clean, commit, push
-- [ ] 5.6 Wait for first CI run; if build fails, inspect `targets/bootc/Containerfile.generated` from the run logs and patch the offending module
+- [x] 5.6 Wait for first CI run; if build fails, inspect `targets/bootc/Containerfile.generated` from the run logs and patch the offending module
 
 ## 6. AI PC Migration (one-time)
 
