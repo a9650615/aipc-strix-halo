@@ -29,6 +29,8 @@ def discover(root: Path) -> list[Module]:
     for entry in sorted(root.iterdir()):
         if not entry.is_dir():
             continue
+        if (entry / ".disabled").exists():
+            continue
         mods.append(
             Module(
                 name=entry.name,
