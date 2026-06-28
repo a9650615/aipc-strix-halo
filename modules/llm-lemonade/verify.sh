@@ -16,6 +16,6 @@ systemctl is-active --quiet lemonade.service \
   || fail "llm-lemonade: lemonade.service not active"
 
 # API responds
-port=$(cat /etc/aipc/env.d/llm-lemonade/port 2>/dev/null || echo "8000")
+port=$(cat /etc/aipc/env.d/llm-lemonade/port 2>/dev/null || echo "8001")
 curl -fsS "http://127.0.0.1:${port}/health" >/dev/null 2>&1 \
   || fail "llm-lemonade: API not responding on 127.0.0.1:${port}"
