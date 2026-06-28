@@ -41,6 +41,31 @@ model_list:
       model: ollama/qwen2-vl:7b-instruct-q4_K_M
       api_base: http://127.0.0.1:11434
 
+  - model_name: main-cloud
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: coder-cloud
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: thinking-cloud
+    litellm_params:
+      model: anthropic/claude-opus-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: gpt4o-cloud
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gemini-cloud
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GEMINI_API_KEY
+
 router_settings:
   timeout: 600
   num_retries: 2

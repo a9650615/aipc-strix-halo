@@ -9,6 +9,7 @@ ContainerName=litellm
 Volume=/etc/aipc/litellm/config.yaml:/app/config.yaml:ro,Z
 PublishPort=127.0.0.1:4000:4000
 Exec=litellm --config /app/config.yaml --port 4000
+EnvironmentFile=-/etc/aipc/env.d/llm-litellm/cloud-keys.env
 
 [Service]
 Restart=always

@@ -43,3 +43,28 @@ models:
     backend: ollama
     model_id: qwen2-vl:7b-instruct-q4_K_M
     size_gb: 4.5
+
+  - alias: main-cloud
+    backend: anthropic
+    model_id: claude-sonnet-4-20250514
+    size_gb: cloud
+
+  - alias: coder-cloud
+    backend: anthropic
+    model_id: claude-sonnet-4-20250514
+    size_gb: cloud
+
+  - alias: thinking-cloud
+    backend: anthropic
+    model_id: claude-opus-4-20250514
+    size_gb: cloud
+
+  - alias: gpt4o-cloud
+    backend: openai
+    model_id: gpt-4o
+    size_gb: cloud
+
+  - alias: gemini-cloud
+    backend: google
+    model_id: gemini-2.5-pro
+    size_gb: cloud

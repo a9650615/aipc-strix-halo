@@ -4,8 +4,8 @@ secrets/*.yaml
 ~/.config/aipc/age.key
 
 # Generated render targets
-targets/bootc/Containerfile.generated
-targets/ansible/site.generated.yml
+targets/bootc/Containerfile*
+targets/ansible/site*.yml
 
 # Python
 __pycache__/
