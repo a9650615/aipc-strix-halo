@@ -1,18 +1,32 @@
-# AGENTS.md — Rules for AI Working in This Repository
+# CLAUDE.md — Rules for AI Working in This Repository
 
-This document tells any AI (Claude, Goose, Cline, Aider, Continue.dev, future local agents) how to make changes to this repo without breaking it.
+This document tells any AI (Claude, Goose, Cline, Aider, Continue.dev, Qwen via Aider/Goose, future local agents) how to make changes to this repo without breaking it.
 
 It is enforced socially — there is no CI gate against AI behaviour today. But the structure of this repo makes deviations easy to spot in review.
 
 ---
 
+## 0. Role — Pick One Before Acting
+
+Three roles exist. Pick the one that matches what the user (or your own system prompt) signals; ask if unsure. Roles describe **behaviour**, not models — any model can fill any role; the user decides per session.
+
+| Role | Calls / signals | Job |
+|---|---|---|
+| **大哥 (Big-Brother / Reviewer)** | "you are 大哥", strategic / review / triage requests, CI-failure root-causing, cross-agent coordination, calling shots between revert vs fix | Review work, find root causes, plan, dispatch, judge. Do NOT do mechanical execution yourself when a 副官/執行兵 can be dispatched. Catch spec drift, hold scope, decide direction. |
+| **副官 (Lieutenant / Implementer)** | "you are 副官", TDD-shaped tasks, multi-file but bounded changes, writing tests + implementation in one pass | Execute focused tasks end-to-end with TDD. Touch only the files the task names. Report what was skipped/why. |
+| **執行兵 (Soldier / Mechanical)** | "you are 執行兵", single-file edits, boilerplate, renames, docs, doc backfills, file moves | Do exactly what was asked, narrowly. No scope expansion. Report results in one short line. |
+
+**The model knows its own identity from its system prompt**; combine that with the user's signal to pick. If the user gave no signal and your identity does not obviously fit, **ask**.
+
+---
+
 ## 1. Read these first
 
-1. `openspec/project.md` — the source of truth for what we are building and why
-2. The capability spec under `openspec/specs/<capability>/spec.md` for the area you are changing
-3. Any active change in `openspec/changes/` that overlaps your area
+1. `docs/architecture.md` — the long-form source of truth for the project's design (7 phases / 44 modules)
+2. `openspec/changes/<change-name>/{proposal,design,specs/**,tasks}.md` for the area you are changing
+3. `openspec/specs/<capability>/spec.md` for already-archived requirements
 
-If you cannot find a spec for what you are about to do, **stop and propose a change first**.
+If you cannot find a spec for what you are about to do, **stop and propose a change first** (`npx -y @fission-ai/openspec new change <name>`).
 
 ---
 
@@ -148,3 +162,33 @@ Default to making the call yourself, but stop when:
 - A security-sensitive default would loosen (screen-control scope, secret handling, network exposure).
 
 A short message stating the trade-off and your recommendation is enough. Do not ask permission for routine implementation choices the spec already constrains.
+
+---
+
+## 11. Agent Attribution — Every Commit Must Identify Who
+
+Multiple agents (Opus, Sonnet, Qwen via Aider/Goose, future local) work this repo. To make post-hoc review possible, every commit MUST identify the agent and the task it served.
+
+**Commit message trailers (mandatory):**
+
+```
+<subject>
+
+<body>
+
+Co-authored-by: <model-id> <noreply@anthropic.com>
+Agent-Role: 大哥 | 副官 | 執行兵
+Agent-Run: <human-readable run label, e.g. phase-0-build-fix-2026-06-28T07>
+Spec-Task: <change-name>#<task-id>   (omit if not tied to a spec task)
+```
+
+- `Co-authored-by:` is GitHub-recognised; the UI shows the avatar.
+- `Agent-Role:` matches §0. Use the role you actually performed in that commit, not your title.
+- `Agent-Run:` is a freeform label so multiple commits from the same dispatch can be grouped (`git log --grep "Agent-Run: phase-0-build-fix"`).
+- `Spec-Task:` references the OpenSpec change + task id (e.g. `phase-1-ai-runtime#1.3`). If the work falls outside any spec task, omit AND open a change first (see §1 — "stop and propose").
+
+When a 大哥 (Opus) instructs sonnet/qwen subagents to do work, the **subagent commits the change with its own trailer**. The 大哥 does not commit on the subagent's behalf.
+
+**Aggregated log** lives at `docs/agent-log.md` (append-only). Every agent run logs one row there with date, role, model, run label, task ids, sha range, outcome. Either the agent that did the work appends its row before exiting, or the 大哥 appends on its behalf during review — but it MUST get appended on the same calendar day.
+
+**No trailer = the work is unattributed and a 大哥 must back-fill it before approving the next change.**
