@@ -1,0 +1,18 @@
+[Unit]
+Description=LiteLLM proxy gateway for AIPC
+After=ollama.service
+Requires=ollama.service
+
+[Container]
+Image=ghcr.io/berriai/litellm:main-latest
+ContainerName=litellm
+Volume=/etc/aipc/litellm/config.yaml:/app/config.yaml:ro,Z
+PublishPort=127.0.0.1:4000:4000
+Exec=litellm --config /app/config.yaml --port 4000
+
+[Service]
+Restart=always
+TimeoutStartSec=90
+
+[Install]
+WantedBy=default.target

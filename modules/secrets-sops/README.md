@@ -6,12 +6,12 @@ decrypted YAML values as `SECRET_*` environment variables.
 ## What it does
 
 - Installs `/etc/aipc/sops.yaml` (SOPS creation rules; age public key managed separately).
-- Installs `/usr/local/lib/aipc/sops-env` (sourceable helper, mode 0755).
+- Installs `/usr/lib/aipc/sops-env` (sourceable helper, mode 0755).
 - `post-install.sh` ensures correct permissions on the helper.
 
 ## Runtime behaviour
 
-Source `/usr/local/lib/aipc/sops-env <encrypted-yaml>` to load `SECRET_*` vars.
+Source `/usr/lib/aipc/sops-env <encrypted-yaml>` to load `SECRET_*` vars.
 If `/etc/aipc/age.key` (the private key, installed out-of-band) is absent, the
 helper writes a diagnostic to stderr and exits non-zero — it never silently skips.
 

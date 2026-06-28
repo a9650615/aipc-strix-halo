@@ -13,12 +13,12 @@ fail() {
 [ -r /etc/aipc/sops.yaml ] || fail "secrets-sops: /etc/aipc/sops.yaml not found or not readable"
 
 # Helper is executable
-[ -x /usr/local/lib/aipc/sops-env ] || fail "secrets-sops: /usr/local/lib/aipc/sops-env not executable"
+[ -x /usr/lib/aipc/sops-env ] || fail "secrets-sops: /usr/lib/aipc/sops-env not executable"
 
 # Fails closed without age key
 if [ ! -r /etc/aipc/age.key ]; then
   # Expected on a fresh image; verify the helper actually fails closed
-  _out=$(sh -c '. /usr/local/lib/aipc/sops-env /dev/null' 2>&1 || true)
+  _out=$(sh -c '. /usr/lib/aipc/sops-env /dev/null' 2>&1 || true)
   printf '%s' "${_out}" | grep -qi 'install-key\|age key' \
     || fail "secrets-sops: helper does not mention 'install-key' when age key is absent"
   # Exit 0 — key absent is documented expected state (see design.md risk note)

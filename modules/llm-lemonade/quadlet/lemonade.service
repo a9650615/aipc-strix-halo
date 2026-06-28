@@ -1,0 +1,23 @@
+[Unit]
+Description=Lemonade SDK NPU inference server
+After=network-online.target systemd-machined.service
+Requires=network-online.target
+ConditionPathExists=/dev/accel/accel0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+ExecStartPre=-/usr/bin/podman rm -f lemonade
+ExecStart=/usr/bin/podman run \
+    --name lemonade \
+    --rm \
+    --device=/dev/accel/accel0:/dev/accel/accel0 \
+    --group-add=keep-groups \
+    -p 127.0.0.1:8001:8001 \
+    -v /etc/aipc/lemonade:/etc/aipc/lemonade:ro,Z \
+    amd/lemonade-sdk:latest
+ExecStop=/usr/bin/podman stop lemonade
+
+[Install]
+WantedBy=multi-user.target

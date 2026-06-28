@@ -45,7 +45,7 @@ The aipc image SHALL ship with base packages, locale (en_US.UTF-8 + zh_TW.UTF-8)
 
 ### Requirement: SOPS-Based Secrets Workflow
 
-The aipc image SHALL provide a system-wide SOPS configuration at `/etc/aipc/sops.yaml` and a sourceable helper at `/usr/local/lib/aipc/sops-env` that fails closed when the age private key at `/etc/aipc/age.key` is absent.
+The aipc image SHALL provide a system-wide SOPS configuration at `/etc/aipc/sops.yaml` and a sourceable helper at `/usr/lib/aipc/sops-env` that fails closed when the age private key at `/etc/aipc/age.key` is absent.
 
 #### Scenario: SOPS configuration present
 
@@ -54,7 +54,7 @@ The aipc image SHALL provide a system-wide SOPS configuration at `/etc/aipc/sops
 
 #### Scenario: Helper is executable
 
-- **WHEN** the project owner runs `test -x /usr/local/lib/aipc/sops-env`
+- **WHEN** the project owner runs `test -x /usr/lib/aipc/sops-env`
 - **THEN** the command exits 0
 
 #### Scenario: Helper fails closed without age key

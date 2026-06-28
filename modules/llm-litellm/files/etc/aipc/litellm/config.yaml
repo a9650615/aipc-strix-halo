@@ -1,0 +1,47 @@
+model_list:
+  - model_name: router-1b
+    litellm_params:
+      model: ollama/qwen2.5:1.5b-instruct-q4_K_M
+      api_base: http://127.0.0.1:11434
+
+  - model_name: intent-3b
+    litellm_params:
+      model: openai/intent-3b
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
+
+  - model_name: main-70b
+    litellm_params:
+      model: ollama/qwen2.5:72b-instruct-q4_K_M
+      api_base: http://127.0.0.1:11434
+
+  - model_name: coder-fast
+    litellm_params:
+      model: ollama/qwen2.5-coder:7b-instruct-q4_K_M
+      api_base: http://127.0.0.1:11434
+
+  - model_name: coder-strong
+    litellm_params:
+      model: ollama/qwen2.5-coder:32b-instruct-q4_K_M
+      api_base: http://127.0.0.1:11434
+
+  - model_name: coder-thinking
+    litellm_params:
+      model: ollama/deepseek-r1:14b-q4_K_M
+      api_base: http://127.0.0.1:11434
+
+  - model_name: embed-bge
+    litellm_params:
+      model: openai/bge-m3
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
+
+  - model_name: vlm-qwen2vl
+    litellm_params:
+      model: ollama/qwen2-vl:7b-instruct-q4_K_M
+      api_base: http://127.0.0.1:11434
+
+litellm_settings:
+  drop_params: false
+  num_retries: 2
+  request_timeout: 600

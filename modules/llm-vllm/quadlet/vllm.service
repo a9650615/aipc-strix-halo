@@ -1,0 +1,21 @@
+[Unit]
+Description=vLLM serving backend for AIPC (optional)
+After=ollama.service
+
+[Container]
+Image=rocm/vllm:latest
+ContainerName=vllm
+Volume=/var/lib/aipc-models:/models:Z
+Device=/dev/kfd
+Device=/dev/dri
+Environment=HSA_OVERRIDE_GFX_VERSION=11.0.0
+Environment=VLLM_TARGET_DEVICE=rocm
+PublishPort=127.0.0.1:8000:8000
+Exec=vllm serve /models/default --host 0.0.0.0 --port 8000
+
+[Service]
+Restart=always
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

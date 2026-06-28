@@ -1,6 +1,6 @@
 #!/bin/sh
 # sops-env — source this file to load SOPS-encrypted YAML as SECRET_* env vars.
-# Usage: . /usr/local/lib/aipc/sops-env <encrypted-yaml-path>
+# Usage: . /usr/lib/aipc/sops-env <encrypted-yaml-path>
 #
 # Fails closed: if /etc/aipc/age.key is absent it prints a diagnostic and
 # returns non-zero without writing any decrypted output.

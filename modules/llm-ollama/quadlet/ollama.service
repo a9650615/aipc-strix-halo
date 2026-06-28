@@ -1,0 +1,21 @@
+[Unit]
+Description=Ollama daemon for AIPC (ROCm, gfx1151)
+After=network-online.target
+Requires=network-online.target
+
+[Container]
+Image=docker.io/ollama/ollama:rocm
+ContainerName=ollama
+AddDevice=/dev/kfd:/dev/kfd
+AddDevice=/dev/dri:/dev/dri
+Volume=/var/lib/aipc-models:/models:rw,Z
+Environment=OLLAMA_HOST=0.0.0.0:11434
+Environment=OLLAMA_MODELS=/models
+Environment=HSA_OVERRIDE_GFX_VERSION=11.0.0
+PublishPort=127.0.0.1:11434:11434
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

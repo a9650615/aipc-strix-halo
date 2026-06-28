@@ -1,0 +1,19 @@
+# Model manifest for Lemonade SDK NPU inference.
+# Consumed by the lemonade container at /etc/aipc/lemonade/models.yaml.
+# TODO: verify on hardware — field names and engine values are placeholders
+#       until the Lemonade SDK container image schema is confirmed.
+
+models:
+  - name: intent-3b
+    # TODO: verify on hardware — exact HF repo/tag for the NPU-quantized variant
+    source: amd/Llama-3.2-3B-Instruct-lemonade
+    engine: ryzenai
+    device: npu
+    max_tokens: 2048
+
+  - name: embed-bge
+    # TODO: verify on hardware — BGE-M3 NPU-quantized artifact name
+    source: amd/bge-m3-lemonade
+    engine: ryzenai
+    device: npu
+    dimensions: 1024
