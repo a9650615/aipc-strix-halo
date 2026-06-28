@@ -47,7 +47,8 @@ def test_aggregated_rpm_ostree(two_mods: list[Module]) -> None:
 
 def test_kargs_appended(two_mods: list[Module]) -> None:
     out = render(two_mods, base="base:latest", image_ref="x", build_date="d")
-    assert "bootc kargs --append=karg=1" in out
+    assert "/usr/lib/bootc/kargs.d/mod-a.toml" in out
+    assert 'kargs = ["karg=1"]' in out
 
 
 def test_bootc_lint_at_end(two_mods: list[Module]) -> None:

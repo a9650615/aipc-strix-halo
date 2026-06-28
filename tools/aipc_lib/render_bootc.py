@@ -23,8 +23,13 @@ def render(
         lines.append("")
 
     for m in mods:
-        for karg in m.kargs:
-            lines.append(f"RUN bootc kargs --append={karg}")
+        if m.kargs:
+            kargs_toml = ", ".join(f'"{k}"' for k in m.kargs)
+            lines.append(
+                "RUN mkdir -p /usr/lib/bootc/kargs.d && "
+                f"printf 'kargs = [{kargs_toml}]\\n' "
+                f"> /usr/lib/bootc/kargs.d/{m.name}.toml"
+            )
 
         files_dir = m.path / "files"
         if files_dir.is_dir():
