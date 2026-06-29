@@ -1,0 +1,4 @@
+firefox:
+  consent: false
+chrome:
+  consent: false

@@ -1,0 +1,16 @@
+[Unit]
+Description=AIPC Qdrant vector store (opt-in)
+After=network-online.target
+Requires=network-online.target
+
+[Container]
+Image=docker.io/qdrant/qdrant:latest
+ContainerName=aipc-qdrant
+Volume=aipc-qdrant-data:/qdrant/storage:rw
+PublishPort=127.0.0.1:6333:6333
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

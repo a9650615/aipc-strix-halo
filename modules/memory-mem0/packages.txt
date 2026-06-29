@@ -1,0 +1,1 @@
+# Service runs in container — no host rpm packages

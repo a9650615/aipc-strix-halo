@@ -1,0 +1,19 @@
+[Unit]
+Description=AIPC Postgres 16 (pgvector)
+After=network-online.target
+Requires=network-online.target
+
+[Container]
+Image=docker.io/postgres:16
+ContainerName=aipc-postgres
+Volume=aipc-postgres-data:/var/lib/postgresql/data:rw
+Volume=/usr/local/lib/aipc/init-pgvector.sql:/docker-entrypoint-initdb.d/init-pgvector.sql:ro,Z
+Environment=POSTGRES_DB=aipc
+Environment=POSTGRES_HOST_AUTH_METHOD=trust
+PublishPort=127.0.0.1:5432:5432
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

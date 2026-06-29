@@ -1,0 +1,18 @@
+[Unit]
+Description=AIPC mem0 memory server
+After=network-online.target postgres.service llm-litellm.service
+Requires=postgres.service
+
+[Container]
+Image=docker.io/mem0/mem0:latest
+ContainerName=aipc-mem0
+Environment=LITELLM_BASE_URL=http://127.0.0.1:4000
+Environment=DATABASE_URL=postgresql://127.0.0.1:5432/aipc
+Network=host
+PublishPort=127.0.0.1:7000:7000
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=AIPC RAG embedder (bge-m3 + bge-reranker-v2-m3, iGPU)
+After=network-online.target ai-rocm.service
+Requires=network-online.target
+
+[Container]
+Image=docker.io/aipc/rag-embedder:latest
+ContainerName=aipc-rag-embedder
+AddDevice=/dev/kfd:/dev/kfd
+AddDevice=/dev/dri:/dev/dri
+Volume=/var/lib/aipc-models:/models:rw,Z
+Environment=MODEL_CACHE=/models
+Environment=HSA_OVERRIDE_GFX_VERSION=11.0.0
+PublishPort=127.0.0.1:8201:8201
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

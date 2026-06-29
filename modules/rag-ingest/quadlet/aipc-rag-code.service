@@ -1,0 +1,12 @@
+[Unit]
+Description=AIPC RAG watcher — code repos
+After=network-online.target rag-embedder.service postgres.service
+Requires=rag-embedder.service postgres.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aipc-rag-code
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

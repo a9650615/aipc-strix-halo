@@ -1,0 +1,12 @@
+[Unit]
+Description=AIPC RAG watcher — screen OCR + audio transcript (opt-in, TTL-gated)
+After=network-online.target rag-embedder.service postgres.service
+Requires=rag-embedder.service postgres.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aipc-rag-screen-audio
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

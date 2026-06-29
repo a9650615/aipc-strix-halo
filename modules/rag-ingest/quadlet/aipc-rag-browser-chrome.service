@@ -1,0 +1,12 @@
+[Unit]
+Description=AIPC RAG watcher — Chrome history (consent-gated)
+After=network-online.target rag-embedder.service postgres.service
+Requires=rag-embedder.service postgres.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aipc-rag-browser --browser chrome
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
