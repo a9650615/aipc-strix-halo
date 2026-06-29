@@ -1,0 +1,5 @@
+[node]
+image=registry.fedoraproject.org/fedora-toolbox:41
+pull=yes
+additional_packages="nodejs npm git"
+init_hooks=ln -sf /usr/bin/node /usr/local/bin/node

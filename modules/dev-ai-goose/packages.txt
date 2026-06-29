@@ -1,0 +1,1 @@
+# Goose installed via upstream installer — see post-install.sh

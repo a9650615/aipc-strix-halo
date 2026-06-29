@@ -1,0 +1,3 @@
+code
+google-jetbrains-mono-fonts
+fira-code-fonts

@@ -1,0 +1,5 @@
+default:
+  provider: openai
+  processor: coder-strong
+  accelerator: coder-fast
+  host: http://127.0.0.1:4000

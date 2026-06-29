@@ -1,0 +1,15 @@
+fish
+starship
+gh
+git-delta
+fzf
+ripgrep
+jq
+yq
+httpie
+zoxide
+bat
+eza
+lazygit
+google-jetbrains-mono-fonts
+fira-code-fonts

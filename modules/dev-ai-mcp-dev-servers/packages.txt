@@ -1,0 +1,1 @@
+# MCP servers installed via npm — see post-install.sh

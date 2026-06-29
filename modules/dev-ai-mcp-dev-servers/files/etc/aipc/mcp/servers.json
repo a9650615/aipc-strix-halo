@@ -1,0 +1,19 @@
+{
+  "filesystem": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home"],
+    "env": {}
+  },
+  "github": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": {
+      "GITHUB_TOKEN": "${SOPS_DECRYPTED:github_token}"
+    }
+  },
+  "playwright": {
+    "command": "npx",
+    "args": ["-y", "@anthropic-ai/mcp-server-playwright"],
+    "env": {}
+  }
+}
