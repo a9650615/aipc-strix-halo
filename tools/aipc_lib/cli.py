@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from aipc_lib import doctor as doctor_mod
+from aipc_lib import log_append as log_append_mod
 from aipc_lib import models as models_mod
 from aipc_lib import secrets
 from aipc_lib.modules import discover
@@ -188,3 +189,28 @@ def models_sync(check: bool, manifest: Path, models_root: Path) -> None:
     # ponytail: full pull not yet wired — backends differ (Ollama pull vs Lemonade vs HF download)
     click.echo("aipc models sync (full pull) is not yet implemented. Use --check for a dry-run.")
     sys.exit(0)
+
+
+@main.group()
+def log() -> None:
+    """Agent log operations."""
+
+
+@log.command("append")
+@click.option("--date", required=True)
+@click.option("--role", required=True, type=click.Choice(log_append_mod.ROLES))
+@click.option("--model", required=True)
+@click.option("--run-label", required=True)
+@click.option("--spec-task", "spec_tasks", required=True)
+@click.option("--sha-range", "sha_range", required=True)
+@click.option("--outcome", required=True)
+def log_append_cmd(
+    date: str, role: str, model: str, run_label: str, spec_tasks: str, sha_range: str, outcome: str
+) -> None:
+    """Append a row to docs/agent-log.md."""
+    line = log_append_mod.append_row(date, role, model, run_label, spec_tasks, sha_range, outcome)
+    click.echo(f"Appended: {line.rstrip()}")
+
+
+if __name__ == "__main__":
+    main()
