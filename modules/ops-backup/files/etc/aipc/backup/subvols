@@ -1,0 +1,4 @@
+# Managed BTRFS subvolumes for snapper snapshots
+/
+/var
+/home

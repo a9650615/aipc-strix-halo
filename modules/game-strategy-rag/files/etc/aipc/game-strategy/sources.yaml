@@ -1,0 +1,8 @@
+# user adds per-game sources here
+# Example:
+# - game: "Elden Ring"
+#   sources:
+#     - type: url
+#       uri: "https://example.com/elden-ring-guide"
+#     - type: file
+#       uri: "/home/user/strategies/elden-ring.pdf"

@@ -1,0 +1,5 @@
+# gaming-ai-overlay configuration
+# The overlay runs inside a Python distrobox; this file is the host-side config.
+
+hotkey: "Super+G"
+action: toggle

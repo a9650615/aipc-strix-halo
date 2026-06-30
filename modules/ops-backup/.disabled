@@ -1,0 +1,5 @@
+ops-backup
+
+Scaffolded for Phase 7. Snapper timeline policy defined but
+BTRFS subvolume layout needs runtime validation on the target
+hardware before enabling.

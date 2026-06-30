@@ -1,0 +1,26 @@
+# services checked by `aipc doctor`
+# Each entry: service name, systemd unit, expected port (if applicable)
+
+- name: ollama
+  unit: ollama.service
+  port: 11434
+
+- name: litellm
+  unit: litellm.service
+  port: 4000
+
+- name: postgres
+  unit: postgresql.service
+  port: 5432
+
+- name: qdrant
+  unit: qdrant.service
+  port: 6333
+
+- name: pipecat
+  unit: pipecat.service
+  port: nil
+
+- name: mem0
+  unit: mem0.service
+  port: nil

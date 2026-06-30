@@ -1,0 +1,3 @@
+# Check if in bazzite repos — these may be preinstalled by bazzite-dx
+gamescope
+steam

@@ -1,0 +1,5 @@
+game-strategy-rag
+
+Scaffolded for Phase 5. Framework ships with an empty source
+registry; users add per-game strategy sources at runtime.
+Needs Qdrant collection setup and RAG ingest pipeline.

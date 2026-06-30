@@ -1,0 +1,22 @@
+# snapper config for aipc-root
+# Timeline snapshots with retention policy
+
+# subvolume to snapshot
+SUBVOLUME="/"
+
+# filesystem type
+FSTYPE="btrfs"
+
+# enable timeline snapshots
+TIMELINE_CREATE="yes"
+TIMELINE_CLEANUP="yes"
+
+# retention: 7 daily, 4 weekly, 3 monthly
+TIMELINE_MIN_AGE="1800"
+TIMELINE_LIMIT_DAILY="7"
+TIMELINE_LIMIT_WEEKLY="4"
+TIMELINE_LIMIT_MONTHLY="3"
+
+# pre/post snapshots for rpm-ostree updates
+NUMBER_CLEANUP="yes"
+NUMBER_LIMIT="10"

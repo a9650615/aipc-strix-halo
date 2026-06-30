@@ -1,0 +1,18 @@
+# firstboot wizard schema — 3 steps
+# Each step: id, title, action
+
+steps:
+  - id: persona
+    title: "Choose your persona"
+    action: record
+    description: "Select how the AI assistant should behave (role, tone, language)."
+
+  - id: editor
+    title: "Confirm default editor"
+    action: confirm
+    description: "Confirm or change the default code editor for AI-assisted development."
+
+  - id: cloud-keys
+    title: "Encrypt cloud API keys"
+    action: sops-encrypt
+    description: "Provide cloud API keys; they are SOPS-encrypted and stored in secrets/."

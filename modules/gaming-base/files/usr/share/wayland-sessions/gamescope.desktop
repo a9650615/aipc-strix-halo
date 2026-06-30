@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Gamescope Session
+Comment=Steam gaming session via gamescope
+Exec=gamescope-session
+Type=Application

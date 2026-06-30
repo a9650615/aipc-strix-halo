@@ -1,0 +1,5 @@
+ops-doctor
+
+Scaffolded for Phase 7. Service catalog declared but actual
+extension to tools/aipc_lib/doctor.py is separate work.
+Needs GPU/NPU probe integration.

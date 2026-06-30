@@ -1,0 +1,5 @@
+gaming-ai-overlay
+
+Scaffolded for Phase 5. Overlay runs inside Python distrobox;
+no host packages required. Needs Pipecat voice pipeline integration
+and gamescope overlay protocol implementation.

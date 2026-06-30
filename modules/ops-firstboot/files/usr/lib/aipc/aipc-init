@@ -1,0 +1,5 @@
+#!/bin/sh
+# aipc-init — first-boot wizard entry point
+# ponytail: TUI not yet implemented; placeholder exits cleanly so systemd is happy.
+echo "aipc-init: wizard not yet implemented" >&2
+touch /var/lib/aipc/firstboot-done

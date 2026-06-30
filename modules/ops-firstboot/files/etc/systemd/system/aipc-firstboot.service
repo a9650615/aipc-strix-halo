@@ -1,0 +1,12 @@
+[Unit]
+Description=aipc first-boot wizard
+ConditionPathExists=!/var/lib/aipc/firstboot-done
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/aipc/aipc-init
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
