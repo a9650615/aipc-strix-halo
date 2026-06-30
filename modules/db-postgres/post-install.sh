@@ -1,20 +1,12 @@
 #!/bin/sh
+# post-install.sh — db-postgres
+# Build-time only. Service start + schema init happen at runtime via
+# aipc-pg-init.service (see files/etc/systemd/system/).
 set -eu
 
-systemctl enable --now postgres.service
+# Ensure /var/lib/aipc-pg exists at build time so the runtime sentinel has a home.
+install -d -m 0700 /var/lib/aipc-pg
 
-for i in $(seq 1 30); do
-  if nc -z 127.0.0.1 5432 2>/dev/null; then
-    break
-  fi
-  sleep 1
-done
-
-if ! nc -z 127.0.0.1 5432 2>/dev/null; then
-  echo "postgres: port 5432 not reachable after 30s" >&2
-  exit 1
-fi
-
-if command -v psql >/dev/null 2>&1; then
-  psql -h 127.0.0.1 -U postgres -d aipc -c "CREATE EXTENSION IF NOT EXISTS vector;" >/dev/null 2>&1 || true
-fi
+# Enable the postgres quadlet + the init oneshot (NOT --now — runtime starts them).
+systemctl enable postgres.service
+systemctl enable aipc-pg-init.service

@@ -1,0 +1,15 @@
+[Unit]
+Description=Initialize aipc database + pgvector extension
+ConditionPathExists=/usr/lib/aipc/init-pgvector.sql
+After=postgres.service
+Requires=postgres.service
+# Only run once — a sentinel file marks completion.
+ConditionPathExists=!/var/lib/aipc-pg/.initialized
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/aipc/pg-init.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
