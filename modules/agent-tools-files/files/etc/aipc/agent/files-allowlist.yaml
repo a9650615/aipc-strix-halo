@@ -1,0 +1,5 @@
+# File-IO allowlist — D5
+# Paths agents may access without risky-action gate
+scopes:
+  - ~/projects
+  - ~/Documents

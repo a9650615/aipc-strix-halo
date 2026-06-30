@@ -1,0 +1,11 @@
+# Calendar provider configuration — D8
+providers:
+  google:
+    enabled: false
+    # Configure at firstboot: aipc agent oauth google
+  proton:
+    enabled: false
+    # Requires Proton Bridge running locally
+  fastmail:
+    enabled: false
+    # CalDAV endpoint + app password

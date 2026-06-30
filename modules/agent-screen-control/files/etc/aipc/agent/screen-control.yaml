@@ -1,0 +1,8 @@
+# Screen control configuration — D4
+mode: session-gate
+
+# Window-class blacklist — agent must NOT interact with these
+blacklist:
+  - 1password
+  - gnome-keyring
+  # - keepassxc   # uncomment to add

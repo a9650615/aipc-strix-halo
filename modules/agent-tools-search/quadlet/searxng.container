@@ -1,0 +1,10 @@
+[Unit]
+Description=SearXNG local search engine
+
+[Container]
+Image=docker.io/searxng/searxng:latest
+Volume=/etc/aipc/searxng:/etc/searxng:ro,Z
+PublishPort=127.0.0.1:8888:8080
+
+[Install]
+WantedBy=default.target

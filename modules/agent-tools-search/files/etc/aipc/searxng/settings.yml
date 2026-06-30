@@ -1,0 +1,15 @@
+# SearXNG settings — local-only, no telemetry
+use_default_settings: true
+
+server:
+  bind_address: "127.0.0.1"
+  port: 8080
+  limiter: false
+
+search:
+  formats:
+    - html
+    - json
+
+general:
+  instance_name: "AIPC Local Search"

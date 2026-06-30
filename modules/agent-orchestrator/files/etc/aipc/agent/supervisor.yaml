@@ -1,0 +1,14 @@
+# LangGraph supervisor configuration — D1
+sub_agents:
+  researcher:
+    model: coder-fast
+    tools: [search.searxng, search.tavily, browser, files.read]
+  coder:
+    model: coder-strong
+    tools: [files.read, files.write, code-shell, git]
+  browser:
+    model: vlm-qwen2vl
+    tools: [playwright]
+  daily-assistant:
+    model: intent-3b
+    tools: [calendar, email, files.read]
