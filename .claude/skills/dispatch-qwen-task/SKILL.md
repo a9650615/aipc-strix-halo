@@ -182,25 +182,29 @@ Specify what Qwen should return:
 
 ## Phase 3 — Give the user a simple dispatch prompt
 
-After writing the spec file, give the user **a short copy-paste line** they paste into their Qwen client (Aider / Goose / Cline / web UI). The line tells Qwen to read the spec file and execute it.
+After writing the spec file, give the user **a short copy-paste line** they paste into their 副官 client (Aider / Goose / Cline / Claude Code / web UI / etc.). The line tells the 副官 to invoke their `lieutenant` skill, then read the spec file and execute.
 
 Format (zh-TW, since user works in Chinese):
 
 ```
-副官，請完整讀取 /tmp/qwen-<id>-<slug>.md 並執行其中所有指令。完成後回報 commit sha、檔案數、pytest 結果、render exit code、RED FLAG 掃描結果。
+副官，請先讀 /Users/birdyo/forfun/aipc_setup/.claude/skills/lieutenant/SKILL.md 內化規範，再讀 /tmp/<role>-<id>-<slug>.md 完整執行任務。
 ```
+
+The `lieutenant` skill (this skill's counterpart) is what the 副官 invokes on their side — it encodes self-identification, RED FLAG internalization, pre-commit verification, and the `aipc log append` + commit + push protocol. Pairing the two skills means even a thin Qwen / GLM client carries the same playbook 大哥 expects.
 
 If you wrote multiple spec files in this turn, give a numbered list with dependency hints:
 
 ```
-請依序餵 Qwen（彼此無依賴可同時，但 build push 會 race）：
+請依序餵 副官（彼此無依賴可同時，但 build push 會 race）：
 
-1. 副官，請讀取 /tmp/qwen-q3-phase4-scaffold.md 並完整執行。
-2. 副官，請讀取 /tmp/qwen-q4-phase3-scaffold.md 並完整執行。
+1. 副官，先讀 .claude/skills/lieutenant/SKILL.md，再讀 /tmp/qwen-q3-phase4-scaffold.md 完整執行。
+2. 副官，先讀 .claude/skills/lieutenant/SKILL.md，再讀 /tmp/qwen-q4-phase3-scaffold.md 完整執行。
 3. ...
 ```
 
-The dispatch line is intentionally **short** — it should be 1-2 sentences, no nested instructions. The complexity lives in the spec file.
+The dispatch line is intentionally **short** — 1-2 sentences. The complexity lives in (a) the spec file (task-specific) and (b) the `lieutenant` skill (cross-task conventions).
+
+File naming for the spec: `/tmp/<role>-q<N>-<slug>.md` where `<role>` is the worker's model family (`qwen`, `glm`, `sub` for sonnet, etc.). 副官 sees the file path and self-identifies via the `lieutenant` skill's Phase 1.
 
 ## After Qwen commits (next session's Phase 1)
 
