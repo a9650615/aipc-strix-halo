@@ -1,0 +1,15 @@
+[Unit]
+Description=AIPC CosyVoice 2 TTS (zh primary + voice cloning)
+After=lemonade.service
+Requires=lemonade.service
+
+[Container]
+Image=docker.io/aipc/cosyvoice:latest
+ContainerName=aipc-cosyvoice
+Volume=/etc/aipc/cosyvoice/voices:/var/lib/cosyvoice/voices:ro,Z
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

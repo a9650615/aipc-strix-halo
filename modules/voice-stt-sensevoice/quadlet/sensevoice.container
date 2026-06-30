@@ -1,0 +1,15 @@
+[Unit]
+Description=AIPC SenseVoice STT (short utterances)
+After=lemonade.service
+Requires=lemonade.service
+
+[Container]
+Image=docker.io/aipc/sensevoice:latest
+ContainerName=aipc-sensevoice
+PublishPort=127.0.0.1:9001:9001
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

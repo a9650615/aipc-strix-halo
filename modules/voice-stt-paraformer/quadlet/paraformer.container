@@ -1,0 +1,15 @@
+[Unit]
+Description=AIPC Paraformer STT (longer audio / dictation)
+After=lemonade.service
+Requires=lemonade.service
+
+[Container]
+Image=docker.io/aipc/paraformer:latest
+ContainerName=aipc-paraformer
+PublishPort=127.0.0.1:9002:9002
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

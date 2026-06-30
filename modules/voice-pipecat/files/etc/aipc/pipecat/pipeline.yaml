@@ -1,0 +1,15 @@
+# Pipecat path-A pipeline (default)
+# Path B (multimodal Qwen2.5-Omni) is a config swap, deferred to v2.
+stages:
+  - name: wake
+    source: voice-wake
+  - name: stt-router
+    routes:
+      short: voice-stt-sensevoice   # <10s audio
+      long:  voice-stt-paraformer   # longer / dictation
+  - name: llm
+    endpoint: http://127.0.0.1:4000  # LiteLLM gateway
+  - name: tts-router
+    routes:
+      zh: voice-tts-cosyvoice
+      en: voice-tts-kokoro

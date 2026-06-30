@@ -1,0 +1,2 @@
+# Wake-word model path — user-trained at firstboot, NOT shipped.
+model_path: /var/lib/aipc/wake/user-model.onnx
