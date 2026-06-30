@@ -1,16 +1,10 @@
 #!/bin/sh
+# post-install.sh — memory-mem0
+# Build-time only. The mem0 container starts at runtime via its quadlet
+# (After=postgres.service llm-litellm.service, Requires=postgres.service)
+# and self-initializes its schema via DATABASE_URL. Health readiness is
+# checked by verify.sh at verify time — not probed here (nothing listens
+# at image-build time).
 set -eu
 
-systemctl enable --now mem0.service
-
-for i in $(seq 1 30); do
-  if curl -sf http://127.0.0.1:7000/healthz >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-
-if ! curl -sf http://127.0.0.1:7000/healthz >/dev/null 2>&1; then
-  echo "mem0: /healthz not ready after 30s" >&2
-  exit 1
-fi
+systemctl enable mem0.service
