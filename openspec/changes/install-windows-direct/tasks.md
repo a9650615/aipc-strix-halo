@@ -1,12 +1,12 @@
 ## 1. Documentation
 
-- [ ] 1.1 Add a new section to `docs/architecture.md` titled "§9 Alt: Windows-direct install (no USB)" placed between §9.4 and §9.5. Cover D1–D7 from `design.md`. Cross-reference §9.1, §9.2, §9.5, §9.6 as unchanged. (AI PC)
-- [ ] 1.2 Create `docs/install-windows-direct-runbook.md` — step-by-step walkthrough with screenshot placeholders, roughly 30 numbered steps grouped into Pre-flight, EFI loader setup, Disk partitioning, Boot flow, and Post-install cleanup. (AI PC)
+- [x] 1.1 Add a new section to `docs/architecture.md` titled "§9 Alt: Windows-direct install (no USB)" placed between §9.4 and §9.5. Cover D1–D7 from `design.md`. Cross-reference §9.1, §9.2, §9.5, §9.6 as unchanged. (AI PC)
+- [x] 1.2 Create `docs/install-windows-direct-runbook.md` — step-by-step walkthrough with screenshot placeholders, roughly 30 numbered steps grouped into Pre-flight, EFI loader setup, Disk partitioning, Boot flow, and Post-install cleanup. (AI PC)
 
 ## 2. Pre-flight artifacts
 
-- [ ] 2.1 Document the Windows pre-flight checklist in the runbook, listing accepted System Image Backup target paths (NAS, OneDrive, second internal drive). Reject USB as a target.
-- [ ] 2.2 Reference (do not duplicate) the BIOS settings from `docs/architecture.md` §9.2 in the runbook; this path has no BIOS changes of its own.
+- [x] 2.1 Document the Windows pre-flight checklist in the runbook, listing accepted System Image Backup target paths (NAS, OneDrive, second internal drive). Reject USB as a target.
+- [x] 2.2 Reference (do not duplicate) the BIOS settings from `docs/architecture.md` §9.2 in the runbook; this path has no BIOS changes of its own.
 
 ## 3. EFI loader setup
 

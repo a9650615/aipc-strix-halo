@@ -361,6 +361,64 @@ Reboot to BIOS (Del / F2 at POST). Apply once and save:
 
 ⚠ **Strix Halo Wi-Fi 7 + Bluetooth firmware** may need network at install for full functionality. Bazzite-dx ships kernel ≥ 6.14 which has the firmware; verify in §9.6. If Wi-Fi fails to initialise on first boot, plug in Ethernet (or USB-Ethernet) for the bootstrap step.
 
+### §9 Alt: Windows-Direct Install (No USB Required)
+
+**This section describes an alternative install path that boots the bazzite-dx installer directly from the machine's own NVMe via an EFI boot manager dropped into the ESP from Windows. Use this path ONLY if you cannot acquire a USB stick.**
+
+The USB path (§9.3–§9.4) remains the primary recommendation: faster, lower-risk, with years of community documentation. The Windows-direct path is for users who cannot acquire a USB stick but who have a working Windows 11 install, UEFI firmware, and ≥150 GB of unallocated NVMe space.
+
+**Prerequisites:**
+- Windows 11 installed and booting
+- UEFI firmware (not Legacy/CSM)
+- ≥150 GB of unallocated NVMe space
+- No USB stick available
+
+**Key design decisions:**
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| **D1: EFI boot manager** | rEFInd 0.14+ | Ships Windows-side installer (`refind-install.bat`), registers via `bcdedit`/NVRAM, stable ISO chainload, mature project |
+| **D2: ISO boot method** | Chainload ISO directly | Drop file, point rEFInd config, done. Extracting kernel/initramfs/squashfs requires more path wiring and failure modes |
+| **D3: Disk layout** | 30 GB FAT32 install partition + 120 GB unallocated | ISO is ~3 GB, ESP is too small (100–500 MB). Two-step shrink: Windows → 150 GB unallocated → carve 30 GB for ISO, leave 120 GB for bazzite |
+| **D4: Windows handling** | Dual-boot 30 days, then wipe | Wiping same-session is high-risk (no rollback if Linux fails). After 30-day soak (`aipc doctor` green), user manually removes Windows + 30 GB partition |
+| **D5: Recovery without USB** | WinRE + System Image Backup | WinRE lives on hidden Windows partition, reachable via Shift+Restart. Pre-flight requires System Image Backup to NAS/OneDrive/second internal drive (NOT USB) |
+| **D6: Secure Boot** | Disabled (unchanged from §9.2) | rEFInd supports Secure Boot via shim, but MOK key enrolment is advanced setup. Defer to later OpenSpec change |
+| **D7: Default status** | Opt-in alternative, not default | USB path is faster and lower-risk. Windows-direct is fallback when USB unavailable. |
+
+**Cross-references:**
+- §9.1 Pre-flight on Windows (unchanged, plus mandatory System Image Backup)
+- §9.2 BIOS Preparation (unchanged — no new BIOS settings for this path)
+- §9.5 Bootstrap to the aipc Image (converges on same vanilla bazzite-dx state)
+- §9.6 First-boot Wizard (unchanged — same `aipc init` flow)
+- §9.7 Rollback Insurance (same GRUB previous deployment mechanism)
+- §9.8 Time Estimate (same ~2.5 hours total)
+
+**Runbook:** See `docs/install-windows-direct-runbook.md` for step-by-step walkthrough (~30 numbered steps) with screenshot placeholders grouped into Pre-flight, EFI loader setup, Disk partitioning, Boot flow, and Post-install cleanup (30-day deferred).
+
+**Recovery path:** WinRE (Shift+Restart → Troubleshoot → Advanced → System Image Recovery) restores from the pre-flight System Image Backup. No USB stick required at any point. WinRE lives on a hidden Windows partition and boots independently of the main bootloader.
+
+**Dual-boot soak period:** Both Windows and bazzite-dx remain bootable via rEFInd menu for 30 days. After `aipc doctor` has been green for ≥30 days and the user confirms Windows rollback is not needed, the Windows partition and 30 GB install partition are removed with:
+- Future `aipc disk wipe-windows` CLI (interactive confirmation, `aipc doctor` precondition, auto-extends BTRFS)
+- Manual fallback: `gparted` + `btrfs filesystem resize` (documented in runbook)
+
+**Boot flow summary:**
+1. From Windows: download rEFInd 0.14.0+, verify SHA-256, run `refind-install.bat` as administrator
+2. Shrink Windows C: by 150 GB → create 30 GB FAT32 partition → copy bazzite-dx ISO to it
+3. Reboot → rEFInd menu → select "bazzite-installer" → installer boots from local ISO
+4. Bazzite installer: target 120 GB unallocated (NOT "use entire disk") → bazzite-dx installs
+5. Post-install: rEFInd menu shows bazzite-dx + Windows Boot Manager → verify both boot
+6. After 30-day soak: wipe Windows + 30 GB partition → extend BTRFS
+
+**Risks and mitigations:**
+| Risk | Mitigation |
+|---|---|
+| Bricked bootloader → no install media | WinRE on disk + mandatory pre-flight System Image Backup (D5) |
+| rEFInd not registering on this firmware | `bcdedit` chainload fallback documented in runbook (Q1) |
+| Bazzite installer wipes Windows by accident | "Install to unallocated space only" (D4), explicit user disk selection step, no automation |
+| 30-day dual-boot soak forgotten → disk waste | `aipc doctor` adds "stale Windows partition detected, day N of soak" note (future work) |
+
+**Convergence:** Both paths (R6a USB Live and R6b Windows-direct) converge on the same vanilla bazzite-dx host state before `tools/bootstrap.sh` runs. From that point onward, §9.5 Bootstrap and §9.6 First-boot Wizard are identical.
+
 ### 9.5 Bootstrap to the aipc Image
 
 ```
