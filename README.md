@@ -30,6 +30,27 @@ aipc render ansible
 aipc doctor
 ```
 
+## Install entrypoints
+
+Use the Windows no-USB path only if a USB installer is unavailable. Before it
+mutates disk, it requires BitLocker off, Secure Boot off, UEFI boot, shrink
+feasibility, and a completed non-USB Windows System Image Backup for WinRE
+recovery. The Strix Halo boot path still needs one hardware boot test.
+
+From an Administrator PowerShell:
+
+```powershell
+Unblock-File .\Install-AIPC-Windows.ps1
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\Install-AIPC-Windows.ps1
+```
+
+Linux bootstrap, after completing the vanilla bazzite-dx install and booting
+into the installed system:
+
+```sh
+./install-aipc-linux.sh
+```
+
 ## Phase 0 status
 
 Implements `system-unified-memory`, `system-base`, and `secrets-sops` modules.

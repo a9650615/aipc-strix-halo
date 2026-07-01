@@ -2,7 +2,7 @@
 
 ### Requirement: One-Click No-USB Install Launcher
 
-A single elevated PowerShell entry script (`targets/windows/install-windows.ps1`) SHALL stage a no-USB bazzite-dx install from within Windows 11, performing the deterministic steps automatically (verified downloads, rEFInd install, disk partitioning, live-payload staging, boot-entry generation) and leaving only the physical steps (BIOS, one boot test, picking the installer disk) to the user. The script SHALL fail closed on any unsafe precondition, require acknowledgement that a WinRE System Image Backup exists before mutation, and SHALL NOT assert that the boot mechanism works on Strix Halo firmware.
+A single elevated PowerShell entry script (`targets/windows/install-windows.ps1`) SHALL stage a no-USB bazzite-dx install from within Windows 11, performing the deterministic steps automatically (verified downloads, rEFInd install, disk partitioning, live-payload staging, boot-entry generation) and leaving only the physical steps (BIOS, one boot test, picking the installer disk) to the user. A repo-root `Install-AIPC-Windows.ps1` SHALL delegate to that script so a freshly cloned repo has an obvious Windows entrypoint. The script SHALL fail closed on any unsafe precondition, require acknowledgement that a WinRE System Image Backup exists before mutation, and SHALL NOT assert that the boot mechanism works on Strix Halo firmware.
 
 #### Scenario: Preflight refuses on unsafe state
 
@@ -38,6 +38,20 @@ A single elevated PowerShell entry script (`targets/windows/install-windows.ps1`
 
 - **WHEN** the rEFInd menuentry is generated
 - **THEN** the script documents (in output and README) that this boot path is UNVERIFIED on Strix Halo and requires one hardware boot test; the script does NOT assert the boot succeeds
+
+#### Scenario: Repo-root Windows entrypoint delegates to the target script
+
+- **WHEN** `Install-AIPC-Windows.ps1` is run from the repository root in an Administrator PowerShell
+- **THEN** it invokes `targets/windows/install-windows.ps1` with the provided arguments and does not duplicate installer logic
+
+### Requirement: Linux Bootstrap Entrypoint
+
+A repo-root Linux entry script (`install-aipc-linux.sh`) SHALL delegate to `tools/bootstrap.sh` after the user has completed the vanilla bazzite-dx install and booted into the installed Linux system.
+
+#### Scenario: Linux entrypoint preserves bootstrap behavior
+
+- **WHEN** `install-aipc-linux.sh` is run from the repository root on the installed vanilla bazzite-dx system
+- **THEN** it executes `tools/bootstrap.sh` from the repository root and preserves that script's existing prompts, `bootc switch`, and reboot confirmation behavior
 
 ### Requirement: Read-Only Preflight Check
 

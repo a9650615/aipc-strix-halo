@@ -16,9 +16,11 @@
   BitLocker off, UEFI, Secure Boot off, and C: can shrink by 150 GiB; print `OK` /
   one-line failure; exit 0 / non-zero.
 - [x] 1.3 `README.md` — why this exists, the exFAT-vs-FAT32 decision, the
-  unverified-boot caveat, one-line usage
-  (`Unblock-File .\install-windows.ps1`; `powershell -NoProfile -File .\install-windows.ps1`); cross-ref
+  unverified-boot caveat, root usage
+  (`Unblock-File .\Install-AIPC-Windows.ps1`; `powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\Install-AIPC-Windows.ps1`); cross-ref
   `docs/install-windows-direct-runbook.md`.
+- [x] 1.4 Repo-root `Install-AIPC-Windows.ps1` delegates to `targets/windows/install-windows.ps1`.
+- [x] 1.5 Repo-root `install-aipc-linux.sh` delegates to `tools/bootstrap.sh` after the vanilla bazzite-dx install is complete and the installed Linux system has booted.
 
 ## 2. Verify
 
