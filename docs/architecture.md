@@ -378,8 +378,8 @@ The USB path (§9.3–§9.4) remains the primary recommendation: faster, lower-r
 | Decision | Choice | Rationale |
 |---|---|---|
 | **D1: EFI boot manager** | rEFInd 0.14+ | Ships Windows-side installer (`refind-install.bat`), registers via `bcdedit`/NVRAM, stable ISO chainload, mature project |
-| **D2: ISO boot method** | Chainload ISO directly | Drop file, point rEFInd config, done. Extracting kernel/initramfs/squashfs requires more path wiring and failure modes |
-| **D3: Disk layout** | 30 GB FAT32 install partition + 120 GB unallocated | ISO is ~3 GB, ESP is too small (100–500 MB). Two-step shrink: Windows → 150 GB unallocated → carve 30 GB for ISO, leave 120 GB for bazzite |
+| **D2: ISO boot method** | Extract vmlinuz + initrd + LiveOS | Mount ISO, copy kernel/initrd to ESP, LiveOS to exFAT partition. More reliable than chainloading raw ISO across firmware variants |
+| **D3: Disk layout** | 30 GB exFAT AIPC_LIVE partition + 120 GB unallocated | LiveOS squashfs can exceed FAT32's 4 GiB limit. Two-step shrink: Windows → 150 GB unallocated → carve 30 GB for AIPC_LIVE, leave 120 GB for bazzite |
 | **D4: Windows handling** | Dual-boot 30 days, then wipe | Wiping same-session is high-risk (no rollback if Linux fails). After 30-day soak (`aipc doctor` green), user manually removes Windows + 30 GB partition |
 | **D5: Recovery without USB** | WinRE + System Image Backup | WinRE lives on hidden Windows partition, reachable via Shift+Restart. Pre-flight requires System Image Backup to NAS/OneDrive/second internal drive (NOT USB) |
 | **D6: Secure Boot** | Disabled (unchanged from §9.2) | rEFInd supports Secure Boot via shim, but MOK key enrolment is advanced setup. Defer to later OpenSpec change |
@@ -403,7 +403,7 @@ The USB path (§9.3–§9.4) remains the primary recommendation: faster, lower-r
 
 **Boot flow summary:**
 1. From Windows: download rEFInd 0.14.0+, verify SHA-256, run `refind-install.bat` as administrator
-2. Shrink Windows C: by 150 GB → create 30 GB FAT32 partition → copy bazzite-dx ISO to it
+2. Shrink Windows C: by 150 GB → create 30 GB exFAT AIPC_LIVE partition → extract vmlinuz + initrd to ESP, LiveOS to AIPC_LIVE
 3. Reboot → rEFInd menu → select "bazzite-installer" → installer boots from local ISO
 4. Bazzite installer: target 120 GB unallocated (NOT "use entire disk") → bazzite-dx installs
 5. Post-install: rEFInd menu shows bazzite-dx + Windows Boot Manager → verify both boot
@@ -417,7 +417,7 @@ The USB path (§9.3–§9.4) remains the primary recommendation: faster, lower-r
 | Bazzite installer wipes Windows by accident | "Install to unallocated space only" (D4), explicit user disk selection step, no automation |
 | 30-day dual-boot soak forgotten → disk waste | `aipc doctor` adds "stale Windows partition detected, day N of soak" note (future work) |
 
-**Convergence:** Both paths (R6a USB Live and R6b Windows-direct) converge on the same vanilla bazzite-dx host state before `tools/bootstrap.sh` runs. From that point onward, §9.5 Bootstrap and §9.6 First-boot Wizard are identical.
+**Convergence:** Both paths (R6a USB Live and R6b Windows-direct) converge on the same vanilla bazzite-dx host state before `install-aipc-linux.sh` runs (which delegates to the bootstrap phases). From that point onward, §9.5 Bootstrap and §9.6 First-boot Wizard are identical.
 
 ### 9.5 Bootstrap to the aipc Image
 
@@ -425,8 +425,10 @@ The USB path (§9.3–§9.4) remains the primary recommendation: faster, lower-r
 [ ] Open a terminal (Konsole, default in bazzite-dx)
 [ ] Verify network (Ethernet or Wi-Fi)
 [ ] Run:
-       curl -fsSL https://raw.githubusercontent.com/<user>/aipc_setup/main/tools/bootstrap.sh | bash
-    bootstrap.sh does:
+       ./install-aipc-linux.sh          # guided menu (recommended)
+       # or: curl -fsSL https://raw.githubusercontent.com/<user>/aipc_setup/main/tools/bootstrap.sh | bash
+    The guided menu shows the install journey, preconditions, and recovery info.
+    Direct/curl mode runs bootstrap phases without the menu:
        a. Probes hardware (XDNA presence, gfx1151, RAM size)
        b. Asks: "switch to :stable (recommended) or :rolling?"
        c. Imports the user's age public key (from prompt or USB)
@@ -519,7 +521,9 @@ aipc_setup/
 │   └── ansible/                   # fallback render
 ├── tools/
 │   ├── aipc                       # CLI (init / doctor / models / image)
-│   └── bootstrap.sh               # ISO post-install bootstrap
+│   └── bootstrap.sh               # thin wrapper → install-aipc-linux.sh --direct
+├── Install-AIPC-Windows.ps1       # guided Windows entry point (menu + USB SSD + no-USB)
+├── install-aipc-linux.sh          # guided Linux entry point (menu + bootstrap phases)
 ├── secrets/                       # SOPS-encrypted YAML (no plaintext)
 ├── .github/workflows/             # CI: build + push :rolling, :stable, :YYYY-MM-DD
 ├── docs/                          # human-facing docs (architecture diagrams, ADRs)
