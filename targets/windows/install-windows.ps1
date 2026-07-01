@@ -4,8 +4,7 @@ param(
     [string]$WorkDir = "$env:ProgramData\aipc-windows-installer",
     [string]$RefIndVersion = '0.14.0',
     [string]$BazziteIsoUrl = 'https://download.bazzite.gg/bazzite-dx-stable-amd64.iso',
-    [string]$BazziteChecksumUrl = 'https://download.bazzite.gg/bazzite-dx-stable-amd64.iso.CHECKSUM',
-    [switch]$UsbMode
+    [string]$BazziteChecksumUrl = 'https://download.bazzite.gg/bazzite-dx-stable-amd64.iso.CHECKSUM'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -274,7 +273,6 @@ try {
     Write-Log "=== AIPC Windows Installer ===" Cyan
     Write-Log "WorkDir: $WorkDir"
     Write-Log "Log: $($script:LogFile)"
-    if ($UsbMode) { Write-Log "Mode: USB installer" Yellow }
 
     Set-Phase 'preflight'
     $preflight = Join-Path $PSScriptRoot 'preflight-check.ps1'

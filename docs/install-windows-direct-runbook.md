@@ -157,7 +157,7 @@ Some Strix Halo firmware implementations may not persist rEFInd's boot entry. If
 
 **BitLocker check:** If BitLocker is still on, the shrink option may be disabled or reduced. Return to §9.1 pre-flight and disable BitLocker.
 
-### 7. Create 30 GB FAT32 Install Partition
+### 7. Create 30 GB exFAT Install Partition
 
 **Steps:**
 
@@ -175,8 +175,8 @@ Some Strix Halo firmware implementations may not persist rEFInd's boot entry. If
     create partition primary size=30720
 [ ] Select the new partition:
     select partition 3 (or the number shown)
-[ ] Format as FAT32:
-    format fs=fat32 quick label="bazzite-install"
+[ ] Format as exFAT (NOT FAT32 — squashfs payload can exceed 4 GiB):
+    format fs=exfat quick label="AIPC_LIVE"
 [ ] Assign a drive letter (e.g., Z:):
     assign letter=Z
 [ ] Exit diskpart:
@@ -185,9 +185,9 @@ Some Strix Halo firmware implementations may not persist rEFInd's boot entry. If
 
 **[SCREENSHOT PLACEHOLDER: diskpart commands creating 30 GB partition]**
 
-**[SCREENSHOT PLACEHOLDER: Disk Management showing 30 GB FAT32 partition]**
+**[SCREENSHOT PLACEHOLDER: Disk Management showing 30 GB exFAT partition]**
 
-**Result:** 30 GB FAT32 partition (Z:) + 120 GB Unallocated remains.
+**Result:** 30 GB exFAT partition (Z:, label AIPC_LIVE) + 120 GB Unallocated remains.
 
 ### 8. Download and Verify Bazzite-DX ISO
 
@@ -206,19 +206,25 @@ Some Strix Halo firmware implementations may not persist rEFInd's boot entry. If
 
 **[SCREENSHOT PLACEHOLDER: Get-FileHash verification in PowerShell]**
 
-### 9. Copy ISO to Install Partition
+### 9. Extract ISO Contents to Install Partition
 
 **Steps:**
 
 ```
+[ ] Mount the Bazzite ISO in Windows (double-click the .iso file)
+[ ] Note the mounted ISO drive letter (e.g., E:)
 [ ] Open File Explorer
-[ ] Navigate to the 30 GB partition (Z:)
-[ ] Copy bazzite-dx-stable-amd64.iso to Z:\ root
-[ ] Verify the file exists and size is ~3 GB
-[ ] Safely remove Z: if desired (it will persist)
+[ ] Copy the LiveOS folder from the ISO to Z:\ (Z:\LiveOS\)
+[ ] Create folder Z:\EFI\refind\aipc\
+[ ] Copy vmlinuz* from the ISO to Z:\EFI\refind\aipc\vmlinuz
+[ ] Copy initrd* from the ISO to Z:\EFI\refind\aipc\initrd.img
+[ ] Dismount the ISO
 ```
 
-**[SCREENSHOT PLACEHOLDER: File Explorer showing ISO on Z: drive]**
+> **Why exFAT, not FAT32:** The LiveOS squashfs payload can exceed FAT32's 4 GiB
+> single-file limit. Use exFAT for the AIPC_LIVE partition.
+
+**[SCREENSHOT PLACEHOLDER: File Explorer showing extracted files on Z: drive]**
 
 ---
 
@@ -267,7 +273,7 @@ This path is longer but more reliable if the bazzite installer's "install alongs
 [ ] Select: "Install to free space" (NOT "Erase entire disk")
 [ ] Target the 120 GB Unallocated region
 [ ] Do NOT touch the Windows NTFS partition
-[ ] Do NOT touch the 30 GB FAT32 install partition
+[ ] Do NOT touch the 30 GB exFAT AIPC_LIVE install partition
 [ ] Proceed with bazzite layout (BTRFS, /home and /var-home subvolumes)
 [ ] Set hostname (e.g., `aipc-strix`), timezone, locale, username
 [ ] Wait ~10 minutes
@@ -328,7 +334,7 @@ This path is longer but more reliable if the bazzite installer's "install alongs
 [ ] CLI displays interactive confirmation:
     "This will REMOVE:
      - Windows NTFS partition (~100 GB)
-     - 30 GB FAT32 install partition
+     - 30 GB exFAT AIPC_LIVE install partition
      - Auto-extend BTRFS into freed space
      No rollback possible. Continue? (yes/no)"
 [ ] Type: yes
@@ -337,7 +343,7 @@ This path is longer but more reliable if the bazzite installer's "install alongs
     - ≥30 days elapsed since install
 [ ] If checks pass, CLI proceeds:
     - Removes Windows NTFS partition
-    - Removes 30 GB FAT32 install partition
+    - Removes 30 GB exFAT AIPC_LIVE install partition
     - Extends BTRFS filesystem into freed space
     - Exits 0
 [ ] Reboot → verify only bazzite-dx boots, rEFInd gone
@@ -347,7 +353,7 @@ This path is longer but more reliable if the bazzite installer's "install alongs
 
 - **Interactive confirmation prompt** naming partitions to be wiped
 - **Refuses to run** unless `aipc doctor` is green AND ≥30 days elapsed
-- **Removes** Windows NTFS partition + 30 GB FAT32 install partition
+- **Removes** Windows NTFS partition + 30 GB exFAT AIPC_LIVE install partition
 - **Auto-extends** BTRFS filesystem into freed space
 - **Exits non-zero** with single-line diagnosis on any failure
 - **No force flag** — safety checks are mandatory
@@ -365,10 +371,10 @@ This path is longer but more reliable if the bazzite installer's "install alongs
 [ ] Identify partitions:
     - /dev/nvme0n1p1: EFI System Partition (DO NOT TOUCH)
     - /dev/nvme0n1p2: Windows NTFS (DELETE)
-    - /dev/nvme0n1p3: 30 GB FAT32 (DELETE)
+    - /dev/nvme0n1p3: 30 GB exFAT AIPC_LIVE (DELETE)
     - /dev/nvme0n1p4: BTRFS (RESIZE)
 [ ] Right-click Windows NTFS → "Delete"
-[ ] Right-click 30 GB FAT32 → "Delete"
+[ ] Right-click 30 GB exFAT AIPC_LIVE → "Delete"
 [ ] Right-click BTRFS → "Resize/Move"
 [ ] Extend to maximum available size
 [ ] Click "Apply All Operations"

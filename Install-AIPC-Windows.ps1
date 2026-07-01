@@ -120,43 +120,67 @@ function Select-ExternalDisk {
 
 function Ensure-UsbPartition($Disk) {
     Write-Host ''
-    Write-Host "=== Prepare USB SSD Partition ===" -ForegroundColor Cyan
+    Write-Host "=== Prepare USB SSD Partitions ===" -ForegroundColor Cyan
     Write-Host "Selected: Disk $($Disk.Number) - $($Disk.FriendlyName)"
     Write-Host "Size: $([math]::Round($Disk.Size / 1GB, 1)) GiB | Free: $([math]::Round($Disk.LargestFreeExtent / 1GB, 1)) GiB"
     Write-Host ''
-    $neededGB = 35
-    if ($Disk.LargestFreeExtent -lt ($neededGB * 1GB)) {
-        Write-Host "Not enough free space on USB SSD. Need at least ${neededGB} GiB." -ForegroundColor Red
+    $espGB = 1
+    $liveGB = 35
+    $totalGB = $espGB + $liveGB
+    if ($Disk.LargestFreeExtent -lt ($totalGB * 1GB)) {
+        Write-Host "Not enough free space on USB SSD. Need at least ${totalGB} GiB." -ForegroundColor Red
         Write-Host 'Delete some files or use a different disk.'
         return $null
     }
-    Write-Host ''
-    Write-Host "This will create a ${neededGB} GiB exFAT partition labeled AIPC_LIVE on the USB SSD." -ForegroundColor Yellow
+
+    $existingLive = Get-Partition -DiskNumber $Disk.Number -ErrorAction SilentlyContinue |
+                    Where-Object { $_.FileSystemLabel -eq 'AIPC_LIVE' }
+    $existingEsp = Get-Partition -DiskNumber $Disk.Number -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Type -eq 'System' }
+
+    if ($existingLive -and $existingEsp) {
+        Write-Host '  USB SSD already has ESP + AIPC_LIVE partitions.' -ForegroundColor Yellow
+        return @{ EspDrive = "$($existingEsp.DriveLetter):"; LiveDrive = "$($existingLive.DriveLetter):" }
+    }
+
+    Write-Host "This will create TWO partitions on the USB SSD:" -ForegroundColor Yellow
+    Write-Host "  1. ${espGB} GiB FAT32 ESP (boot files: BOOTX64.EFI, vmlinuz, initrd)"
+    Write-Host "  2. ${liveGB} GiB exFAT AIPC_LIVE (LiveOS payload)"
     Write-Host "Existing data on the disk will NOT be affected." -ForegroundColor Yellow
     Write-Host ''
-    $confirm = Read-Host "Type 'create' to create the AIPC_LIVE partition on USB SSD"
+    $confirm = Read-Host "Type 'create' to create partitions on USB SSD"
     if ($confirm -ne 'create') {
         Write-Host 'Cancelled.' -ForegroundColor Yellow
         return $null
     }
     Write-Host ''
-    $partitions = Get-Partition -DiskNumber $Disk.Number
-    $existingLive = $partitions | Where-Object { $_.FileSystemLabel -eq 'AIPC_LIVE' }
-    if ($existingLive) {
-        Write-Host '  AIPC_LIVE partition already exists on this disk.' -ForegroundColor Yellow
-        return "$($existingLive.DriveLetter):"
+
+    if (-not $existingEsp) {
+        Write-Log "  creating ${espGB} GiB FAT32 ESP..."
+        Invoke-UsbConfirmed "Disk $($Disk.Number)" "create ${espGB} GiB FAT32 ESP" {
+            $espPart = New-Partition -DiskNumber $Disk.Number -Size ($espGB * 1GB) -AssignDriveLetter -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
+            Format-Volume -Partition $espPart -FileSystem FAT32 -NewFileSystemLabel 'AIPC_ESP' -Confirm:$false | Out-Null
+        }
     }
-    Invoke-UsbConfirmed "Disk $($Disk.Number)" "create ${neededGB} GiB exFAT AIPC_LIVE partition" {
-        $newPart = New-Partition -DiskNumber $Disk.Number -Size ($neededGB * 1GB) -AssignDriveLetter
-        Format-Volume -Partition $newPart -FileSystem exFAT -NewFileSystemLabel 'AIPC_LIVE' -Confirm:$false | Out-Null
+    if (-not $existingLive) {
+        Write-Log "  creating ${liveGB} GiB exFAT AIPC_LIVE..."
+        Invoke-UsbConfirmed "Disk $($Disk.Number)" "create ${liveGB} GiB exFAT AIPC_LIVE partition" {
+            $livePart = New-Partition -DiskNumber $Disk.Number -Size ($liveGB * 1GB) -AssignDriveLetter
+            Format-Volume -Partition $livePart -FileSystem exFAT -NewFileSystemLabel 'AIPC_LIVE' -Confirm:$false | Out-Null
+        }
     }
-    $volume = Get-Volume -FileSystemLabel 'AIPC_LIVE'
-    return "$($volume.DriveLetter):"
+
+    $espVol = Get-Volume -FileSystemLabel 'AIPC_ESP'
+    $liveVol = Get-Volume -FileSystemLabel 'AIPC_LIVE'
+    return @{ EspDrive = "$($espVol.DriveLetter):"; LiveDrive = "$($liveVol.DriveLetter):" }
 }
 
-function Stage-UsbPayload($LiveDrive) {
+function Stage-UsbPayload($Drives) {
+    $EspDrive = $Drives.EspDrive
+    $LiveDrive = $Drives.LiveDrive
     Write-Host ''
     Write-Host '=== Stage Bazzite Payload to USB SSD ===' -ForegroundColor Cyan
+    Write-Host "ESP: $EspDrive | AIPC_LIVE: $LiveDrive"
     Write-Host ''
     Write-Host "Downloading and verifying Bazzite ISO..."
     New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
@@ -171,31 +195,28 @@ function Stage-UsbPayload($LiveDrive) {
     }
     Assert-UsbChecksum $iso $chk
     Write-Host ''
+    $bootDir = Join-Path $EspDrive 'EFI\BOOT'
+    New-Item -ItemType Directory -Force -Path $bootDir | Out-Null
     $liveOs = Join-Path $LiveDrive 'LiveOS'
-    $aipcDir = Join-Path $LiveDrive 'EFI\BOOT'
-    New-Item -ItemType Directory -Force -Path $aipcDir | Out-Null
+
     $image = Mount-DiskImage -ImagePath $iso -PassThru
     try {
         $isoVolume = $image | Get-Volume
         $isoDrive = "$($isoVolume.DriveLetter):"
         if (-not (Test-Path $liveOs)) {
-            Write-Log "  copying LiveOS to USB SSD..."
+            Write-Log "  copying LiveOS to AIPC_LIVE..."
             Copy-Item (Join-Path $isoDrive 'LiveOS') $LiveDrive -Recurse -Force
         }
-        Write-Log "  copying boot files to EFI..."
+        Write-Log "  copying boot files to ESP..."
         $srcBoot = Join-Path $isoDrive 'EFI\BOOT'
         if (Test-Path $srcBoot) {
-            Copy-Item (Join-Path $srcBoot '*') $aipcDir -Force
+            Copy-Item (Join-Path $srcBoot '*') $bootDir -Force
         }
-        $srcLoader = Join-Path $isoDrive 'EFI\BOOT\BOOTX64.EFI'
-        if (Test-Path $srcLoader) {
-            Copy-Item $srcLoader (Join-Path $aipcDir 'BOOTX6_64.EFI') -Force
-        }
-        Write-Log "  extracting vmlinuz + initrd..."
+        Write-Log "  extracting vmlinuz + initrd to ESP..."
         $srcVmlinuz = Get-ChildItem $isoDrive -Recurse -Filter 'vmlinuz*' | Select-Object -First 1
         $srcInitrd = Get-ChildItem $isoDrive -Recurse -Filter 'initrd*' | Select-Object -First 1
-        if ($srcVmlinuz) { Copy-Item $srcVmlinuz.FullName (Join-Path $aipcDir 'vmlinuz') -Force }
-        if ($srcInitrd) { Copy-Item $srcInitrd.FullName (Join-Path $aipcDir 'initrd.img') -Force }
+        if ($srcVmlinuz) { Copy-Item $srcVmlinuz.FullName (Join-Path $bootDir 'vmlinuz') -Force }
+        if ($srcInitrd) { Copy-Item $srcInitrd.FullName (Join-Path $bootDir 'initrd.img') -Force }
     } finally {
         Dismount-DiskImage -ImagePath $iso | Out-Null
     }
@@ -206,17 +227,17 @@ function Run-UsbPath {
     Write-Host '=== USB SSD Installer Path ===' -ForegroundColor Cyan
     Write-Host ''
     Write-Host 'This path creates a bootable USB SSD from an external drive.' -ForegroundColor Yellow
-    Write-Host 'Use this if you have a USB SSD (or large USB stick) available.' -ForegroundColor Yellow
+    Write-Host 'Creates: 1 GiB FAT32 ESP + 35 GiB exFAT AIPC_LIVE on the USB SSD.' -ForegroundColor Yellow
     Write-Host ''
     $disk = Select-ExternalDisk
     if (-not $disk) { return }
-    $liveDrive = Ensure-UsbPartition $disk
-    if (-not $liveDrive) { return }
-    Stage-UsbPayload $liveDrive
+    $drives = Ensure-UsbPartition $disk
+    if (-not $drives) { return }
+    Stage-UsbPayload $drives
     Write-Host ''
     Write-Host '=== USB SSD READY ===' -ForegroundColor Green
     Write-Host ''
-    Write-Host "AIPC_LIVE is staged on: $liveDrive" -ForegroundColor Green
+    Write-Host "ESP: $($drives.EspDrive) | AIPC_LIVE: $($drives.LiveDrive)" -ForegroundColor Green
     Write-Host ''
     Write-Host 'Next steps:' -ForegroundColor Cyan
     Write-Host '  1. Safely eject the USB SSD.'
@@ -292,9 +313,9 @@ while ($true) {
             Write-Host ''
             Write-Host 'Starting USB SSD staging. This will:' -ForegroundColor Yellow
             Write-Host '  - Let you select an external USB/ATA disk'
-            Write-Host '  - Create a 35 GiB exFAT AIPC_LIVE partition on it'
-            Write-Host '  - Download and stage Bazzite payload to the USB SSD'
-            Write-Host '  - Make the USB SSD bootable'
+            Write-Host '  - Create 1 GiB FAT32 ESP + 35 GiB exFAT AIPC_LIVE on it'
+            Write-Host '  - Download and stage Bazzite payload (boot files to ESP, LiveOS to exFAT)'
+            Write-Host '  - Make the USB SSD UEFI-bootable'
             Write-Host ''
             Write-Host 'Your existing data on the USB SSD will NOT be affected.' -ForegroundColor Magenta
             Write-Host ''
