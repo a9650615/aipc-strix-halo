@@ -83,16 +83,30 @@ editors on the AI PC.
 
 ## Build verification status
 
-[TBD — bootc image build (`tools/build-local.sh`) was kicked off in
-background; fill this line in once it completes: pass/fail + which packages
-resolved. The 30 rpm packages are all standard Fedora names; high confidence.]
+**NOT completed in-session.** `tools/build-local.sh` was kicked off but ran
+>1 hour stuck on `STEP 1/43: FROM ghcr.io/ublue-os/bazzite-dx:stable` — still
+pulling the ~3-4 GB base image via OrbStack docker + buildah `vfs` the entire
+time (environment-bandwidth-limited; never reached the rpm-ostree install
+step). Stopped + cleaned up (build-local.sh PID + buildah container killed).
+
+What IS verified: bootc render clean (Containerfile well-formed, 9 dev modules
+present, 30 rpm packages); ansible render parity (dev modules present, valid
+YAML). The 30 rpm packages are all standard Fedora/bazzite names (fish,
+starship, gh, git-delta, fzf, ripgrep, jq, yq, httpie, zoxide, bat, eza,
+lazygit, jetbrains-mono-fonts, fira-code-fonts, distrobox, pipx) — high
+confidence they resolve.
+
+**Authoritative gate remains**: CI image build + `bootc switch` on the AI PC
+(CLAUDE.md §9). If a package fails to resolve there, fix forward — the enable
+commit `a9aceb1` is the single change to bisect. (To purge the partial
+buildah storage volume: `docker volume rm aipc-buildah-storage`.)
 
 ## Push discipline (per user "做完一個階段就要推上去")
 
 - Stage 1 (`d095fb2`..`d5a1513`): pushed `e816764..d5a1513`.
 - Stage 2 (`723305e`): pushed `d5a1513..723305e`.
 - Stage 3 (`a9aceb1`): pushed `723305e..a9aceb1`.
-- Stage 4 (this ledger): pending build result.
+- Stage 4 (this ledger): this commit.
 
 No `--force` pushes. `git push origin main` was allowed by the classifier
 after the user explicitly authorized per-stage pushes.
