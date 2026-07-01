@@ -10,6 +10,12 @@ NPU. Lower latency than iGPU for intent classification and embeddings.
 - Exposes an OpenAI-compatible HTTP API on a localhost port.
 - Serves `intent-3b` and `embed-bge` (see `llm-litellm` model namespace).
 
+## Unit placement
+
+`lemonade.service` is a plain systemd unit (not a podman quadlet), shipped
+under `files/etc/systemd/system/` and placed by the renderer. No hand-install
+in `post-install.sh`.
+
 ## Dependencies
 
 - `system-unified-memory` (NPU visible via lspci, amd-xdna driver loaded).

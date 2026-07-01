@@ -34,6 +34,27 @@ def render(mods: list[Module]) -> str:
                 "copy": {"src": f"modules/{m.name}/files/", "dest": "/"},
             })
 
+        modprobe_dir = m.path / "modprobe.d"
+        if modprobe_dir.is_dir():
+            tasks.append({
+                "name": f"Copy modprobe.d for {m.name}",
+                "copy": {"src": f"modules/{m.name}/modprobe.d/", "dest": "/etc/modprobe.d/"},
+            })
+
+        env_dir = m.path / "env"
+        if env_dir.is_dir():
+            tasks.append({
+                "name": f"Copy env for {m.name}",
+                "copy": {"src": f"modules/{m.name}/env/", "dest": f"/etc/aipc/env.d/{m.name}/"},
+            })
+
+        quadlet_dir = m.path / "quadlet"
+        if quadlet_dir.is_dir():
+            tasks.append({
+                "name": f"Copy quadlet for {m.name}",
+                "copy": {"src": f"modules/{m.name}/quadlet/", "dest": "/etc/containers/systemd/"},
+            })
+
         post = m.path / "post-install.sh"
         if post.exists():
             tasks.append({

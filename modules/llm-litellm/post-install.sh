@@ -15,10 +15,3 @@ if [ ! -f "${CONFIG_DST}" ] && [ -f "${CONFIG_SRC}" ]; then
 fi
 
 cp /usr/share/aipc/llm-litellm/endpoint "${ENV_DIR}/endpoint" 2>/dev/null || true
-
-mkdir -p ~/.config/containers/systemd
-install -m 0644 /usr/share/aipc/llm-litellm/litellm.service \
-  ~/.config/containers/systemd/litellm.service
-
-systemctl --user daemon-reload
-systemctl --user enable --now litellm.service

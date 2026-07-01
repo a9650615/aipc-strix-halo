@@ -26,6 +26,11 @@ Four RAG watcher services that keep the local vector index fresh:
 - Leaves browser + screen-audio watchers disabled until the user opts in
   through the consent configs under `/etc/aipc/rag/`.
 
+## Unit placement
+
+The five `aipc-rag-*.service` units ship under `files/etc/systemd/system/`
+and are placed by the renderer (bootc COPY / ansible copy into `/`).
+
 ## Dependencies
 
 - `db-postgres` (vector store).

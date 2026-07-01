@@ -41,6 +41,13 @@ itself (vLLM's `--timeout-keep-alive`, Lemonade's model unload policy,
 Ollama's `OLLAMA_KEEP_ALIVE`). `cooldown_time: 60` / `allowed_fails: 3` only
 trip on failures, not idleness.
 
+## Unit placement
+
+`quadlet/litellm.container` is placed by the bootc/ansible renderer into
+`/etc/containers/systemd/`; podman's generator starts `litellm.service` at
+boot. `post-install.sh` only stages `config.yaml` + the endpoint file — it no
+longer hand-copies the unit or runs `systemctl --user`.
+
 ## Dependencies
 
 - `llm-ollama` (iGPU backend for most models).
