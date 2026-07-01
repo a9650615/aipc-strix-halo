@@ -4,28 +4,44 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $backend = Join-Path $PSScriptRoot 'targets\windows\install-windows.ps1'
+$BazziteIsoUrl = 'https://download.bazzite.gg/bazzite-dx-stable-amd64.iso'
+$BazziteChecksumUrl = 'https://download.bazzite.gg/bazzite-dx-stable-amd64.iso.CHECKSUM'
+$WorkDir = "$env:ProgramData\aipc-windows-installer"
+
+function Write-Log($Message, $Color = 'White') {
+    Write-Host $Message -ForegroundColor $Color
+}
+
+function Confirm-Usb($Prompt) {
+    $answer = Read-Host "$Prompt Type yes to continue"
+    if ($answer -ne 'yes') { throw 'User declined.' }
+}
+
+function Invoke-UsbConfirmed($Target, $Action, [scriptblock]$Block) {
+    Write-Log "PLAN: $Action on $Target" Yellow
+    Confirm-Usb 'Destructive step on USB SSD.'
+    if ($PSCmdlet.ShouldProcess($Target, $Action)) { & $Block }
+}
+
+function Assert-UsbChecksum($File, $ChecksumFile) {
+    $hash = (Get-FileHash -Algorithm SHA256 $File).Hash.ToLowerInvariant()
+    $checksums = (Get-Content -Raw $ChecksumFile).ToLowerInvariant()
+    if (-not $checksums.Contains($hash)) {
+        throw "SHA-256 mismatch for $File"
+    }
+    Write-Log "  checksum OK: $(Split-Path $File -Leaf)" Green
+}
 
 function Show-Journey {
     Write-Host ''
-    Write-Host '=== AIPC Windows Installer — Guided Flow ===' -ForegroundColor Cyan
+    Write-Host '=== AIPC Windows Installer - Guided Flow ===' -ForegroundColor Cyan
     Write-Host ''
-    Write-Host 'Install journey:' -ForegroundColor Yellow
-    Write-Host '  1. Windows: stage installer (this script)'
-    Write-Host '  2. Reboot and test AIPC Bazzite Installer entry (manual)'
-    Write-Host '  3. Install Bazzite to remaining free space (manual, Bazzite installer)'
-    Write-Host '  4. Boot installed Bazzite and run install-aipc-linux.sh (manual)'
+    Write-Host 'Install paths:' -ForegroundColor Yellow
+    Write-Host '  [A] No-USB path (stage installer from Windows, reboot into Bazzite installer)'
+    Write-Host '  [B] USB SSD path (create bootable USB SSD, boot from it, install Bazzite)'
     Write-Host ''
-    Write-Host 'What this script does:' -ForegroundColor Yellow
-    Write-Host '  - Read-only preflight checks (BitLocker, UEFI, Secure Boot, disk space)'
-    Write-Host '  - Verified rEFInd download and install'
-    Write-Host '  - Confirmed C: shrink to 150 GiB unallocated'
-    Write-Host '  - Confirmed 30 GiB exFAT AIPC_LIVE partition'
-    Write-Host '  - Verified Bazzite ISO download and payload staging'
-    Write-Host '  - rEFInd menuentry generation'
-    Write-Host ''
-    Write-Host 'What remains manual:' -ForegroundColor Yellow
-    Write-Host '  - BIOS boot selection (AIPC Bazzite Installer entry)'
-    Write-Host '  - Bazzite disk selection in installer'
+    Write-Host 'What remains manual after either path:' -ForegroundColor Yellow
+    Write-Host '  - Bazzite disk selection in the installer'
     Write-Host '  - Boot path is UNVERIFIED on Strix Halo hardware'
     Write-Host ''
 }
@@ -74,6 +90,144 @@ function Show-NextSteps {
     Write-Host ''
 }
 
+function Select-ExternalDisk {
+    Write-Host ''
+    Write-Host '=== Select USB SSD for Installer ===' -ForegroundColor Cyan
+    Write-Host ''
+    $disks = Get-Disk | Where-Object { $_.BusType -eq 'USB' -or $_.BusType -eq 'ATA' } |
+             Where-Object { $_.Size -gt 00GB }
+    if ($disks.Count -eq 0) {
+        Write-Host 'No external disks found.' -ForegroundColor Red
+        return $null
+    }
+    Write-Host 'Available USB/external disks:' -ForegroundColor Yellow
+    $i = 1
+    foreach ($d in $disks) {
+        $sizeGB = [math]::Round($d.Size / 1GB, 1)
+        $freeGB = [math]::Round($d.LargestFreeExtent / 1GB, 1)
+        Write-Host "  [$i] Disk $($d.Number): $($d.FriendlyName) | Size: ${sizeGB} GiB | Free: ${freeGB} GiB | Bus: $($d.BusType)"
+        $i++
+    }
+    Write-Host ''
+    $choice = Read-Host "Choose disk number (1-$($disks.Count))"
+    $idx = [int]$choice - 1
+    if ($idx -lt 0 -or $idx -ge $disks.Count) {
+        Write-Host 'Invalid choice.' -ForegroundColor Red
+        return $null
+    }
+    return $disks[$idx]
+}
+
+function Ensure-UsbPartition($Disk) {
+    Write-Host ''
+    Write-Host "=== Prepare USB SSD Partition ===" -ForegroundColor Cyan
+    Write-Host "Selected: Disk $($Disk.Number) - $($Disk.FriendlyName)"
+    Write-Host "Size: $([math]::Round($Disk.Size / 1GB, 1)) GiB | Free: $([math]::Round($Disk.LargestFreeExtent / 1GB, 1)) GiB"
+    Write-Host ''
+    $neededGB = 35
+    if ($Disk.LargestFreeExtent -lt ($neededGB * 1GB)) {
+        Write-Host "Not enough free space on USB SSD. Need at least ${neededGB} GiB." -ForegroundColor Red
+        Write-Host 'Delete some files or use a different disk.'
+        return $null
+    }
+    Write-Host ''
+    Write-Host "This will create a ${neededGB} GiB exFAT partition labeled AIPC_LIVE on the USB SSD." -ForegroundColor Yellow
+    Write-Host "Existing data on the disk will NOT be affected." -ForegroundColor Yellow
+    Write-Host ''
+    $confirm = Read-Host "Type 'create' to create the AIPC_LIVE partition on USB SSD"
+    if ($confirm -ne 'create') {
+        Write-Host 'Cancelled.' -ForegroundColor Yellow
+        return $null
+    }
+    Write-Host ''
+    $partitions = Get-Partition -DiskNumber $Disk.Number
+    $existingLive = $partitions | Where-Object { $_.FileSystemLabel -eq 'AIPC_LIVE' }
+    if ($existingLive) {
+        Write-Host '  AIPC_LIVE partition already exists on this disk.' -ForegroundColor Yellow
+        return "$($existingLive.DriveLetter):"
+    }
+    Invoke-UsbConfirmed "Disk $($Disk.Number)" "create ${neededGB} GiB exFAT AIPC_LIVE partition" {
+        $newPart = New-Partition -DiskNumber $Disk.Number -Size ($neededGB * 1GB) -AssignDriveLetter
+        Format-Volume -Partition $newPart -FileSystem exFAT -NewFileSystemLabel 'AIPC_LIVE' -Confirm:$false | Out-Null
+    }
+    $volume = Get-Volume -FileSystemLabel 'AIPC_LIVE'
+    return "$($volume.DriveLetter):"
+}
+
+function Stage-UsbPayload($LiveDrive) {
+    Write-Host ''
+    Write-Host '=== Stage Bazzite Payload to USB SSD ===' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host "Downloading and verifying Bazzite ISO..."
+    New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+    $iso = Join-Path $WorkDir 'bazzite-dx-stable-amd64.iso'
+    $chk = Join-Path $WorkDir 'bazzite-dx-stable-amd64.iso.CHECKSUM'
+    if (-not (Test-Path $iso)) {
+        Write-Log "  downloading: $BazziteIsoUrl"
+        Invoke-WebRequest -Uri $BazziteIsoUrl -OutFile $iso
+    }
+    if (-not (Test-Path $chk)) {
+        Invoke-WebRequest -Uri $BazziteChecksumUrl -OutFile $chk
+    }
+    Assert-UsbChecksum $iso $chk
+    Write-Host ''
+    $liveOs = Join-Path $LiveDrive 'LiveOS'
+    $aipcDir = Join-Path $LiveDrive 'EFI\BOOT'
+    New-Item -ItemType Directory -Force -Path $aipcDir | Out-Null
+    $image = Mount-DiskImage -ImagePath $iso -PassThru
+    try {
+        $isoVolume = $image | Get-Volume
+        $isoDrive = "$($isoVolume.DriveLetter):"
+        if (-not (Test-Path $liveOs)) {
+            Write-Log "  copying LiveOS to USB SSD..."
+            Copy-Item (Join-Path $isoDrive 'LiveOS') $LiveDrive -Recurse -Force
+        }
+        Write-Log "  copying boot files to EFI..."
+        $srcBoot = Join-Path $isoDrive 'EFI\BOOT'
+        if (Test-Path $srcBoot) {
+            Copy-Item (Join-Path $srcBoot '*') $aipcDir -Force
+        }
+        $srcLoader = Join-Path $isoDrive 'EFI\BOOT\BOOTX64.EFI'
+        if (Test-Path $srcLoader) {
+            Copy-Item $srcLoader (Join-Path $aipcDir 'BOOTX6_64.EFI') -Force
+        }
+        Write-Log "  extracting vmlinuz + initrd..."
+        $srcVmlinuz = Get-ChildItem $isoDrive -Recurse -Filter 'vmlinuz*' | Select-Object -First 1
+        $srcInitrd = Get-ChildItem $isoDrive -Recurse -Filter 'initrd*' | Select-Object -First 1
+        if ($srcVmlinuz) { Copy-Item $srcVmlinuz.FullName (Join-Path $aipcDir 'vmlinuz') -Force }
+        if ($srcInitrd) { Copy-Item $srcInitrd.FullName (Join-Path $aipcDir 'initrd.img') -Force }
+    } finally {
+        Dismount-DiskImage -ImagePath $iso | Out-Null
+    }
+}
+
+function Run-UsbPath {
+    Write-Host ''
+    Write-Host '=== USB SSD Installer Path ===' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host 'This path creates a bootable USB SSD from an external drive.' -ForegroundColor Yellow
+    Write-Host 'Use this if you have a USB SSD (or large USB stick) available.' -ForegroundColor Yellow
+    Write-Host ''
+    $disk = Select-ExternalDisk
+    if (-not $disk) { return }
+    $liveDrive = Ensure-UsbPartition $disk
+    if (-not $liveDrive) { return }
+    Stage-UsbPayload $liveDrive
+    Write-Host ''
+    Write-Host '=== USB SSD READY ===' -ForegroundColor Green
+    Write-Host ''
+    Write-Host "AIPC_LIVE is staged on: $liveDrive" -ForegroundColor Green
+    Write-Host ''
+    Write-Host 'Next steps:' -ForegroundColor Cyan
+    Write-Host '  1. Safely eject the USB SSD.'
+    Write-Host '  2. Plug it into the target machine.'
+    Write-Host '  3. Boot and press F12/F1 for one-time boot menu.'
+    Write-Host '  4. Select the USB SSD to boot Bazzite installer.'
+    Write-Host '  5. Install Bazzite to the internal disk (NOT the USB SSD).'
+    Write-Host '  6. After install, boot installed Bazzite and run: ./install-aipc-linux.sh'
+    Write-Host ''
+}
+
 function Show-Menu {
     Write-Host ''
     Write-Host '=== Guided Menu ===' -ForegroundColor Cyan
@@ -81,8 +235,9 @@ function Show-Menu {
     Write-Host '  [1] Show install journey overview'
     Write-Host '  [2] Show basic settings checklist'
     Write-Host '  [3] Run read-only preflight checks'
-    Write-Host '  [4] Start staging (destructive, requires confirmation)'
-    Write-Host '  [5] Show next steps after staging'
+    Write-Host '  [4] Start NO-USB staging (internal disk, destructive)'
+    Write-Host '  [5] Start USB SSD staging (external disk)'
+    Write-Host '  [6] Show next steps after staging'
     Write-Host '  [0] Exit'
     Write-Host ''
 }
@@ -111,31 +266,47 @@ while ($true) {
         }
         '4' {
             Write-Host ''
-            Write-Host 'Starting staging. This will:' -ForegroundColor Yellow
+            Write-Host 'Starting NO-USB staging. This will:' -ForegroundColor Yellow
             Write-Host '  - Install rEFInd to EFI System Partition'
             Write-Host '  - Shrink C: to leave 150 GiB unallocated'
             Write-Host '  - Create and format 30 GiB exFAT AIPC_LIVE partition'
             Write-Host '  - Download and stage Bazzite payload'
             Write-Host '  - Generate rEFInd menuentry'
             Write-Host ''
-            Write-Host 'Each destructive step will print the exact plan and require typed confirmation.' -ForegroundColor Magenta
+            Write-Host 'Each destructive step requires typed confirmation.' -ForegroundColor Magenta
             Write-Host ''
-
             $confirm = Read-Host 'Type "start" to begin staging'
             if ($confirm -ne 'start') {
                 Write-Host 'Staging cancelled.' -ForegroundColor Yellow
                 continue
             }
-
             & $backend
             if ($LASTEXITCODE -eq 0) {
                 Show-NextSteps
             } else {
-                Write-Host 'Staging failed. Check the error above.' -ForegroundColor Red
+                Write-Host 'Staging failed with exit code $LASTEXITCODE. Check log and retry.' -ForegroundColor Red
             }
             break
         }
-        '5' { Show-NextSteps }
+        '5' {
+            Write-Host ''
+            Write-Host 'Starting USB SSD staging. This will:' -ForegroundColor Yellow
+            Write-Host '  - Let you select an external USB/ATA disk'
+            Write-Host '  - Create a 35 GiB exFAT AIPC_LIVE partition on it'
+            Write-Host '  - Download and stage Bazzite payload to the USB SSD'
+            Write-Host '  - Make the USB SSD bootable'
+            Write-Host ''
+            Write-Host 'Your existing data on the USB SSD will NOT be affected.' -ForegroundColor Magenta
+            Write-Host ''
+            $confirm = Read-Host 'Type "usb" to begin USB staging'
+            if ($confirm -ne 'usb') {
+                Write-Host 'USB staging cancelled.' -ForegroundColor Yellow
+                continue
+            }
+            Run-UsbPath
+            break
+        }
+        '6' { Show-NextSteps }
         '0' { exit 0 }
         default { Write-Host 'Invalid choice.' -ForegroundColor Red }
     }
