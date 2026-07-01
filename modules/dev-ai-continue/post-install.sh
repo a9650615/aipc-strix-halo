@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 
-code --install-extension Continue.continue --force || true
+# Install: user runs in VSCode: code --install-extension Continue.continue --force

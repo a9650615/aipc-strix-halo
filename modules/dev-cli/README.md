@@ -5,7 +5,7 @@ Fish shell, Starship prompt, and a curated CLI bundle for daily development.
 ## Packages from Fedora repos
 
 fish, starship, gh, git-delta, fzf, ripgrep, jq, yq, httpie, zoxide, bat, eza,
-lazygit, google-jetbrains-mono-fonts, fira-code-fonts.
+lazygit, jetbrains-mono-fonts, fira-code-fonts.
 
 ## Packages requiring manual install (not in Fedora repos)
 

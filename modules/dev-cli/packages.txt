@@ -11,5 +11,5 @@ zoxide
 bat
 eza
 lazygit
-google-jetbrains-mono-fonts
+jetbrains-mono-fonts
 fira-code-fonts
