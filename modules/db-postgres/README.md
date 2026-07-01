@@ -30,7 +30,7 @@ those work at image-build time.
 
 All runtime concerns live in systemd units:
 
-- `quadlet/postgres.service` — the postgres container, started by the
+- `quadlet/postgres.container` — the postgres container, started by the
   init system at boot.
 - `files/etc/systemd/system/aipc-pg-init.service` — a `Type=oneshot`
   runtime unit that waits for postgres readiness, creates the `aipc`
@@ -44,7 +44,7 @@ All runtime concerns live in systemd units:
 
 | Source (in module) | Target path on image | Purpose |
 |---|---|---|
-| `quadlet/postgres.service` | `/etc/containers/systemd/postgres.service` | Postgres 16 container quadlet |
+| `quadlet/postgres.container` | `/etc/containers/systemd/postgres.service` | Postgres 16 container quadlet |
 | `files/etc/systemd/system/aipc-pg-init.service` | `/etc/systemd/system/aipc-pg-init.service` | Runtime schema-init oneshot |
 | `files/usr/lib/aipc/pg-init.sh` | `/usr/lib/aipc/pg-init.sh` (0755) | Readiness wait + idempotent schema bootstrap |
 | `files/usr/lib/aipc/init-pgvector.sql` | `/usr/lib/aipc/init-pgvector.sql` | `CREATE EXTENSION IF NOT EXISTS vector` |
