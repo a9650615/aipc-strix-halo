@@ -32,24 +32,30 @@ aipc doctor
 
 ## Install entrypoints
 
-Use the Windows no-USB path only if a USB installer is unavailable. Before it
-mutates disk, it requires BitLocker off, Secure Boot off, UEFI boot, shrink
-feasibility, and a completed non-USB Windows System Image Backup for WinRE
-recovery. The Strix Halo boot path still needs one hardware boot test.
+The guided entrypoints show the full install journey, prerequisites, and next
+steps as a keyboard-operated menu. Use the Windows no-USB path only if a USB
+installer is unavailable. The Strix Halo boot path still needs one hardware
+boot test.
 
-From an Administrator PowerShell:
+**Windows** (from Administrator PowerShell):
 
 ```powershell
 Unblock-File .\Install-AIPC-Windows.ps1
 powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\Install-AIPC-Windows.ps1
 ```
 
-Linux bootstrap, after completing the vanilla bazzite-dx install and booting
-into the installed system:
+The guided menu shows: install journey overview, basic settings checklist,
+read-only preflight checks, staging with confirmation gates, and next steps
+after staging.
+
+**Linux** (after completing vanilla bazzite-dx install and booting installed system):
 
 ```sh
 ./install-aipc-linux.sh
 ```
+
+The guided menu confirms you are on the installed system before invoking
+`tools/bootstrap.sh`.
 
 ## Phase 0 status
 
