@@ -2,16 +2,23 @@
 
 Fish shell, Starship prompt, and a curated CLI bundle for daily development.
 
-## Packages from Fedora repos
+## Packages from bazzite-dx / Fedora repos
 
-fish, starship, gh, git-delta, fzf, ripgrep, jq, yq, httpie, zoxide, bat, eza,
-lazygit, jetbrains-mono-fonts, fira-code-fonts.
+fish, gh, zoxide, bat, eza, jetbrains-mono-fonts, fira-code-fonts.
+
+Deduped against `system-base` (which already provides git-delta, fzf, ripgrep,
+jq, yq, httpie).
 
 ## Packages requiring manual install (not in Fedora repos)
 
+Not shipped in the image; user installs on first login. All install to `~/.local`
+or `~/.cargo` — no root required after these tools bootstrap.
+
+- **starship**: prompt — `curl -sS https://starship.rs/install.sh | sh -s -- -y`.
+- **lazygit**: git TUI — `go install github.com/jesseduffield/lazygit@latest` or brew tap.
 - **ghostty**: terminal emulator — install from <https://ghostty.org>.
 - **mise**: polyglot tool version manager — `curl https://mise.run | sh`.
-- **atuin**: shell history sync — `cargo install atuin` or official script.
+- **atuin**: shell history sync — `curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh`.
 
 ## post-install.sh
 

@@ -1,2 +1,2 @@
-jetbrains-mono-fonts
-fira-code-fonts
+# Fonts declared in dev-cli (jetbrains-mono-fonts, fira-code-fonts).
+# Editor binaries (Zed, VSCode) install at runtime via Flatpak — see README.

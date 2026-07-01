@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from aipc_lib.log_append import ROLES, append_row
+from aipc_lib.log_append import append_row
 
 
 @pytest.fixture()
@@ -31,7 +31,7 @@ def test_append_row_happy_path(log_file: Path) -> None:
         log_path=log_file,
     )
     assert line == "| 2026-06-30 | 副官 | claude-sonnet-4-6 | log-append-2026-06-30 | phase-0-foundation#1.1 | abc1234 | added log-append helper |\n"
-    rows = [l for l in log_file.read_text(encoding="utf-8").splitlines() if l.startswith("| ")]
+    rows = [row for row in log_file.read_text(encoding="utf-8").splitlines() if row.startswith("| ")]
     assert rows[-1] == line.rstrip()
 
 
@@ -56,7 +56,7 @@ def test_existing_rows_untouched(log_file: Path) -> None:
     after = log_file.read_text(encoding="utf-8")
     assert before in after
     diff = after[len(before):]
-    added_rows = [l for l in diff.splitlines() if l.startswith("| ")]
+    added_rows = [row for row in diff.splitlines() if row.startswith("| ")]
     assert len(added_rows) == 1
     assert added_rows[0].startswith("| 2026-06-30")
 
