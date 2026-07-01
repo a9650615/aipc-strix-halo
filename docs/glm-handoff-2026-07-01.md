@@ -83,23 +83,30 @@ editors on the AI PC.
 
 ## Build verification status
 
-**NOT completed in-session.** `tools/build-local.sh` was kicked off but ran
->1 hour stuck on `STEP 1/43: FROM ghcr.io/ublue-os/bazzite-dx:stable` — still
-pulling the ~3-4 GB base image via OrbStack docker + buildah `vfs` the entire
-time (environment-bandwidth-limited; never reached the rpm-ostree install
-step). Stopped + cleaned up (build-local.sh PID + buildah container killed).
+**✅ CI Build Image is GREEN.** The image with the 9 enabled dev modules
+builds and publishes successfully — verified via GitHub Actions `Build Image`
+workflow (not the local Mac, which was too slow):
 
-What IS verified: bootc render clean (Containerfile well-formed, 9 dev modules
-present, 30 rpm packages); ansible render parity (dev modules present, valid
-YAML). The 30 rpm packages are all standard Fedora/bazzite names (fish,
-starship, gh, git-delta, fzf, ripgrep, jq, yq, httpie, zoxide, bat, eza,
-lazygit, jetbrains-mono-fonts, fira-code-fonts, distrobox, pipx) — high
-confidence they resolve.
+- `7304abd` (latest HEAD, this ledger): Build Image `build-push` ✓ 5m46s.
+- `4cde9b5` (includes `a9aceb1` dev-module enable + opus's CI fixes):
+  Build Image `build-push` ✓ 4m26s.
 
-**Authoritative gate remains**: CI image build + `bootc switch` on the AI PC
-(CLAUDE.md §9). If a package fails to resolve there, fix forward — the enable
-commit `a9aceb1` is the single change to bisect. (To purge the partial
-buildah storage volume: `docker volume rm aipc-buildah-storage`.)
+Both confirm the 30 rpm packages resolve and all 43 build steps complete;
+the image is pushed to the registry (`ghcr.io/a9650615/aipc`).
+
+A parallel **opus 大哥 session** unblocked CI concurrently: `00d0d5a`
+"unblock Build Image + CI lint" and `4cde9b5` (distrobox templates
+`.yaml`→`.ini` to fix a yamllint failure my dev-distrobox-templates enable
+surfaced). GLM (this session) did the dev-foundation enable + runbook +
+ledger; opus did the CI/build unblock. History is linear, no conflicts.
+
+(Local `tools/build-local.sh` was attempted but stuck >1hr on the base
+image pull via OrbStack/buildah-vfs — environment-bandwidth-limited, not a
+code issue. Stopped + cleaned up. CI is the authoritative build gate per
+CLAUDE.md §9 and it is green.)
+
+**Remaining gate (not buildable from a Mac)**: `bootc switch` to the fresh
+image on the AI PC + `aipc doctor` green — the user's hardware verification.
 
 ## Push discipline (per user "做完一個階段就要推上去")
 
