@@ -69,3 +69,4 @@ Columns:
 | 2026-07-01 | 大哥 | gpt-5.5 | windows-root-entrypoints-2026-07-02 | windows-oneclick-installer#1.4-1.5 | (this commit) | Added repo-root Windows and Linux install entrypoints; workflow-reviewed UX/safety, verified OpenSpec, pytest, bootc render, and entrypoint syntax. |
 | 2026-07-01 | 大哥 | gpt-5.5 | guided-installer-tui-spec-2026-07-02 | guided-installer-tui#proposal | (this commit) | Created guided installer TUI OpenSpec proposal/design/spec/tasks; validated strict. |
 | 2026-07-02 | 副官 | claude-opus-4-8 | guided-installer-tui-impl-2026-07-02 | guided-installer-tui | 817ef97..8c2fe56 | implemented guided keyboard menu for Windows and Linux entrypoints; all 12 spec tasks complete; validation green |
+| 2026-07-02 | 副官 | claude-opus-4-8 | installer-fallback-debug-2026-07-02 | guided-installer-tui | 16b3990 | added phase tracking, failure recovery summaries, USB SSD installer path, and debug info to both Windows and Linux entrypoints |
