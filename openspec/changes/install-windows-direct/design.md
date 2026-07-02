@@ -12,31 +12,32 @@ The Windows-direct path needs an EFI loader that (a) the user can install from i
 - **Ventoy** — strong GUI and multi-ISO support, but introduces a third-party EFI loader chain that is harder to recover from when it misbehaves.
 - **Windows Boot Manager + `bcdedit` chainload** — uses only what Windows ships, but in practice chainloading non-Windows EFI binaries via BCD is fragile across OEM firmware versions; rEFInd registers itself the same way and then takes over the menu.
 
-### D2. ISO chainload, not kernel+initramfs extraction
+### D2. Extract vmlinuz + initrd + LiveOS, not ISO chainload (REVISED during implementation)
 
-rEFInd can boot an `.iso` file in place via its built-in loader plus the appropriate filesystem driver. Extracting kernel, initramfs, and squashfs out of the ISO into the ESP works but requires more careful path wiring and is one more place for the user to mistype.
+Originally: chainload the ISO file in place via rEFInd. Revised: rEFInd's ISO chainload depends on firmware-specific El Torito handling and is unreliable, and copying the whole ISO offers no way around per-file size limits on the payload filesystem.
 
-**Choice: chainload the ISO file directly.** Drop file, point rEFInd config at it, done.
+**Choice: extract components.** vmlinuz + initrd go to `EFI/refind/aipc/` on the ESP; the LiveOS squashfs goes to the `AIPC_LIVE` partition; the rEFInd menuentry boots the kernel with `options "root=live:LABEL=AIPC_LIVE rd.live.image quiet"`.
 
 **Alternatives considered:**
-- **Extract kernel/initramfs/squashfs to ESP** — more configuration steps, more failure modes if the kernel cmdline does not reference the squashfs by the path the user wrote.
+- **Chainload the ISO directly** (original choice) — fewer steps on paper, but firmware-dependent and forces a >4 GiB single file onto the install partition.
 
-### D3. Disk layout — 30 GB FAT32 install partition + 120 GB unallocated for Linux
+### D3. Disk layout — 30 GB exFAT `AIPC_LIVE` partition + 120 GB unallocated for Linux (REVISED: exFAT, not FAT32)
 
-The bazzite-dx ISO is ~3 GB; rEFInd's loader plus configuration is < 50 MB; the ESP is typically 100–500 MB on Windows and is not the right home for a 3 GB ISO.
+The bazzite-dx LiveOS squashfs can exceed 4 GiB — over FAT32's single-file limit — so the payload partition is exFAT. (The ESP itself stays FAT32 as UEFI requires; it only holds the <100 MB vmlinuz/initrd.)
 
 **Choice: two-step Windows shrink.**
 
 1. From Windows Disk Management: shrink C: by 150 GB → leaves 150 GB unallocated.
-2. From `diskpart`: create a new 30 GB primary FAT32 partition in that unallocated region for the ISO and rEFInd payload.
+2. From `diskpart`: create a new 30 GB primary exFAT partition labelled `AIPC_LIVE` in that unallocated region for the LiveOS payload.
 3. The remaining 120 GB stays unallocated for the bazzite-dx installer to claim.
 
 After bazzite is installed and verified, the 30 GB install partition is reclaimable.
 
 **Alternatives considered:**
-- **One partition** — ISO and Linux fight for space, and the bazzite installer cannot safely shrink a FAT32 it is also booting from.
-- **Use ESP only** — typical 100–500 MB ESP cannot hold a 3 GB ISO.
-- **Use Windows C: directly via NTFS** — rEFInd has NTFS read support via a driver, but performance and reliability are weaker than FAT32; not worth the saved partition.
+- **FAT32 payload partition** (original choice) — blocked by the 4 GiB single-file limit on the squashfs.
+- **One partition** — payload and Linux fight for space, and the bazzite installer cannot safely shrink a filesystem it is also booting from.
+- **Use ESP only** — typical 100–500 MB ESP cannot hold a multi-GB payload.
+- **Use Windows C: directly via NTFS** — rEFInd has NTFS read support via a driver, but reliability is weaker; not worth the saved partition.
 
 ### D4. Dual-boot for 30 days, then wipe Windows
 

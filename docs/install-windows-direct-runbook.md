@@ -118,6 +118,31 @@ This runbook documents an alternative install path that boots the bazzite-dx ins
 
 **[SCREENSHOT PLACEHOLDER: BIOS boot menu showing rEFInd entry]**
 
+**ESP layout after install:**
+
+```
+EFI/
+├── refind/
+│   ├── refind_x64.efi      # the boot manager binary
+│   ├── refind.conf         # menu configuration
+│   └── aipc/               # created later in step 9
+│       ├── vmlinuz
+│       └── initrd.img
+└── Boot/
+    └── bootx64.efi         # fallback copy some firmware boots instead
+```
+
+The menuentry appended to `refind.conf` (by `targets/windows/install-windows.ps1`, or by hand):
+
+```
+menuentry "AIPC Bazzite Installer (UNVERIFIED on Strix Halo)" {
+    icon /EFI/refind/icons/os_linux.png
+    loader /EFI/refind/aipc/vmlinuz
+    initrd /EFI/refind/aipc/initrd.img
+    options "root=live:LABEL=AIPC_LIVE rd.live.image quiet"
+}
+```
+
 **Q1 Fallback: If rEFInd does NOT register in NVRAM**
 
 Some Strix Halo firmware implementations may not persist rEFInd's boot entry. If rEFInd is missing from the boot menu:
@@ -188,6 +213,9 @@ Some Strix Halo firmware implementations may not persist rEFInd's boot entry. If
 **[SCREENSHOT PLACEHOLDER: Disk Management showing 30 GB exFAT partition]**
 
 **Result:** 30 GB exFAT partition (Z:, label AIPC_LIVE) + 120 GB Unallocated remains.
+
+> **⚠ Do NOT format or partition the remaining 120 GB from Windows.** It must stay
+> unallocated — the bazzite installer claims it directly in step 11.
 
 ### 8. Download and Verify Bazzite-DX ISO
 

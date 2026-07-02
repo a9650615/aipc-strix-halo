@@ -5,7 +5,7 @@
 `tools/bootstrap.sh` SHALL probe hardware, collect the user's age public key, and `bootc switch` a vanilla bazzite-dx host to the chosen aipc tag, with a reboot prompt. The host SHALL reach the "vanilla bazzite-dx booted" prerequisite state via EITHER of two documented paths:
 
 - **R6a USB Live path** (existing): a USB stick is written from another machine (typically the user's Mac) per `docs/architecture.md` §9.3 and the bazzite-dx installer is booted from USB per §9.4.
-- **R6b Windows-direct path** (alternative, no USB required): rEFInd is installed from a running Windows 11 host into the ESP, a bazzite-dx ISO is dropped onto a 30 GB FAT32 install partition carved from unallocated space, rEFInd chainloads the ISO at next boot, and the bazzite-dx installer is pointed at the remaining unallocated space (≥120 GB).
+- **R6b Windows-direct path** (alternative, no USB required): rEFInd is installed from a running Windows 11 host into the ESP, the bazzite-dx ISO's vmlinuz + initrd are extracted to the ESP and its LiveOS payload to a 30 GB exFAT `AIPC_LIVE` partition carved from unallocated space, rEFInd boots the extracted kernel at next boot, and the bazzite-dx installer is pointed at the remaining unallocated space (≥120 GB).
 
 Both paths SHALL converge on the same vanilla bazzite-dx host state before `tools/bootstrap.sh` runs. The R6b path SHALL leave Windows bootable via the rEFInd menu until the user explicitly wipes it.
 

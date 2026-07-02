@@ -284,6 +284,8 @@ CI tags:
 
 ## 9. Install Flow
 
+> No USB stick available? See **§9 Alt: Windows-Direct Install (No USB Required)** below for a path installed entirely from the running Windows host.
+
 The machine ships from the vendor with **Windows 11 Home preinstalled**. Migration is one-way: Windows is wiped. The flow below assumes the user has another machine (e.g., a Mac) available to prepare the USB installer.
 
 > **The very first time** this project is built (by the project owner), the published aipc image does not yet exist. In that case: complete §9.1 through §9.4 to land on vanilla bazzite-dx, then jump to §10 Phase 0 Hardware Verification. Only after the first :rolling tag is pushed to ghcr.io do §9.5 and §9.6 become applicable. Subsequent installs (rebuilds, friends, replacements) run §9.1 → §9.6 end to end.
