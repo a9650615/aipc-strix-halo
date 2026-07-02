@@ -223,11 +223,11 @@ Some Strix Halo firmware implementations may not persist rEFInd's boot entry. If
 
 ```
 [ ] Download vanilla bazzite-dx ISO:
-    https://download.bazzite.gg/bazzite-dx-stable-amd64.iso
+    https://download.bazzite.gg/bazzite-stable-amd64.iso
 [ ] Download the CHECKSUM file:
-    https://download.bazzite.gg/bazzite-dx-stable-amd64.iso.CHECKSUM
+    https://download.bazzite.gg/bazzite-stable-amd64.iso-CHECKSUM
 [ ] Verify SHA-256 in PowerShell:
-    Get-FileHash bazzite-dx-stable-amd64.iso -Algorithm SHA256
+    Get-FileHash bazzite-stable-amd64.iso -Algorithm SHA256
 [ ] Compare the hash with the .CHECKSUM file
 [ ] If checksums match, proceed
 ```

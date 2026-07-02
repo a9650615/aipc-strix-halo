@@ -4,8 +4,8 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $backend = Join-Path $PSScriptRoot 'targets\windows\install-windows.ps1'
-$BazziteIsoUrl = 'https://download.bazzite.gg/bazzite-dx-stable-amd64.iso'
-$BazziteChecksumUrl = 'https://download.bazzite.gg/bazzite-dx-stable-amd64.iso.CHECKSUM'
+$BazziteIsoUrl = 'https://download.bazzite.gg/bazzite-stable-amd64.iso'
+$BazziteChecksumUrl = 'https://download.bazzite.gg/bazzite-stable-amd64.iso-CHECKSUM'
 $WorkDir = "$env:ProgramData\aipc-windows-installer"
 
 function Write-Log($Message, $Color = 'White') {
@@ -184,8 +184,8 @@ function Stage-UsbPayload($Drives) {
     Write-Host ''
     Write-Host "Downloading and verifying Bazzite ISO..."
     New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-    $iso = Join-Path $WorkDir 'bazzite-dx-stable-amd64.iso'
-    $chk = Join-Path $WorkDir 'bazzite-dx-stable-amd64.iso.CHECKSUM'
+    $iso = Join-Path $WorkDir 'bazzite-stable-amd64.iso'
+    $chk = Join-Path $WorkDir 'bazzite-stable-amd64.iso-CHECKSUM'
     if (-not (Test-Path $iso)) {
         Write-Log "  downloading: $BazziteIsoUrl"
         Invoke-WebRequest -Uri $BazziteIsoUrl -OutFile $iso

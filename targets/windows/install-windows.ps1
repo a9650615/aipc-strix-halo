@@ -3,8 +3,8 @@
 param(
     [string]$WorkDir = "$env:ProgramData\aipc-windows-installer",
     [string]$RefIndVersion = '0.14.0',
-    [string]$BazziteIsoUrl = 'https://download.bazzite.gg/bazzite-dx-stable-amd64.iso',
-    [string]$BazziteChecksumUrl = 'https://download.bazzite.gg/bazzite-dx-stable-amd64.iso.CHECKSUM'
+    [string]$BazziteIsoUrl = 'https://download.bazzite.gg/bazzite-stable-amd64.iso',
+    [string]$BazziteChecksumUrl = 'https://download.bazzite.gg/bazzite-stable-amd64.iso-CHECKSUM'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,8 +13,8 @@ $ShrinkBytes = 150GB
 $LiveBytes = 30GB
 $RefIndZip = Join-Path $WorkDir "refind-bin-$RefIndVersion.zip"
 $RefIndChecksum = Join-Path $WorkDir "refind-bin-$RefIndVersion.zip.txt"
-$BazziteIso = Join-Path $WorkDir 'bazzite-dx-stable-amd64.iso'
-$BazziteChecksum = Join-Path $WorkDir 'bazzite-dx-stable-amd64.iso.CHECKSUM'
+$BazziteIso = Join-Path $WorkDir 'bazzite-stable-amd64.iso'
+$BazziteChecksum = Join-Path $WorkDir 'bazzite-stable-amd64.iso-CHECKSUM'
 
 $script:LogFile = $null
 $script:PhasesDone = @()
