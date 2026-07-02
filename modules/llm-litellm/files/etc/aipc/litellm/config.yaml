@@ -71,6 +71,14 @@ router_settings:
   num_retries: 2
   allowed_fails: 3
   cooldown_time: 60
+  # ponytail: no idle-eviction key exists here. Verified 2026-07-02 against
+  # litellm/types/router.py::RouterConfig and litellm/proxy/_types.py general
+  # settings for the pinned tag (v1.89.4, see quadlet/litellm.container) —
+  # neither accepts an "idle_timeout"/backend-eviction field. LiteLLM is a
+  # stateless proxy; it cannot stop the vLLM process it routes to. The 10-min
+  # idle eviction for vLLM must live in modules/llm-vllm's own systemd unit
+  # (timer or ExecStopPost idle-shutdown wrapper), not here. Re-check this
+  # comment against the router.py source if the pinned digest is ever bumped.
 
 litellm_settings:
   drop_params: false

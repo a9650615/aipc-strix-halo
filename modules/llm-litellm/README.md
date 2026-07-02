@@ -22,7 +22,9 @@ Adding a new logical model = a LiteLLM config entry, nothing else.
 `quadlet/litellm.container` pins `ghcr.io/berriai/litellm` to a digest
 (currently v1.89.4 stable). Floating tags like `:main-latest` are forbidden —
 the image is rebuilt on every `bootc switch`, so a tag drift would silently
-change behaviour across hosts.
+change behaviour across hosts. Re-verified 2026-07-02 via
+`docker buildx imagetools inspect ghcr.io/berriai/litellm:v1.89.4` — the
+manifest-list digest matches the pinned `sha256:afdc3cc3…` exactly.
 
 To update the pin:
 
@@ -35,11 +37,26 @@ To update the pin:
 
 `config.yaml` sets `router_settings.timeout: 600` and
 `litellm_settings.request_timeout: 600` — both are per-request ceilings, not
-idle-backend eviction. LiteLLM's proxy has no native "unload after N seconds
-of zero traffic" key; backend idle eviction must be configured on the backend
-itself (vLLM's `--timeout-keep-alive`, Lemonade's model unload policy,
-Ollama's `OLLAMA_KEEP_ALIVE`). `cooldown_time: 60` / `allowed_fails: 3` only
-trip on failures, not idleness.
+idle-backend eviction. `cooldown_time: 60` / `allowed_fails: 3` only trip on
+failures, not idleness.
+
+Confirmed 2026-07-02 against the pinned tag (v1.89.4): LiteLLM's proxy has
+**no** native "unload backend after N minutes of zero traffic" key. Checked
+both `litellm/types/router.py::RouterConfig` (the full `router_settings:`
+schema — `redis_*`, `cache_*`, `client_ttl`, `num_retries`, `timeout`,
+`allowed_fails`, `retry_after`, `routing_strategy`, `model_group_alias`, no
+idle field) and `litellm/proxy/_types.py` general settings (only a DB
+connection idle timeout, unrelated to model backends). LiteLLM is a
+stateless HTTP proxy — it has no handle on the vLLM process's lifecycle, so
+it structurally cannot evict it.
+
+Idle eviction must be configured on the backend itself: vLLM's
+`--timeout-keep-alive` doesn't stop the process either, so the real fix is a
+systemd-level idle-shutdown wrapper (timer or `ExecStopPost`) in
+`modules/llm-vllm`'s own quadlet — tracked as a gap, not yet implemented.
+Lemonade's model unload policy and Ollama's `OLLAMA_KEEP_ALIVE` are the
+equivalent knobs for those two backends. See the `# ponytail:` comment next
+to `router_settings` in `config.yaml` for the inline pointer.
 
 ## Unit placement
 
