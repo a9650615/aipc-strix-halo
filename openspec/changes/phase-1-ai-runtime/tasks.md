@@ -69,7 +69,7 @@
 
 - [ ] 5.1 Run `tools/aipc render bootc`; confirm Containerfile includes all
   seven ai-runtime modules.
-- [ ] 5.2 Run `podman build` of the rendered Containerfile (or CI build) to
+- [x] 5.2 Run `podman build` of the rendered Containerfile (or CI build) to
   confirm the image builds without error.
 - [ ] 5.3 Run `tools/aipc render ansible --check` and confirm it lints clean.
 - [ ] 5.4 Run each module's `verify.sh` in a privileged container against the
