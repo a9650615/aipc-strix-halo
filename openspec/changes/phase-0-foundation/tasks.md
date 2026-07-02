@@ -53,7 +53,7 @@
 
 - [ ] 6.1 On the AI PC running Windows 11: sign out of Microsoft account; back up BitLocker key from account.microsoft.com; back up Documents/Desktop/Downloads/Pictures/Videos to NAS or external drive; export browser bookmarks; record Steam library; capture `winget list > apps.txt`; record OEM product key via `Get-WmiObject`; disable BitLocker on system drive
 - [ ] 6.2 Enter BIOS: enable EXPO/DOCP, enable Smart Access Memory, set UMA frame buffer to minimum, disable Secure Boot, set boot mode UEFI-only, set USB first in boot order, save and exit
-- [ ] 6.3 On Mac: download latest `bazzite-dx-stable-amd64.iso` and its CHECKSUM; verify SHA-256
+- [x] 6.3 On Mac: download latest `bazzite-stable-amd64.iso` (no dx ISO variant exists upstream; the aipc image layers on bazzite-dx via bootc switch) and its `-CHECKSUM`; verify SHA-256
 - [ ] 6.4 On Mac: write the ISO to a USB ≥ 16 GiB (ISO is ~7.9 GB; nominal 8 GB sticks may be too small) with `sudo dd if=... of=/dev/rdiskN bs=4m`; eject and label
 - [ ] 6.5 On AI PC: boot the USB, choose "Erase entire disk and install", BTRFS layout default, hostname `aipc-strix`, timezone Asia/Taipei, locale en_US.UTF-8, create user account
 - [ ] 6.6 First desktop login: confirm KDE Plasma loads; plug in Ethernet if Wi-Fi did not initialise
@@ -72,7 +72,7 @@
 
 ## 8. First Image And bootc switch
 
-- [ ] 8.1 On the Mac: confirm the latest CI build is green and tags include today's date plus `:rolling`
+- [x] 8.1 On the Mac: confirm the latest CI build is green and tags include today's date plus `:rolling`
 - [ ] 8.2 On the AI PC: transfer the age public key (paste or USB; private key stays on Mac)
 - [ ] 8.3 On the AI PC: run `tools/bootstrap.sh` with the published URL; choose `:rolling`; confirm GitHub user prompt; allow reboot
 - [ ] 8.4 After reboot: `bootc status` shows the aipc image staged or booted
@@ -85,4 +85,4 @@
 - [ ] 9.1 Run `openspec validate phase-0-foundation` and resolve any errors
 - [ ] 9.2 Run `openspec archive phase-0-foundation` (this moves the change and updates `openspec/specs/system-foundation/spec.md` automatically)
 - [ ] 9.3 Commit, push, and tag the milestone: `git tag -a phase-0-complete -m "Phase 0 system foundation complete"`
-- [ ] 9.4 Open `openspec/changes/phase-1-ai-runtime` as the next change (out of scope for this plan)
+- [x] 9.4 Open `openspec/changes/phase-1-ai-runtime` as the next change (out of scope for this plan)
