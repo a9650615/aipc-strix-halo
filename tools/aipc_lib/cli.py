@@ -146,9 +146,10 @@ def models_list(manifest: Path, models_root: Path) -> None:
     for col in ("alias", "backend", "model_id", "size_gb", "on_disk_status"):
         table.add_column(col)
 
+    _STATUS_COLOR = {"present": "green", "missing": "red", "n/a": "dim"}
     for e in entries:
         status = models_mod.on_disk_status(e, models_root)
-        color = "green" if status == "present" else "red"
+        color = _STATUS_COLOR.get(status, "white")
         table.add_row(
             e.alias,
             e.backend,
@@ -174,21 +175,25 @@ def models_list(manifest: Path, models_root: Path) -> None:
     show_default=True,
 )
 def models_sync(check: bool, manifest: Path, models_root: Path) -> None:
-    """Sync model weights. --check is a dry-run; full sync is not yet implemented."""
+    """Sync model weights. --check is a dry-run; pulls nothing and just reports gaps."""
     entries = models_mod.load_manifest(manifest)
     if check:
         missing = models_mod.sync_check(entries, models_root)
         if missing:
             click.echo("Missing models:", err=True)
             for m in missing:
-                click.echo(f"  - {m.alias} ({m.backend}: {m.path})", err=True)
+                click.echo(f"  - {m.alias} ({m.backend}: {m.model_id})", err=True)
             sys.exit(1)
         click.echo("All declared models present.")
         sys.exit(0)
 
-    # ponytail: full pull not yet wired — backends differ (Ollama pull vs Lemonade vs HF download)
-    click.echo("aipc models sync (full pull) is not yet implemented. Use --check for a dry-run.")
-    sys.exit(0)
+    results = models_mod.sync_pull(entries, models_root)
+    failed = [e for e, success in results if not success]
+    for e, success in results:
+        click.echo(f"{'pulled' if success else 'FAILED'}: {e.alias} ({e.backend}: {e.model_id})")
+    if not results:
+        click.echo("All declared models present.")
+    sys.exit(1 if failed else 0)
 
 
 @main.group()
