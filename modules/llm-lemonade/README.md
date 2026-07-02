@@ -28,4 +28,10 @@ Not called directly. `llm-litellm` routes NPU-eligible models here.
 ## Runtime requirements
 
 - `amd-xdna` driver loaded and NPU visible via `lspci`.
-- Lemonade SDK container image (version pinned in Containerfile, not yet written).
+- Lemonade server container image, pinned by digest in
+  `files/etc/systemd/system/lemonade.service`:
+  `ghcr.io/lemonade-sdk/lemonade-server@sha256:e727643d...` (= tag `v10.8.1`,
+  verified against the ghcr manifest 2026-07-02). The previously referenced
+  `amd/lemonade-sdk` image does not exist on Docker Hub; upstream publishes to
+  ghcr via `lemonade-sdk/lemonade`'s `build-and-push-container.yml`. Bump by
+  resolving a newer tag's digest and updating both the unit file and this line.

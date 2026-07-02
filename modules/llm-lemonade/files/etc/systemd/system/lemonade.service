@@ -16,7 +16,7 @@ ExecStart=/usr/bin/podman run \
     --group-add=keep-groups \
     -p 127.0.0.1:8001:8001 \
     -v /etc/aipc/lemonade:/etc/aipc/lemonade:ro,Z \
-    amd/lemonade-sdk:latest
+    ghcr.io/lemonade-sdk/lemonade-server@sha256:e727643dad3b0680ececbcf7ee1430e5f447a3bdf3700824335d3ee18a3dcfb5
 ExecStop=/usr/bin/podman stop lemonade
 
 [Install]
