@@ -54,7 +54,7 @@
 - [ ] 6.1 On the AI PC running Windows 11: sign out of Microsoft account; back up BitLocker key from account.microsoft.com; back up Documents/Desktop/Downloads/Pictures/Videos to NAS or external drive; export browser bookmarks; record Steam library; capture `winget list > apps.txt`; record OEM product key via `Get-WmiObject`; disable BitLocker on system drive
 - [ ] 6.2 Enter BIOS: enable EXPO/DOCP, enable Smart Access Memory, set UMA frame buffer to minimum, disable Secure Boot, set boot mode UEFI-only, set USB first in boot order, save and exit
 - [ ] 6.3 On Mac: download latest `bazzite-dx-stable-amd64.iso` and its CHECKSUM; verify SHA-256
-- [ ] 6.4 On Mac: write the ISO to a USB ≥ 8 GiB with `sudo dd if=... of=/dev/rdiskN bs=4m`; eject and label
+- [ ] 6.4 On Mac: write the ISO to a USB ≥ 16 GiB (ISO is ~7.9 GB; nominal 8 GB sticks may be too small) with `sudo dd if=... of=/dev/rdiskN bs=4m`; eject and label
 - [ ] 6.5 On AI PC: boot the USB, choose "Erase entire disk and install", BTRFS layout default, hostname `aipc-strix`, timezone Asia/Taipei, locale en_US.UTF-8, create user account
 - [ ] 6.6 First desktop login: confirm KDE Plasma loads; plug in Ethernet if Wi-Fi did not initialise
 

@@ -337,7 +337,7 @@ Reboot to BIOS (Del / F2 at POST). Apply once and save:
 1. Download vanilla bazzite-dx ISO:
        https://download.bazzite.gg/bazzite-stable-amd64.iso
 2. Verify SHA-256 against the .CHECKSUM file from bazzite.gg.
-3. Identify the USB stick (≥ 8 GB):
+3. Identify the USB stick (≥ 16 GB; the ISO is ~7.9 GB, an "8 GB" stick may not fit):
        diskutil list
 4. Unmount (NOT eject):
        diskutil unmountDisk /dev/diskN
