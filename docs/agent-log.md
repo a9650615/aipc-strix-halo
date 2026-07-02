@@ -72,3 +72,9 @@ Columns:
 | 2026-07-02 | 副官 | claude-opus-4-8 | installer-fallback-debug-2026-07-02 | guided-installer-tui | 16b3990 | added phase tracking, failure recovery summaries, USB SSD installer path, and debug info to both Windows and Linux entrypoints |
 | 2026-07-02 | 副官 | claude-opus-4-8 | installer-bugfix-2026-07-02 | guided-installer-tui | 96a2e4f | fixed USB SSD ESP (FAT32 boot partition), BOOTX64 typo, runbook FAT32 to exFAT, removed dead UsbMode param |
 | 2026-07-02 | 副官 | claude-fable-5 | installer-consistency-scan-2026-07-02 | - | c0dd4cb | consistency scan: fixed stale USB SSD single-partition docs in README + targets/windows/README |
+| 2026-07-02 | 副官 | claude-fable-5 | install-windows-direct-docs-2026-07-02 | install-windows-direct#3.1-7.2 | e12e9bd | completed doc tasks, synced spec/design to exFAT+extract |
+| 2026-07-02 | 副官 | claude-fable-5 | multi-agent-rules-2026-07-02 | - | fc34549 | added §0.1 model-tier roles + §0.2 dispatch protocol to CLAUDE.md/AGENTS.md |
+| 2026-07-02 | 副官 | claude-fable-5 | quadlet-render-2026-07-02 | quadlet-render-support#1-6 | 449bfe5 | sonnet 副官 verified prior impl, checked off all tasks (orchestrated by fable-5) |
+| 2026-07-02 | 副官 | claude-fable-5 | aipc-models-cmd-2026-07-02 | phase-1-ai-runtime#3.1,3.2,3.3 | 74125ec | sonnet 副官 fixed models manifest schema bug, implemented sync pull (orchestrated by fable-5) |
+| 2026-07-02 | 副官 | claude-fable-5 | litellm-pin-idle-2026-07-02 | phase-1-ai-runtime#1.2,1.3 | b026441 | sonnet 副官 verified digest pin, documented idle-eviction gap: needs llm-vllm systemd fix (orchestrated by fable-5) |
+| 2026-07-02 | 副官 | claude-fable-5 | preboot-prep-2026-07-02 | - | 1107d6a..e5a5df7 | fixed dead ISO URL (no dx ISO upstream), repo placeholders, curl-pipe bootstrap, USB 16GiB guidance |

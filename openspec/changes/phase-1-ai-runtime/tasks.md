@@ -2,7 +2,7 @@
 
 - [x] 1.1 `llm-litellm`: quadlet, post-install.sh, verify.sh exist; service
   runs on port 4000; verify.sh checks `/health` and `/v1/models` — shipped.
-- [ ] 1.2 `llm-litellm`: pin `ghcr.io/berriai/litellm` to a specific digest
+- [x] 1.2 `llm-litellm`: pin `ghcr.io/berriai/litellm` to a specific digest
   (not `:main-latest`) and document the pin in the module README.
 - [ ] 1.3 `llm-litellm`: add `idle_timeout` (or equivalent) to `config.yaml`
   so vLLM and non-pinned backends are evicted after 10 min of zero traffic;
@@ -42,13 +42,13 @@
 
 ## 3. Add aipc models Subcommand
 
-- [ ] 3.1 Add `aipc models sync` to `tools/aipc`: reads
+- [x] 3.1 Add `aipc models sync` to `tools/aipc`: reads
   `/etc/aipc/models/models.yaml`, checks each entry against
   `/var/lib/aipc-models`, pulls missing weights via Ollama pull, Lemonade pull,
   or direct download as appropriate for the declared backend.
-- [ ] 3.2 Add `aipc models list` to show declared aliases, backend, and
+- [x] 3.2 Add `aipc models list` to show declared aliases, backend, and
   on-disk status (present / missing / size).
-- [ ] 3.3 Add `aipc models sync --check` (dry-run) that exits non-zero if any
+- [x] 3.3 Add `aipc models sync --check` (dry-run) that exits non-zero if any
   declared model is missing, without downloading — usable from post-install.sh.
 - [ ] 3.4 Render `modules/llm-litellm/files/etc/aipc/litellm/config.yaml` from
   `modules/llm-models/files/etc/aipc/models/models.yaml` at build time
