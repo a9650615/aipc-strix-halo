@@ -225,12 +225,13 @@ run_bootstrap() {
     complete_phase "hardware-probe"
 
     set_phase "tag"
-    read -rp "Image tag [stable]: " tag
-    tag="${tag:-stable}"
+    read -rp "Image tag [rolling]: " tag
+    tag="${tag:-rolling}"
     complete_phase "tag"
 
     set_phase "github-user"
-    read -rp "GitHub username (owner of ghcr.io/<user>/aipc): " github_user
+    read -rp "GitHub username (owner of ghcr.io/<user>/aipc) [a9650615]: " github_user
+    github_user="${github_user:-a9650615}"
     if [ -z "${github_user}" ]; then
         err "ERROR: GitHub username is required"
         exit 1

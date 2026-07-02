@@ -428,7 +428,7 @@ The USB path (§9.3–§9.4) remains the primary recommendation: faster, lower-r
 [ ] Verify network (Ethernet or Wi-Fi)
 [ ] Run:
        ./install-aipc-linux.sh          # guided menu (recommended)
-       # or: curl -fsSL https://raw.githubusercontent.com/<user>/aipc_setup/main/tools/bootstrap.sh | bash
+       # or: curl -fsSL https://raw.githubusercontent.com/a9650615/aipc-strix-halo/main/tools/bootstrap.sh | bash
     The guided menu shows the install journey, preconditions, and recovery info.
     Direct/curl mode runs bootstrap phases without the menu:
        a. Probes hardware (XDNA presence, gfx1151, RAM size)
