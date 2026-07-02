@@ -192,7 +192,18 @@ function Ensure-RefInd($Esp) {
 function Ensure-FreeSpace {
     Set-Phase 'shrink'
     $disk = Get-Disk -Number (Get-SystemDiskNumber)
-    $needed = $ShrinkBytes - $disk.LargestFreeExtent
+    # An already-created AIPC_LIVE partition counts toward the 150 GiB target:
+    # it was carved out of the space this phase reserved, so on a re-run it is
+    # no longer "unallocated" but is still ours. Without this, every idempotent
+    # re-run after partition creation would see 30 GiB "missing" and shrink
+    # C: again, forever.
+    $existingLive = Get-Volume -FileSystemLabel 'AIPC_LIVE' -ErrorAction SilentlyContinue
+    $reserved = $disk.LargestFreeExtent
+    if ($existingLive) { $reserved += $existingLive.Size }
+    # Partition alignment and FAT32 reserved sectors mean a "30 GiB" partition
+    # is never byte-exact, so allow slack rather than re-prompting to shrink
+    # by a few stray MiB every idempotent re-run.
+    $needed = $ShrinkBytes - $reserved - 1GB
     if ($needed -le 0) {
         Write-Log '  enough free space already' DarkGray
         Complete-Phase 'shrink'
@@ -236,17 +247,9 @@ function Ensure-BazziteIso {
     Assert-Checksum $BazziteIso $BazziteChecksum
 }
 
-function Copy-First($Root, $Filter, $Destination) {
-    $source = Get-ChildItem $Root -Recurse -File -Filter $Filter | Select-Object -First 1
-    if (-not $source) { throw "$Filter not found in mounted ISO." }
-    Copy-Item $source.FullName $Destination -Force
-}
-
-function Ensure-Payload($Esp, $LiveDrive) {
+function Ensure-Payload($LiveDrive) {
     Set-Phase 'payload'
     Ensure-BazziteIso
-    $aipcDir = Join-Path $Esp 'EFI\refind\aipc'
-    New-Item -ItemType Directory -Force -Path $aipcDir | Out-Null
 
     $image = Mount-DiskImage -ImagePath $BazziteIso -PassThru
     try {
@@ -255,6 +258,10 @@ function Ensure-Payload($Esp, $LiveDrive) {
         # dracut live ISO (LiveOS/squashfs.img). Mirror the whole tree onto
         # AIPC_LIVE so inst.stage2=hd:LABEL=AIPC_LIVE finds install.img, the
         # OCI repo, and .treeinfo — exactly what a dd-written USB would hold.
+        # vmlinuz/initrd stay under images/pxeboot/ on AIPC_LIVE too: the ESP
+        # on this hardware is only ~256 MiB (168 MiB free), far too small for
+        # the ~242 MiB initrd, so rEFInd loads them straight off AIPC_LIVE via
+        # a "volume" directive instead of staging a copy onto the ESP.
         $marker = Join-Path $LiveDrive 'images\install.img'
         if (-not (Test-Path $marker)) {
             Write-Log '  copying installer tree to AIPC_LIVE...'
@@ -262,8 +269,6 @@ function Ensure-Payload($Esp, $LiveDrive) {
         } else {
             Write-Log '  installer tree already staged' DarkGray
         }
-        Copy-First $isoDrive 'vmlinuz*' (Join-Path $aipcDir 'vmlinuz')
-        Copy-First $isoDrive 'initrd*' (Join-Path $aipcDir 'initrd.img')
     } finally {
         Dismount-DiskImage -ImagePath $BazziteIso | Out-Null
     }
@@ -281,12 +286,15 @@ function Ensure-MenuEntry($Esp) {
         return
     }
 
+    # loader/initrd are read from the AIPC_LIVE volume (not the ESP) via the
+    # "volume" directive; rEFInd reads FAT natively, no driver needed.
     $entry = @'
 
 menuentry "AIPC Bazzite Installer (UNVERIFIED on Strix Halo)" {
     icon /EFI/refind/icons/os_linux.png
-    loader /EFI/refind/aipc/vmlinuz
-    initrd /EFI/refind/aipc/initrd.img
+    volume "AIPC_LIVE"
+    loader /images/pxeboot/vmlinuz
+    initrd /images/pxeboot/initrd.img
     options "inst.stage2=hd:LABEL=AIPC_LIVE quiet"
 }
 '@
@@ -318,7 +326,7 @@ try {
         Ensure-RefInd $esp
         Ensure-FreeSpace
         $liveDrive = Ensure-LivePartition
-        Ensure-Payload $esp $liveDrive
+        Ensure-Payload $liveDrive
         Ensure-MenuEntry $esp
     } finally {
         mountvol $esp /D | Out-Null

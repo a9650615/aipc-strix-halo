@@ -8,7 +8,8 @@
   Image Backup acknowledgement → verified rEFInd download+checksum+install →
   verified bazzite ISO+CHECKSUM download → confirmed C: shrink (150 GiB
   unallocated) → confirmed 30 GiB **FAT32** `AIPC_LIVE` partition + full
-  installer-tree staging → `vmlinuz`+`initrd` to ESP + rEFInd menuentry
+  installer-tree staging (incl. `vmlinuz`+`initrd`, since the ESP is too
+  small) → rEFInd menuentry with `volume "AIPC_LIVE"`
   (`inst.stage2=hd:LABEL=AIPC_LIVE`) → print next steps (no auto-reboot). Every
   phase idempotent; Q1/Q2 fallbacks as comments; "UNVERIFIED on Strix Halo"
   warning printed.

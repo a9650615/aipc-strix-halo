@@ -22,7 +22,12 @@ A single elevated PowerShell entry script (`targets/windows/install-windows.ps1`
 #### Scenario: Live payload partition is FAT32, mirroring the full installer tree
 
 - **WHEN** the 30 GB live partition is created and the payload is staged
-- **THEN** it is formatted as FAT32 (labelled `AIPC_LIVE`) and the entire Bazzite Anaconda installer tree (`images/install.img`, the `bazzite-stable/` OCI repo, `.treeinfo`) is mirrored onto it, so the kernel booted with `inst.stage2=hd:LABEL=AIPC_LIVE` resolves stage2 (no installer file exceeds FAT32's 4 GiB per-file limit; the installer initrd reliably mounts vfat)
+- **THEN** it is formatted as FAT32 (labelled `AIPC_LIVE`) and the entire Bazzite Anaconda installer tree (`images/install.img`, `images/pxeboot/{vmlinuz,initrd.img}`, the `bazzite-stable/` OCI repo, `.treeinfo`) is mirrored onto it, so the kernel booted with `inst.stage2=hd:LABEL=AIPC_LIVE` resolves stage2 (no installer file exceeds FAT32's 4 GiB per-file limit; the installer initrd reliably mounts vfat)
+
+#### Scenario: Kernel and initrd load from AIPC_LIVE, not the ESP
+
+- **WHEN** the rEFInd menuentry is generated
+- **THEN** it uses a `volume "AIPC_LIVE"` directive and loads `/images/pxeboot/vmlinuz` + `/images/pxeboot/initrd.img` from the AIPC_LIVE partition, because a stock Windows ESP (often ~256 MiB, with only ~168 MiB free after Windows' own boot files) is too small for Bazzite's ~242 MiB initrd
 
 #### Scenario: Destructive disk operations are confirmation-gated
 

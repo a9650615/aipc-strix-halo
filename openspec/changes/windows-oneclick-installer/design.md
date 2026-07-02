@@ -21,15 +21,25 @@ FAT32`), labelled `AIPC_LIVE` (≤ 11 chars, satisfies FAT32's label limit).
   - **NTFS** — the installer initrd does not mount NTFS read-write for
     stage2; rejected.
 
-### D2 — Kernel + initrd on the FAT ESP; full installer tree on the FAT32 live partition
+### D2 — Kernel + initrd load from the AIPC_LIVE volume, not the ESP
 
-The ESP is FAT (small, firmware-readable). Split the boot payload: `vmlinuz`
-+ `initrd` are copied to the ESP under `EFI/refind/aipc/` for rEFInd to
-load; the **entire ISO tree** (`images/install.img`, the `bazzite-stable/`
-OCI repo, `.treeinfo`, …) is mirrored onto the FAT32 `AIPC_LIVE` partition —
-exactly what a `dd`-written USB would contain. rEFInd boots the kernel with
-`inst.stage2=hd:LABEL=AIPC_LIVE`, matching the ISO's own grub.cfg
-(`inst.stage2=hd:LABEL=bazzite-x86_64-stable`) with our partition label.
+A default Windows ESP is often only ~256 MiB with a large chunk already
+consumed by `Microsoft\Boot\`; Bazzite's `initrd.img` alone is ~242 MiB,
+so copying it onto the ESP alongside rEFInd routinely fails with "not
+enough disk space." rEFInd reads FAT natively (no driver needed), so
+instead the **entire ISO tree** (`images/install.img`, `images/pxeboot/
+{vmlinuz,initrd.img}`, the `bazzite-stable/` OCI repo, `.treeinfo`, …) is
+mirrored onto the FAT32 `AIPC_LIVE` partition — exactly what a
+`dd`-written USB would contain — and the rEFInd menuentry points at it
+with a `volume "AIPC_LIVE"` directive rather than staging a copy on the
+ESP. rEFInd boots the kernel with `inst.stage2=hd:LABEL=AIPC_LIVE`,
+matching the ISO's own grub.cfg (`inst.stage2=hd:LABEL=bazzite-x86_64-stable`)
+with our partition label.
+
+- Alternatives considered:
+  - **Copy vmlinuz+initrd to the ESP** (original design) — rejected;
+    measured ESP free space (168 MiB) is smaller than initrd.img (242 MiB)
+    on real hardware.
 
 - Alternatives considered:
   - **Copy only `LiveOS/` + kernel** (original design) — rejected; this is
@@ -124,17 +134,20 @@ active code.
   (2) verified download + install rEFInd to ESP, (3) verified download of
   bazzite ISO, (4) confirmed shrink of C: to yield 150 GiB unallocated,
   (5) create 30 GiB FAT32 partition labelled `AIPC_LIVE` + mirror the full
-  installer tree, (6) copy `vmlinuz`+`initrd` to the ESP and write a rEFInd
-  menuentry booting `inst.stage2=hd:LABEL=AIPC_LIVE`, (7) print next-steps
+  installer tree (including `vmlinuz`+`initrd`), (6) write a rEFInd
+  menuentry with `volume "AIPC_LIVE"` booting `inst.stage2=hd:LABEL=AIPC_LIVE`,
+  (7) print next-steps
   (reboot → pick entry → installer "install to free space" not "use entire
   disk").
 - `preflight-check.ps1`: read-only subset of phase 1; exit non-zero +
   one-line diagnosis on any failure (mirrors the module `verify.sh`
   contract).
-- Boot mechanism note: kernel+initrd live on FAT ESP (small); the full
-  Anaconda installer tree lives on the FAT32 `AIPC_LIVE` partition and is
-  found via `inst.stage2=hd:LABEL=AIPC_LIVE`. rEFInd NVRAM persistence +
-  Strix firmware boot is UNVERIFIED — carries the §7.3 Q1/Q2 fallbacks as
+- Boot mechanism note: the ESP holds only rEFInd itself (too small for a
+  ~242 MiB initrd); the full Anaconda installer tree, including
+  `vmlinuz`/`initrd`, lives on the FAT32 `AIPC_LIVE` partition and rEFInd
+  loads it via a `volume "AIPC_LIVE"` directive, booting
+  `inst.stage2=hd:LABEL=AIPC_LIVE`. rEFInd NVRAM persistence + Strix
+  firmware boot is UNVERIFIED — carries the §7.3 Q1/Q2 fallbacks as
   documented comments, not code.
 
 ## Cross-references
