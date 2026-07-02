@@ -16,24 +16,24 @@
   document in README.
 - [x] 1.7 `llm-ollama`: quadlet, post-install.sh, verify.sh exist; service
   runs on port 11434 with HSA_OVERRIDE_GFX_VERSION — shipped.
-- [ ] 1.8 `llm-ollama`: add `Environment=OLLAMA_KEEP_ALIVE=-1` to
+- [x] 1.8 `llm-ollama`: add `Environment=OLLAMA_KEEP_ALIVE=-1` to
   `quadlet/ollama.service` so main-70B stays resident (R3 gap — currently
   missing from the shipped quadlet).
 - [x] 1.9 `llm-vllm`: quadlet, post-install.sh, verify.sh exist; disabled by
   default; verify.sh exits 2 when disabled — shipped.
-- [ ] 1.10 `llm-vllm`: confirm that `aipc doctor` treats verify.sh exit 2 as
+- [x] 1.10 `llm-vllm`: confirm that `aipc doctor` treats verify.sh exit 2 as
   OPTIONAL, not FAIL; add handling to the `aipc doctor` runner if not present.
 
 ## 2. Add Missing Modules
 
-- [ ] 2.1 `ai-rocm`: create `modules/ai-rocm/` with README, packages.txt
+- [x] 2.1 `ai-rocm`: create `modules/ai-rocm/` with README, packages.txt
   (rocm-smi, amd-smi, rocm-hip-runtime pinned to ROCm 7), post-install.sh
   (idempotent), verify.sh (rocm-smi lists gfx1151 + GTT ≥ 115360 MiB).
 - [ ] 2.2 `ai-xdna`: create `modules/ai-xdna/` with README, packages.txt
   (amd-xdna kernel module or DKMS package), post-install.sh (modprobe
   amd_xdna, create /dev/accel/accel0 udev rule if needed), verify.sh
   (`lsmod | grep amd_xdna` + `/dev/accel/accel0` exists + xdna-smi enumerate).
-- [ ] 2.3 `llm-models`: create `modules/llm-models/` with README, a starter
+- [x] 2.3 `llm-models`: create `modules/llm-models/` with README, a starter
   `files/etc/aipc/models/models.yaml` that maps at minimum `router-1b`,
   `intent-3b`, `main-70b`, `coder-fast`, `coder-strong`, `coder-thinking`,
   `embed-bge`, `vlm-qwen2vl` to their backends and on-disk references;
@@ -58,10 +58,10 @@
 
 ## 4. Extend aipc doctor For ai-runtime
 
-- [ ] 4.1 Add `llm-litellm` gateway alias check to `aipc doctor`: call
+- [x] 4.1 Add `llm-litellm` gateway alias check to `aipc doctor`: call
   `GET http://127.0.0.1:4000/v1/models`, parse `data[].id`, and assert every
   alias in `models.yaml` is present; print FAIL with missing alias name if not.
-- [ ] 4.2 Confirm `aipc doctor` maps verify.sh exit 2 to OPTIONAL status for
+- [x] 4.2 Confirm `aipc doctor` maps verify.sh exit 2 to OPTIONAL status for
   `llm-vllm` and any other optional module (may already be implemented; check
   and mark done if so).
 
