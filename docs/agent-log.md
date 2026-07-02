@@ -71,3 +71,4 @@ Columns:
 | 2026-07-02 | 副官 | claude-opus-4-8 | guided-installer-tui-impl-2026-07-02 | guided-installer-tui | 817ef97..8c2fe56 | implemented guided keyboard menu for Windows and Linux entrypoints; all 12 spec tasks complete; validation green |
 | 2026-07-02 | 副官 | claude-opus-4-8 | installer-fallback-debug-2026-07-02 | guided-installer-tui | 16b3990 | added phase tracking, failure recovery summaries, USB SSD installer path, and debug info to both Windows and Linux entrypoints |
 | 2026-07-02 | 副官 | claude-opus-4-8 | installer-bugfix-2026-07-02 | guided-installer-tui | 96a2e4f | fixed USB SSD ESP (FAT32 boot partition), BOOTX64 typo, runbook FAT32 to exFAT, removed dead UsbMode param |
+| 2026-07-02 | 副官 | claude-fable-5 | installer-consistency-scan-2026-07-02 | - | c0dd4cb | consistency scan: fixed stale USB SSD single-partition docs in README + targets/windows/README |
