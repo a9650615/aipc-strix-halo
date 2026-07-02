@@ -12,7 +12,7 @@
 - [ ] 1.5 `llm-lemonade`: validate `files/etc/aipc/lemonade/models.yaml` field
   names against a running `amd/lemonade-sdk` container; remove the TODO comment
   once confirmed.
-- [ ] 1.6 `llm-lemonade`: pin `amd/lemonade-sdk` container to a digest;
+- [x] 1.6 `llm-lemonade`: pin `amd/lemonade-sdk` container to a digest;
   document in README.
 - [x] 1.7 `llm-ollama`: quadlet, post-install.sh, verify.sh exist; service
   runs on port 11434 with HSA_OVERRIDE_GFX_VERSION — shipped.
