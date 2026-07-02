@@ -1,6 +1,6 @@
-# CLAUDE.md — Rules for AI Working in This Repository
+# AGENTS.md — Rules for AI Working in This Repository
 
-This document tells any AI (Claude, Goose, Cline, Aider, Continue.dev, Qwen via Aider/Goose, future local agents) how to make changes to this repo without breaking it.
+This document tells any AI (Codex, Goose, Cline, Aider, Continue.dev, Qwen via Aider/Goose, future local agents) how to make changes to this repo without breaking it.
 
 It is enforced socially — there is no CI gate against AI behaviour today. But the structure of this repo makes deviations easy to spot in review.
 
@@ -39,6 +39,7 @@ Precedence: **user's explicit signal > task shape > model tier**. A Sonnet asked
 5. **大哥 reviews the diff** before it reaches `main`. Branch/worktree merges are the 大哥's job.
 6. **Parallel workers must not share files.** If two tasks touch the same file (e.g. `tasks.md`), the 大哥 serializes them or reserves that file for itself.
 7. **A worker that hits a spec gap stops and reports** — it does not improvise a design decision. Design decisions belong to the 大哥 or an OpenSpec change.
+
 
 ---
 
@@ -210,12 +211,12 @@ Agent-Orchestrator: <orchestrator-id>   (optional; omit when worker and orchestr
 - `Agent-Role:` matches §0. Use the role you actually performed in that commit, not your title.
 - `Agent-Run:` is a freeform label so multiple commits from the same dispatch can be grouped (`git log --grep "Agent-Run: phase-0-build-fix"`).
 - `Spec-Task:` references the OpenSpec change + task id (e.g. `phase-1-ai-runtime#1.3`). If the work falls outside any spec task, omit AND open a change first (see §1 — "stop and propose").
-- `Agent-Orchestrator:` When the model named in `Co-authored-by:` was dispatched by a different model or a different Claude Code instance, fill this with a short, greppable identifier of the dispatching session (e.g. `claude-code-instance-A` or `claude-sonnet-4.6/session-B`). Same model + same session: omit.
+- `Agent-Orchestrator:` When the model named in `Co-authored-by:` was dispatched by a different model or a different Codex instance, fill this with a short, greppable identifier of the dispatching session (e.g. `Codex-instance-A` or `Codex-sonnet-4.6/session-B`). Same model + same session: omit.
 
 **Example — same session (omit `Agent-Orchestrator:`):**
 
 ```
-Co-authored-by: claude-sonnet-4-6 <noreply@anthropic.com>
+Co-authored-by: Codex-sonnet-4-6 <noreply@anthropic.com>
 Agent-Role: 副官
 Agent-Run: phase-0-review-fix-2026-06-28
 Spec-Task: phase-0-foundation#R4
@@ -228,7 +229,7 @@ Co-authored-by: Qwen3.7-max <noreply@anthropic.com>
 Agent-Role: 副官
 Agent-Run: phase1-lemonade-port-fix-2026-06-28
 Spec-Task: phase-1-ai-runtime#1.4
-Agent-Orchestrator: claude-opus-4-7
+Agent-Orchestrator: Codex-opus-4-7
 ```
 
 When a 大哥 (Opus) instructs sonnet/qwen subagents to do work, the **subagent commits the change with its own trailer**. The 大哥 does not commit on the subagent's behalf.
