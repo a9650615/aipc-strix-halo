@@ -31,12 +31,14 @@ Menu options:
 
 Select an external USB/ATA disk from the guided menu. The script:
 1. Lists detected external disks (USB or ATA bus)
-2. Creates a 35 GiB exFAT `AIPC_LIVE` partition from the disk's free space (existing data untouched)
+2. Creates two partitions from the disk's free space (existing data untouched):
+   - 1 GiB FAT32 `AIPC_ESP` — UEFI firmware requires FAT32 to boot
+   - 35 GiB exFAT `AIPC_LIVE` — holds the LiveOS squashfs (can exceed FAT32's 4 GiB limit)
 3. Downloads and SHA-256 verifies the Bazzite ISO
-4. Stages LiveOS + boot files to the USB SSD
+4. Stages boot files + vmlinuz/initrd to the ESP, LiveOS to `AIPC_LIVE`
 5. Prints next steps: eject, plug into target machine, F12/F1 boot, install Bazzite to internal disk
 
-The USB SSD needs at least 35 GiB of free space. The partition is carved from unallocated space so your existing data is preserved.
+The USB SSD needs at least 36 GiB of free space. Both partitions are carved from unallocated space so your existing data is preserved.
 
 ## No-USB direct target script
 

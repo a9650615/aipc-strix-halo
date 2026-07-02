@@ -55,13 +55,14 @@ The guided menu offers:
 2. Basic settings checklist (BitLocker, Secure Boot, UEFI, disk space)
 3. Read-only preflight checks
 4. NO-USB staging (shrinks C:, creates AIPC_LIVE on internal disk, stages payload via rEFInd)
-5. USB SSD staging (carves 35 GiB partition from USB SSD free space, stages payload, makes bootable)
+5. USB SSD staging (carves 1 GiB FAT32 ESP + 35 GiB exFAT partition from USB SSD free space, stages payload, makes bootable)
 6. Next steps after staging
 
 **USB SSD path**: Select an external USB/ATA disk from the menu. The script creates
-an `AIPC_LIVE` exFAT partition from the disk's free space without touching existing
-data, downloads and verifies the Bazzite ISO, and stages the payload. Boot from the
-USB SSD via F12/F1 one-time boot menu, then install Bazzite to the internal disk.
+a FAT32 `AIPC_ESP` boot partition and an exFAT `AIPC_LIVE` payload partition from the
+disk's free space without touching existing data, downloads and verifies the Bazzite
+ISO, and stages the payload. Boot from the USB SSD via F12/F1 one-time boot menu,
+then install Bazzite to the internal disk.
 
 **Linux** (after completing vanilla bazzite-dx install and booting installed system):
 
