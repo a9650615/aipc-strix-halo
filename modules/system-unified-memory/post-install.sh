@@ -8,6 +8,12 @@ set -eu
 chmod 0755 /usr/lib/aipc/gpp-wake-fix
 systemctl enable gpp-wake-fix.service
 
+chmod 0755 /usr/lib/aipc/platform-profile-auto /usr/lib/systemd/system-sleep/platform-profile-resume
+systemctl enable platform-profile-auto.service
+
+chmod 0755 /usr/lib/aipc/platform-profile-idle-check
+systemctl enable platform-profile-idle-check.timer
+
 # Hardware-verified 2026-07-04: the default targeted policy denies even a
 # root systemd service (runs as init_t) writing to /proc/acpi/wakeup
 # (proc_t) -- confirmed via ausearch -m avc showing `denied { write }`.

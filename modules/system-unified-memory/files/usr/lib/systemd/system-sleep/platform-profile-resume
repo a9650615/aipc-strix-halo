@@ -1,0 +1,8 @@
+#!/bin/sh
+# EC-managed platform_profile can reset across suspend/resume; reapply
+# the AC/battery-based choice after resume. See platform-profile-auto.
+case "${1:-}" in
+post)
+	/usr/lib/aipc/platform-profile-auto
+	;;
+esac

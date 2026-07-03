@@ -19,6 +19,15 @@ argument workarounds needed for this hardware to boot with a stable display.
   bridges as ACPI wake sources — they fire a spurious wake interrupt immediately after
   suspend entry that hangs the kernel on this hardware. See "Known issue: sleep/suspend
   freeze" below.
+- Enables `platform-profile-auto.service` + a udev rule + a systemd-sleep hook that switch
+  the ASUS EC `platform_profile` (`quiet`/`balanced`/`performance`) automatically:
+  `performance` on AC power (full burst available), `quiet` on battery, reapplied on every
+  plug/unplug event and after resume.
+- Enables `platform-profile-idle-check.timer`, which runs every 60s and — only while on
+  AC — drops to `quiet` after 5 consecutive idle checks (~5 min of low CPU load + low GPU
+  busy%), snapping straight back to `performance` on the very next check that sees load.
+  Mac-style "quiet at idle, full burst on demand" even while plugged in. See "Known issue:
+  idle power draw" below.
 
 ## Dependencies
 
@@ -99,3 +108,42 @@ specific, community-verified spurious-wake source, but the freeze-while-charging
 suspending and resuming after `gpp-wake-fix.service` has run; if it still hangs, the next
 data point to gather is whether it's charging-state-dependent (reported trigger in
 `#2988`) and whether a newer BIOS than `.308` is available.
+
+## Known issue: idle power draw / thermals — AC vs battery power profile
+
+Hardware-verified 2026-07-04: with the default ASUS EC `platform_profile=balanced`, this
+fleet idles at ~27-30W package power (`rocm-smi --showpower`) with typical light desktop
+background load. Switching to `platform_profile=quiet` (same official ASUS `asus_wmi` +
+AMD `amd_pmf` mechanism Windows Armoury Crate/Adrenalin use for their power-mode slider —
+not a reverse-engineered SMU tool) drops the same load to a stable ~15-16W, plus visibly
+lower fan RPM and ~5°C lower `Tctl`, with no stability risk (this is a vendor-supported EC
+knob, unlike `ryzenadj`/`power_dpm_force_performance_level` which are NOT to be touched
+without explicit user confirmation — see agent memory).
+
+`platform-profile-auto.service` (+ `90-platform-profile-auto.rules` +
+`system-sleep/platform-profile-resume`) applies `performance` while on AC power (full
+burst available for bursty workloads — e.g. LLM inference) and `quiet` on battery,
+re-evaluated instantly on every AC plug/unplug event and reapplied after suspend/resume
+(the EC can reset `platform_profile` across a sleep cycle).
+
+`platform-profile-idle-check.timer` layers a second, slower-reacting check on top of that,
+active only while on AC: every 60s it reads `/proc/loadavg` (1-min load, threshold 1.00)
+and `gpu_busy_percent`; 5 consecutive idle-looking checks (~5 min) drop the profile to
+`quiet`, but any single check that sees load resets the counter and snaps straight back to
+`performance` — asymmetric on purpose, slow to go quiet, instant to go loud, so bursty
+work is never throttled. Counter lives in `/run/aipc/platform-profile-idle-count` (tmpfs,
+naturally resets on reboot).
+
+CPU core-parking (offlining unused logical CPUs) was considered and rejected: `cpuidle`
+already uses `acpi_idle` with C1/C2/C3 all enabled and C3 (deepest) is the most-hit state
+in practice on this fleet, so idle cores already draw near-zero power without the
+hotplug-latency risk of reactively taking cores on/offline. SMT stays on for the same
+reason — it isn't a meaningful static-idle-power cost, and halving thread count would hurt
+burst workloads (LLM inference) for no real idle-power gain.
+
+`ryzenadj` was evaluated as a finer-grained alternative (true undervolt/power-limit
+control) but rejected for now: it requires either the unsigned out-of-tree `ryzen_smu`
+kernel module or `iomem=relaxed` (a security-loosening kernel arg) to get past "Unable to
+get memory access", and even then it pokes reverse-engineered SMU registers on a very new
+(Strix Halo) platform — same risk class as forcing GPU clocks, not attempted without
+explicit confirmation.

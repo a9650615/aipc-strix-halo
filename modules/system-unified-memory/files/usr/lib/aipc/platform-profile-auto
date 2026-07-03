@@ -1,0 +1,19 @@
+#!/bin/sh
+# Sets the ASUS EC platform_profile (quiet/balanced/performance) based on AC
+# adapter state: full burst on AC, quiet (and fewer fan/thermal shenanigans)
+# on battery. GZ302EA-specific: see modules/system-unified-memory/README.md.
+set -eu
+
+PROFILE_PATH=/sys/firmware/acpi/platform_profile
+AC_ONLINE_PATH=/sys/class/power_supply/AC0/online
+
+[ -w "$PROFILE_PATH" ] || exit 0
+
+online=1
+[ -r "$AC_ONLINE_PATH" ] && online=$(cat "$AC_ONLINE_PATH")
+
+if [ "$online" = "1" ]; then
+	echo performance > "$PROFILE_PATH"
+else
+	echo quiet > "$PROFILE_PATH"
+fi

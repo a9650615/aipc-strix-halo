@@ -1,0 +1,10 @@
+[Unit]
+Description=Apply ASUS EC platform power profile based on AC adapter state (GZ302EA)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/aipc/platform-profile-auto
+
+[Install]
+WantedBy=default.target

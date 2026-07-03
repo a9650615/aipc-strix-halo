@@ -1,0 +1,43 @@
+#!/bin/sh
+# Runs every 60s (platform-profile-idle-check.timer). Only acts while on AC
+# power: after 5 consecutive idle checks (~5 min) with low CPU load and low
+# GPU busy%, drops the EC platform_profile to quiet to cut idle power/fan
+# noise; any single non-idle check snaps straight back to performance so
+# bursty work (e.g. LLM inference) is never throttled by this.
+#
+# Instant AC-plug/unplug/resume reactions are handled separately by
+# platform-profile-auto (this script never touches battery-mode behaviour).
+set -eu
+
+PROFILE_PATH=/sys/firmware/acpi/platform_profile
+AC_ONLINE_PATH=/sys/class/power_supply/AC0/online
+GPU_BUSY_PATH=/sys/class/drm/card1/device/gpu_busy_percent
+COUNT_FILE=/run/aipc/platform-profile-idle-count
+IDLE_CHECKS_REQUIRED=5
+LOAD1_IDLE_THRESHOLD=100 # load1 * 100, i.e. 1.00
+GPU_BUSY_IDLE_THRESHOLD=10
+
+[ -w "$PROFILE_PATH" ] || exit 0
+[ -r "$AC_ONLINE_PATH" ] || exit 0
+[ "$(cat "$AC_ONLINE_PATH")" = "1" ] || exit 0
+
+mkdir -p /run/aipc
+count=0
+[ -r "$COUNT_FILE" ] && count=$(cat "$COUNT_FILE")
+
+load1=$(awk '{ printf "%d", $1 * 100 }' /proc/loadavg)
+gpu_busy=0
+[ -r "$GPU_BUSY_PATH" ] && gpu_busy=$(cat "$GPU_BUSY_PATH")
+
+if [ "$load1" -lt "$LOAD1_IDLE_THRESHOLD" ] && [ "$gpu_busy" -lt "$GPU_BUSY_IDLE_THRESHOLD" ]; then
+	count=$((count + 1))
+	[ "$count" -gt "$IDLE_CHECKS_REQUIRED" ] && count=$IDLE_CHECKS_REQUIRED
+	if [ "$count" -ge "$IDLE_CHECKS_REQUIRED" ]; then
+		echo quiet > "$PROFILE_PATH"
+	fi
+else
+	count=0
+	echo performance > "$PROFILE_PATH"
+fi
+
+echo "$count" > "$COUNT_FILE"

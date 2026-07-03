@@ -1,0 +1,1 @@
+SUBSYSTEM=="power_supply", KERNEL=="AC0", ACTION=="change", TAG+="systemd", ENV{SYSTEMD_WANTS}+="platform-profile-auto.service"

@@ -1,0 +1,7 @@
+[Unit]
+Description=Check idle CPU/GPU load and adjust ASUS EC platform power profile accordingly (GZ302EA)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/aipc/platform-profile-idle-check

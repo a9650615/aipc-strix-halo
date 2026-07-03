@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic idle check for ASUS EC platform power profile (GZ302EA)
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=5
+
+[Install]
+WantedBy=timers.target
