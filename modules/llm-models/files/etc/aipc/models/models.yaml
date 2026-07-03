@@ -34,6 +34,21 @@ models:
     model_id: deepseek-r1:14b-q4_K_M
     size_gb: 9.0
 
+  # gemma4 (not qwen2.5-coder) on purpose: Ollama's streaming tool-call
+  # support is broken for the qwen2 family (repro'd directly against
+  # Ollama's native /api/chat with stream:true+tools — content leaks the
+  # raw JSON as text instead of a structured tool_calls delta, regardless
+  # of model size: reproduced on both coder-fast/7B and coder-strong/32B).
+  # gemma4 and llama3.2 both produce correct structured tool_calls in the
+  # same test; gemma4 was chosen for stronger general capability.
+  # devstral:24b (Mistral's dedicated agentic-coding model) was also
+  # tried and rejected — it either skipped tool calls or refused outright
+  # even when explicitly told to use them, in this same harness.
+  - alias: coder-agentic
+    backend: ollama
+    model_id: gemma4:26b
+    size_gb: 18.0
+
   - alias: embed-bge
     backend: lemonade
     model_id: BAAI/bge-m3

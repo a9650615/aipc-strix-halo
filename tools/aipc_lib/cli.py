@@ -7,6 +7,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from aipc_lib import config_menu as config_menu_mod
 from aipc_lib import doctor as doctor_mod
 from aipc_lib import log_append as log_append_mod
 from aipc_lib import models as models_mod
@@ -215,6 +216,69 @@ def log_append_cmd(
     """Append a row to docs/agent-log.md."""
     line = log_append_mod.append_row(date, role, model, run_label, spec_tasks, sha_range, outcome)
     click.echo(f"Appended: {line.rstrip()}")
+
+
+@main.group()
+def config() -> None:
+    """Quick terminal-based settings adjustment (AI model tier, services)."""
+
+
+@config.command("status")
+def config_status() -> None:
+    """Show installed dev-ai-* tool configs' current model tier and service health."""
+    home = Path.home()
+    table = Table(title="aipc config status")
+    table.add_column("tool")
+    table.add_column("config path")
+    table.add_column("current tier")
+
+    found = config_menu_mod.installed_configs(home)
+    if not found:
+        click.echo("No dev-ai-* tool configs found under " + str(home))
+    for tc, path in found:
+        tier = config_menu_mod.current_tier(path) or "?"
+        table.add_row(tc.tool, str(path.relative_to(home)), tier)
+    Console().print(table)
+
+    svc_table = Table(title="AI services")
+    svc_table.add_column("service")
+    svc_table.add_column("status")
+    for svc, status in config_menu_mod.service_status().items():
+        color = "green" if status == "active" else "red"
+        svc_table.add_row(svc, f"[{color}]{status}[/{color}]")
+    Console().print(svc_table)
+
+
+@config.command("model")
+@click.option(
+    "--tier",
+    type=click.Choice(config_menu_mod.TIERS),
+    help="Set directly without prompting (for scripting).",
+)
+def config_model(tier: str | None) -> None:
+    """Switch the default model tier for aider/cline/goose.
+
+    opencode is not included here — it's fixed to coder-agentic for
+    reliable tool-calling (see modules/dev-ai-opencode/README.md). continue
+    has no single default field; use its own /model picker.
+    """
+    home = Path.home()
+    found = config_menu_mod.installed_configs(home)
+    if not found:
+        click.echo(f"No dev-ai-* tool configs found under {home}")
+        sys.exit(1)
+
+    if tier is None:
+        click.echo("Tiers:")
+        for i, t in enumerate(config_menu_mod.TIERS, start=1):
+            click.echo(f"  {i}) {t}")
+        choice = click.prompt("Pick a tier", type=click.IntRange(1, len(config_menu_mod.TIERS)))
+        tier = config_menu_mod.TIERS[choice - 1]
+
+    for tc, path in found:
+        changed = config_menu_mod.set_tier(path, tier)
+        status = f"-> {tier}" if changed else "(no tier field found, skipped)"
+        click.echo(f"{tc.tool}: {status}")
 
 
 if __name__ == "__main__":

@@ -30,6 +30,14 @@ model_list:
       model: ollama/deepseek-r1:14b-q4_K_M
       api_base: http://127.0.0.1:11434
 
+  # See models.yaml for why this is gemma4 and not qwen2.5-coder: Ollama's
+  # streaming tool-call support is broken for the qwen2 family regardless
+  # of model size, hardware-verified via direct /api/chat testing.
+  - model_name: coder-agentic
+    litellm_params:
+      model: ollama_chat/gemma4:26b
+      api_base: http://127.0.0.1:11434
+
   - model_name: embed-bge
     litellm_params:
       model: openai/bge-m3

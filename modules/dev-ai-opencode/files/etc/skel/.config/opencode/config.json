@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "aipc/__AIPC_DEFAULT_TIER__",
+  "model": "aipc/coder-agentic",
   "provider": {
     "aipc": {
       "npm": "@ai-sdk/openai-compatible",
@@ -9,9 +9,10 @@
         "baseURL": "http://127.0.0.1:4000/v1"
       },
       "models": {
-        "coder-fast": { "name": "coder-fast (Qwen2.5-Coder-7B)" },
-        "coder-strong": { "name": "coder-strong (Qwen2.5-Coder-32B)" },
-        "coder-thinking": { "name": "coder-thinking (DeepSeek-R1-14B)" }
+        "coder-agentic": { "name": "coder-agentic (Gemma4-26B) — default, reliable tool calling" },
+        "coder-fast": { "name": "coder-fast (Qwen2.5-Coder-7B) — tool calls unreliable, see README" },
+        "coder-strong": { "name": "coder-strong (Qwen2.5-Coder-32B) — tool calls unreliable, see README" },
+        "coder-thinking": { "name": "coder-thinking (DeepSeek-R1-14B) — tool calls unreliable, see README" }
       }
     }
   }

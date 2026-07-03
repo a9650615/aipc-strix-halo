@@ -136,7 +136,7 @@ if ask "goose"; then
 fi
 
 if ask "opencode"; then
-  install_config ".config/opencode/config.json" "$tier"
+  install_config ".config/opencode/config.json"
   if ! as_user distrobox list 2>/dev/null | grep -q '\bnode\b'; then
     as_user distrobox assemble create --file /etc/aipc/distrobox/node.ini || \
       echo "aipc-init: failed to create the 'node' distrobox — retry with 'distrobox assemble create --file /etc/aipc/distrobox/node.ini'" >&2
