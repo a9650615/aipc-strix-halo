@@ -1,0 +1,21 @@
+#!/bin/sh
+# gpp-wake-fix — disable known-spurious ACPI wake sources on this hardware.
+#
+# GZ302EA (ASUS ROG Flow Z13) hardware-verified 2026-07-04: /proc/acpi/wakeup
+# shows GPP0/GPP1 (the two USB4 PCIe bridges) as *enabled* S4 wake sources.
+# Per ublue-os/bazzite#1928 and #2988, these fire a spurious wake interrupt
+# immediately after suspend entry, hanging the kernel — confirmed by a
+# community report on this exact model that disabling them fixed sleep/wake.
+#
+# Writing a device name to /proc/acpi/wakeup *toggles* its current state, so
+# this only echoes a name when it's currently enabled — running it twice (or
+# on hardware where these bridges are already off) is a no-op either way.
+set -eu
+
+[ -r /proc/acpi/wakeup ] || exit 0
+
+for dev in GPP0 GPP1; do
+  if grep -qE "^${dev}[[:space:]].*\*enabled" /proc/acpi/wakeup; then
+    echo "$dev" > /proc/acpi/wakeup
+  fi
+done

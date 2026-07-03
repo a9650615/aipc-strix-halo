@@ -1,0 +1,10 @@
+[Unit]
+Description=Disable spurious GPP0/GPP1 ACPI wake sources (GZ302EA sleep/wake fix)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/aipc/gpp-wake-fix
+
+[Install]
+WantedBy=default.target

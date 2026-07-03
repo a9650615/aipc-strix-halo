@@ -27,8 +27,16 @@ hsa_file="/etc/aipc/env.d/system-unified-memory/hsa.sh"
 # NPU visible via lspci
 lspci 2>/dev/null | grep -qiE 'signal processing|xdna' || fail "system-unified-memory: XDNA NPU not visible via lspci"
 
-# Panel Replay workaround applied (0x400 = DC_DISABLE_REPLAY)
+# Panel Replay + PSR workaround applied (0x400 = DC_DISABLE_REPLAY, 0x10 = DC_DISABLE_PSR)
 dcdebugmask_file="/sys/module/amdgpu/parameters/dcdebugmask"
 [ -r "${dcdebugmask_file}" ] || fail "system-unified-memory: ${dcdebugmask_file} not found (amdgpu not loaded?)"
 dcdebugmask=$(cat "${dcdebugmask_file}")
-[ $((dcdebugmask & 0x400)) -ne 0 ] || fail "system-unified-memory: dcdebugmask=${dcdebugmask} does not include 0x400 (DC_DISABLE_REPLAY)"
+[ $((dcdebugmask & 0x410)) -eq $((0x410)) ] || fail "system-unified-memory: dcdebugmask=${dcdebugmask} does not include 0x410 (DC_DISABLE_REPLAY | DC_DISABLE_PSR)"
+
+# GPP0/GPP1 spurious-wake workaround applied (see gpp-wake-fix.service) — these
+# PCIe bridges fire a wake interrupt right after suspend entry that hangs the
+# kernel on this hardware (ublue-os/bazzite#1928, #2988).
+if [ -r /proc/acpi/wakeup ]; then
+  ! grep -qE '^GPP[01][[:space:]].*\*enabled' /proc/acpi/wakeup \
+    || fail "system-unified-memory: GPP0/GPP1 still enabled as ACPI wake sources (gpp-wake-fix.service didn't run or failed)"
+fi
