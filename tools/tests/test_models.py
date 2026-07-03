@@ -132,7 +132,15 @@ def test_pull_command_ollama() -> None:
 
 def test_pull_command_lemonade() -> None:
     entry = models.ModelEntry(alias="router-1b", backend="lemonade", model_id="amd/Llama-3.2-1B", size_gb=2)
-    assert models.pull_command(entry) == ["lemonade-server", "pull", "amd/Llama-3.2-1B"]
+    assert models.pull_command(entry) == [
+        "sudo",
+        "podman",
+        "exec",
+        "lemonade",
+        "lemonade-server",
+        "pull",
+        "amd/Llama-3.2-1B",
+    ]
 
 
 def test_pull_command_cloud_backend_is_none() -> None:
