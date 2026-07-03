@@ -2,16 +2,18 @@ from __future__ import annotations
 
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import ScrollableContainer, Vertical
-from textual.widgets import Button, Footer, Header, RichLog, Static
+from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.widgets import Button, RichLog, Static
 
 from aipc_lib.tools_menu import CATEGORIES, Tool
 
 
 class ToolRow(Static):
-    """One tool: name/status label + an Install button (mouse-clickable,
-    keyboard-focusable — Tab/Shift+Tab to move focus, Enter/Space to
-    activate, same as clicking)."""
+    """One tool: [x]/[ ] mark + name + a plain Install button.
+
+    Mouse-clickable and keyboard-focusable (Tab/Shift+Tab to move focus,
+    Enter/Space to activate) — same effect either way.
+    """
 
     def __init__(self, tool: Tool) -> None:
         super().__init__()
@@ -24,28 +26,64 @@ class ToolRow(Static):
             "Installed" if self.installed else "Install",
             id=f"install-{self._safe_id()}",
             disabled=self.installed,
-            variant="success" if self.installed else "primary",
         )
 
     def _safe_id(self) -> str:
         return self.tool.name.replace(" ", "-").replace("(", "").replace(")", "")
 
     def _label(self) -> str:
-        mark = "[green]✓[/green]" if self.installed else "[yellow]○[/yellow]"
+        mark = "[x]" if self.installed else "[ ]"
         return f"{mark} {self.tool.name}"
 
 
-class ToolsApp(App):
-    """aipc config tools — categorized install checklist, keyboard + mouse.
+class CategoryBlock(Static):
+    """Label column on the left, tools stacked on the right — a plain
+    two-column checklist row, one per category."""
 
-    Textual (same author as rich, already a dependency) instead of plain
-    sequential y/N prompts: supports arrow-key/Tab navigation and mouse
-    clicks, closer to how the user asked for this to feel ("像 claude
-    code"). Bind() calls below are the keyboard side; every Button is
-    natively mouse-clickable without extra wiring.
+    def __init__(self, name: str, tools: list[Tool]) -> None:
+        super().__init__()
+        self.category_name = name
+        self.tools = tools
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(classes="category-row"):
+            yield Static(self.category_name, classes="category-label")
+            with Vertical(classes="tools-column"):
+                for tool in self.tools:
+                    yield ToolRow(tool)
+
+
+class ToolsApp(App):
+    """aipc config tools — plain checklist, keyboard + mouse.
+
+    Deliberately plain: bordered rows, no color theming or animation —
+    just a label column and a list of [x]/[ ] rows per category, each
+    with a focusable Install button.
     """
 
     CSS = """
+    Screen {
+        background: $surface;
+    }
+    .title {
+        padding: 1 2 0 2;
+        text-style: bold;
+    }
+    .category-row {
+        height: auto;
+        border-bottom: solid $foreground 20%;
+        padding: 1 2;
+    }
+    .category-label {
+        width: 14;
+        color: $text-muted;
+        border-right: solid $foreground 20%;
+        padding-right: 1;
+    }
+    .tools-column {
+        width: 1fr;
+        padding-left: 2;
+    }
     ToolRow {
         layout: horizontal;
         height: 3;
@@ -55,9 +93,19 @@ class ToolsApp(App):
         width: 1fr;
         content-align: left middle;
     }
+    Button {
+        min-width: 14;
+        background: $surface;
+        border: round $foreground 50%;
+    }
     #log {
-        height: 10;
-        border: solid $accent;
+        height: 8;
+        border: round $foreground 30%;
+        margin: 1 2;
+    }
+    .hint {
+        color: $text-muted;
+        padding: 0 2 1 2;
     }
     """
 
@@ -67,15 +115,12 @@ class ToolsApp(App):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield Static("aipc config tools", classes="title")
         with ScrollableContainer():
             for category, tools in CATEGORIES.items():
-                yield Static(f"[bold]{category}[/bold]", classes="category-header")
-                with Vertical():
-                    for tool in tools:
-                        yield ToolRow(tool)
-        yield RichLog(id="log", highlight=True, markup=True)
-        yield Footer()
+                yield CategoryBlock(category, tools)
+        yield RichLog(id="log")
+        yield Static("q quit   r refresh   tab / click to install", classes="hint")
 
     def on_mount(self) -> None:
         self.query_one("#log", RichLog).write("Ready. Click Install, or Tab + Enter.")
@@ -93,12 +138,11 @@ class ToolsApp(App):
         self.call_from_thread(setattr, button, "disabled", True)
         result = row.tool.install()
         if result.returncode == 0:
-            self.call_from_thread(log.write, f"[green]{row.tool.name}: installed[/green]")
+            self.call_from_thread(log.write, f"{row.tool.name}: installed")
             self.call_from_thread(setattr, button, "label", "Installed")
-            self.call_from_thread(setattr, button, "variant", "success")
         else:
             self.call_from_thread(
-                log.write, f"[red]{row.tool.name}: failed (exit {result.returncode})[/red]"
+                log.write, f"{row.tool.name}: failed (exit {result.returncode})"
             )
             self.call_from_thread(setattr, button, "disabled", False)
 
@@ -110,7 +154,6 @@ class ToolsApp(App):
             button = row.query_one(Button)
             if row.installed:
                 button.label = "Installed"
-                button.variant = "success"
                 button.disabled = True
 
 
