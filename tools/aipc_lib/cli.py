@@ -11,6 +11,7 @@ from aipc_lib import config_menu as config_menu_mod
 from aipc_lib import doctor as doctor_mod
 from aipc_lib import log_append as log_append_mod
 from aipc_lib import models as models_mod
+from aipc_lib import opencode_sync as opencode_sync_mod
 from aipc_lib import secrets
 from aipc_lib import status_dashboard as status_mod
 from aipc_lib.modules import discover
@@ -280,6 +281,25 @@ def config_model(tier: str | None) -> None:
         changed = config_menu_mod.set_tier(path, tier)
         status = f"-> {tier}" if changed else "(no tier field found, skipped)"
         click.echo(f"{tc.tool}: {status}")
+
+
+@config.command("sync-opencode")
+def config_sync_opencode() -> None:
+    """Rewrite opencode's registered models from LiteLLM's live /v1/models.
+
+    OpenCode has no dynamic model-discovery option of its own (confirmed
+    against its docs) — this is that missing half, run by hand whenever
+    the LiteLLM model_list changes instead of hand-editing opencode's
+    config.json to match.
+    """
+    try:
+        model_ids = opencode_sync_mod.sync_config()
+    except (OSError, ValueError) as e:
+        click.echo(f"sync failed: {e}", err=True)
+        sys.exit(1)
+    click.echo(f"Synced {len(model_ids)} models to {opencode_sync_mod.DEFAULT_OPENCODE_CONFIG}:")
+    for mid in model_ids:
+        click.echo(f"  - {mid}")
 
 
 @main.command("status")
