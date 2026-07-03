@@ -12,6 +12,7 @@ from aipc_lib import doctor as doctor_mod
 from aipc_lib import log_append as log_append_mod
 from aipc_lib import models as models_mod
 from aipc_lib import secrets
+from aipc_lib import status_dashboard as status_mod
 from aipc_lib.modules import discover
 from aipc_lib.render_bootc import render as render_bootc
 from aipc_lib.render_ansible import render as render_ansible
@@ -279,6 +280,42 @@ def config_model(tier: str | None) -> None:
         changed = config_menu_mod.set_tier(path, tier)
         status = f"-> {tier}" if changed else "(no tier field found, skipped)"
         click.echo(f"{tc.tool}: {status}")
+
+
+@main.command("status")
+def status_cmd() -> None:
+    """Dashboard: this repo's enabled module services + live loaded models."""
+    console = Console()
+
+    svc_table = Table(title="Module services (enabled modules only)")
+    svc_table.add_column("module")
+    svc_table.add_column("service")
+    svc_table.add_column("status")
+
+    pairs = status_mod.discover_module_services(MODULES_ROOT)
+    if not pairs:
+        click.echo(f"No module-shipped services found under {MODULES_ROOT}")
+    for ms in pairs:
+        state = status_mod.service_is_active(ms.service)
+        color = "green" if state == "active" else ("red" if state == "failed" else "yellow")
+        svc_table.add_row(ms.module, ms.service, f"[{color}]{state}[/{color}]")
+    console.print(svc_table)
+
+    models = status_mod.loaded_models()
+    model_table = Table(title="Ollama — currently loaded models")
+    model_table.add_column("model")
+    model_table.add_column("size")
+    model_table.add_column("expires_at")
+
+    if models is None:
+        click.echo("Ollama not reachable at " + status_mod.DEFAULT_OLLAMA_BASE)
+    elif not models:
+        click.echo("No models currently loaded.")
+    else:
+        for m in models:
+            size_gb = m.get("size", 0) / 1e9
+            model_table.add_row(m.get("name", "?"), f"{size_gb:.1f}GB", m.get("expires_at", "?"))
+        console.print(model_table)
 
 
 if __name__ == "__main__":
