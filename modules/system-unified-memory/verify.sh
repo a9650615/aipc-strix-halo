@@ -26,3 +26,9 @@ hsa_file="/etc/aipc/env.d/system-unified-memory/hsa.sh"
 
 # NPU visible via lspci
 lspci 2>/dev/null | grep -qiE 'signal processing|xdna' || fail "system-unified-memory: XDNA NPU not visible via lspci"
+
+# Panel Replay workaround applied (0x400 = DC_DISABLE_REPLAY)
+dcdebugmask_file="/sys/module/amdgpu/parameters/dcdebugmask"
+[ -r "${dcdebugmask_file}" ] || fail "system-unified-memory: ${dcdebugmask_file} not found (amdgpu not loaded?)"
+dcdebugmask=$(cat "${dcdebugmask_file}")
+[ $((dcdebugmask & 0x400)) -ne 0 ] || fail "system-unified-memory: dcdebugmask=${dcdebugmask} does not include 0x400 (DC_DISABLE_REPLAY)"
