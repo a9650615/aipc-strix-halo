@@ -3,6 +3,7 @@
 param(
     [string]$WorkDir = "$env:ProgramData\aipc-windows-installer",
     [string]$RefIndVersion = '0.14.0',
+    [string]$RefIndSha256 = '1ae1eeea8162096eccf8553cd82ecd810dba64bf4ea9cf316d6ce5855e6e2880',
     [string]$BazziteIsoUrl = 'https://download.bazzite.gg/bazzite-stable-amd64.iso',
     [string]$BazziteChecksumUrl = 'https://download.bazzite.gg/bazzite-stable-amd64.iso-CHECKSUM'
 )
@@ -12,7 +13,6 @@ $script:Cmdlet = $PSCmdlet
 $ShrinkBytes = 150GB
 $LiveBytes = 30GB
 $RefIndZip = Join-Path $WorkDir "refind-bin-$RefIndVersion.zip"
-$RefIndChecksum = Join-Path $WorkDir "refind-bin-$RefIndVersion.zip.txt"
 $BazziteIso = Join-Path $WorkDir 'bazzite-stable-amd64.iso'
 $BazziteChecksum = Join-Path $WorkDir 'bazzite-stable-amd64.iso-CHECKSUM'
 
@@ -122,7 +122,8 @@ function Save-Download($Uri, $OutFile) {
         return
     }
     Write-Log "  downloading: $Uri"
-    Invoke-WebRequest -Uri $Uri -OutFile $OutFile
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -UserAgent 'Mozilla/5.0' -MaximumRedirection 10
 }
 
 function Assert-Checksum($File, $ChecksumFile) {
@@ -130,6 +131,14 @@ function Assert-Checksum($File, $ChecksumFile) {
     $checksums = (Get-Content -Raw $ChecksumFile).ToLowerInvariant()
     if (-not $checksums.Contains($hash)) {
         throw "SHA-256 mismatch for $File"
+    }
+    Write-Log "  checksum OK: $(Split-Path $File -Leaf)" Green
+}
+
+function Assert-Sha256($File, $Expected) {
+    $hash = (Get-FileHash -Algorithm SHA256 $File).Hash.ToLowerInvariant()
+    if ($hash -ne $Expected.ToLowerInvariant()) {
+        throw "SHA-256 mismatch for $File (got $hash, expected $Expected)"
     }
     Write-Log "  checksum OK: $(Split-Path $File -Leaf)" Green
 }
@@ -148,22 +157,34 @@ function Ensure-RefInd($Esp) {
         return
     }
 
-    $urlBase = "https://sourceforge.net/projects/refind/files/$RefIndVersion"
-    Save-Download "$urlBase/refind-bin-$RefIndVersion.zip/download" $RefIndZip
-    Save-Download "$urlBase/refind-bin-$RefIndVersion.zip.txt/download" $RefIndChecksum
-    Assert-Checksum $RefIndZip $RefIndChecksum
+    # SourceForge's /files/.../download URLs serve an HTML interstitial, not the
+    # binary; only the *.dl.sourceforge.net mirrors return the real file. rEFInd
+    # publishes no per-file checksum, so the zip hash is pinned to the release.
+    $url = "https://master.dl.sourceforge.net/project/refind/$RefIndVersion/refind-bin-$RefIndVersion.zip?viasf=1"
+    Save-Download $url $RefIndZip
+    Assert-Sha256 $RefIndZip $RefIndSha256
 
     $extractDir = Join-Path $WorkDir 'refind'
     if (-not (Test-Path $extractDir)) {
         Expand-Archive -Path $RefIndZip -DestinationPath $extractDir
     }
-    $installer = Get-ChildItem $extractDir -Recurse -Filter 'refind-install.bat' | Select-Object -First 1
-    if (-not $installer) { throw 'refind-install.bat not found after extraction.' }
+    # The rEFInd binary zip ships no Windows installer; install manually per the
+    # rEFInd docs: copy the refind/ payload to the ESP, seed refind.conf, then
+    # point the Windows Boot Manager at refind_x64.efi.
+    $refindSrc = Get-ChildItem $extractDir -Recurse -Directory -Filter 'refind' |
+                 Where-Object { Test-Path (Join-Path $_.FullName 'refind_x64.efi') } |
+                 Select-Object -First 1
+    if (-not $refindSrc) { throw 'refind_x64.efi not found after extraction.' }
 
-    Invoke-Confirmed 'EFI System Partition / NVRAM' 'install rEFInd' {
-        Push-Location $installer.DirectoryName
-        try { & cmd.exe /c 'refind-install.bat' }
-        finally { Pop-Location }
+    Invoke-Confirmed 'EFI System Partition / Windows Boot Manager' 'install rEFInd' {
+        Copy-Item $refindSrc.FullName $refindDir -Recurse -Force
+        $confSample = Join-Path $refindDir 'refind.conf-sample'
+        $conf = Join-Path $refindDir 'refind.conf'
+        if ((Test-Path $confSample) -and -not (Test-Path $conf)) {
+            Copy-Item $confSample $conf
+        }
+        & bcdedit /set '{bootmgr}' path \EFI\refind\refind_x64.efi | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'bcdedit failed to set the rEFInd boot path.' }
     }
     Complete-Phase 'refind'
 }

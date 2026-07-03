@@ -71,7 +71,7 @@ function Run-Preflight {
     if (-not (Test-Path $preflight)) {
         throw "Missing preflight script: $preflight"
     }
-    & $preflight
+    & $preflight | Out-Host
     return $LASTEXITCODE
 }
 
@@ -94,8 +94,8 @@ function Select-ExternalDisk {
     Write-Host ''
     Write-Host '=== Select USB SSD for Installer ===' -ForegroundColor Cyan
     Write-Host ''
-    $disks = Get-Disk | Where-Object { $_.BusType -eq 'USB' -or $_.BusType -eq 'ATA' } |
-             Where-Object { $_.Size -gt 00GB }
+    $disks = @(Get-Disk | Where-Object { $_.BusType -eq 'USB' -or $_.BusType -eq 'ATA' } |
+             Where-Object { $_.Size -gt 00GB })
     if ($disks.Count -eq 0) {
         Write-Host 'No external disks found.' -ForegroundColor Red
         return $null

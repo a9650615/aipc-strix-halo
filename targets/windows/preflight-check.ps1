@@ -35,3 +35,4 @@ if (($cPartition.Size - $supported.SizeMin) -lt $ShrinkBytes) {
 }
 
 Write-Output 'OK'
+exit 0
