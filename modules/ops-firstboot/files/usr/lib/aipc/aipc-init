@@ -1,5 +1,152 @@
 #!/bin/sh
 # aipc-init — first-boot wizard entry point
-# ponytail: TUI not yet implemented; placeholder exits cleanly so systemd is happy.
-echo "aipc-init: wizard not yet implemented" >&2
+# persona / editor / cloud-keys screens: not yet implemented (Phase 7 TUI
+# proper is future work). ai-tools screen: implemented — lets the user pick
+# which dev-ai-* coding tools to install/configure against LiteLLM.
+set -eu
+
+# /var/lib/aipc is not part of the ostree commit (content under /var during
+# build doesn't persist) — ensure it exists before the sentinel file below
+# is ever touched.
+mkdir -p /var/lib/aipc
+
+echo "aipc-init: persona / editor / cloud-keys screens not yet implemented — skipping" >&2
+
+# No controlling tty (e.g. running unattended under systemd, where stdin is
+# journald/null) — nothing interactive to do. [ -t 0 ] queries the existing
+# fd via isatty(), no open() attempt — unlike trying to redirect to
+# /dev/tty, which can abort the whole script under set -e if the open
+# fails. Resumable later via: sudo /usr/lib/aipc/aipc-init
+if [ ! -t 0 ]; then
+  echo "aipc-init: no tty — run 'sudo /usr/lib/aipc/aipc-init' later to pick AI tools" >&2
+  touch /var/lib/aipc/firstboot-done
+  exit 0
+fi
+
+target_user="${SUDO_USER:-}"
+if [ -z "$target_user" ]; then
+  target_user=$(awk -F: '$3 >= 1000 && $3 < 60000 {print $1; exit}' /etc/passwd)
+fi
+if [ -z "$target_user" ]; then
+  echo "aipc-init: could not determine a target user — skipping ai-tools" >&2
+  touch /var/lib/aipc/firstboot-done
+  exit 0
+fi
+target_home=$(getent passwd "$target_user" | cut -d: -f6)
+target_uid=$(id -u "$target_user")
+
+as_user() {
+  # aipc-init runs as root, so runuser -u alone leaves SUDO_USER/SUDO_UID/
+  # SUDO_GID/SUDO_COMMAND and root's XDG_RUNTIME_DIR (/run/user/0) leaked
+  # into the child's environment. distrobox refuses to run at all if it
+  # sees SUDO_* ("Running distrobox-assemble via SUDO/DOAS is not
+  # supported"), and rootless podman tries to use root's runtime dir
+  # instead of the target user's, failing with a permission error. Note:
+  # `runuser -u ... --login` looks like the obvious fix but breaks
+  # distrobox's own dirname-"$0"-based dispatch to its sibling scripts —
+  # explicit env clearing is the one that actually works.
+  runuser -u "$target_user" -- env -u SUDO_USER -u SUDO_UID -u SUDO_GID -u SUDO_COMMAND \
+    "XDG_RUNTIME_DIR=/run/user/${target_uid}" "$@"
+}
+
+install_config() {
+  # $1 = skel-relative path, $2 = model tier (optional). Every shipped
+  # config uses the __AIPC_DEFAULT_TIER__ placeholder for its "which tier
+  # is the default" field — never a literal tier name — because some
+  # configs (continue, opencode) also register a fixed dict/list of all
+  # three tiers as selectable options, and blindly renaming a literal
+  # "coder-strong" would rename a same-named registry entry too, producing
+  # a duplicate JSON/YAML key (this previously happened: opencode showed
+  # the wrong model's display name after tier=coder-fast clobbered the
+  # sibling "coder-strong" registry entry into a second "coder-fast"
+  # entry). $2 empty = copy verbatim, no substitution (e.g. continue.yaml,
+  # which has no single default-tier field — Continue's own UI picks among
+  # the registered models).
+  rel="$1"
+  tier="${2:-}"
+  src="/etc/skel/${rel}"
+  dst="${target_home}/${rel}"
+  [ -f "$src" ] || return 0
+  mkdir -p "$(dirname "$dst")"
+  if [ -n "$tier" ]; then
+    sed "s/__AIPC_DEFAULT_TIER__/${tier}/g" "$src" > "$dst"
+  else
+    cp "$src" "$dst"
+  fi
+  # aipc-init runs as root, so mkdir -p above creates any missing parent
+  # directories (e.g. ~/.config/opencode) owned by root:root. chown just
+  # the file isn't enough — the user then can't write anything else into
+  # that directory later. Recursively fix ownership from the top-level
+  # path component under $target_home that this config lives under.
+  top_component="${rel%%/*}"
+  chown -R "$target_user:$target_user" "${target_home}/${top_component}"
+  chmod 0644 "$dst"
+}
+
+echo ""
+echo "=== AI coding tools ==="
+echo "Pick a default model tier for these tools (all route through LiteLLM):"
+echo "  1) coder-fast     (Qwen2.5-Coder-7B,  ~4.5GB — fastest, validate first)"
+echo "  2) coder-strong   (Qwen2.5-Coder-32B, ~19GB  — stronger, slower)"
+echo "  3) coder-thinking (DeepSeek-R1-14B,   ~9GB   — reasoning-focused)"
+printf "Tier [1-3, default 1]: "
+read -r tier_choice || tier_choice=""
+case "$tier_choice" in
+  2) tier=coder-strong ;;
+  3) tier=coder-thinking ;;
+  *) tier=coder-fast ;;
+esac
+echo "aipc-init: using model tier '${tier}'" >&2
+
+ask() {
+  printf "Install %s? [y/N] " "$1"
+  read -r ans || ans=""
+  case "$ans" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
+
+if ask "aider"; then
+  install_config ".aider.conf.yml" "$tier"
+  as_user pipx install aider-chat || echo "aipc-init: aider install failed — retry with 'pipx install aider-chat'" >&2
+fi
+
+if ask "cline (VSCode extension)"; then
+  install_config ".config/cline/config.yaml" "$tier"
+  if command -v code >/dev/null 2>&1; then
+    as_user code --install-extension saoudrizwan.claude-dev || \
+      echo "aipc-init: cline extension install failed — retry with 'code --install-extension saoudrizwan.claude-dev'" >&2
+  else
+    echo "aipc-init: 'code' not found — install VSCode first, then run: code --install-extension saoudrizwan.claude-dev" >&2
+  fi
+fi
+
+if ask "continue.dev (VSCode extension)"; then
+  install_config ".continue/config.yaml"
+  if command -v code >/dev/null 2>&1; then
+    as_user code --install-extension Continue.continue --force || \
+      echo "aipc-init: continue extension install failed — retry with 'code --install-extension Continue.continue --force'" >&2
+  else
+    echo "aipc-init: 'code' not found — install VSCode first, then run: code --install-extension Continue.continue --force" >&2
+  fi
+fi
+
+if ask "goose"; then
+  install_config ".config/goose/profiles.yaml" "$tier"
+  as_user sh -c 'curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash' || \
+    echo "aipc-init: goose install failed — retry the installer manually" >&2
+fi
+
+if ask "opencode"; then
+  install_config ".config/opencode/config.json" "$tier"
+  if ! as_user distrobox list 2>/dev/null | grep -q '\bnode\b'; then
+    as_user distrobox assemble create --file /etc/aipc/distrobox/node.ini || \
+      echo "aipc-init: failed to create the 'node' distrobox — retry with 'distrobox assemble create --file /etc/aipc/distrobox/node.ini'" >&2
+  fi
+  if as_user distrobox list 2>/dev/null | grep -q '\bnode\b'; then
+    as_user distrobox enter node -- sudo npm install -g opencode-ai || \
+      echo "aipc-init: opencode install failed — retry with 'distrobox enter node -- sudo npm install -g opencode-ai'" >&2
+  else
+    echo "aipc-init: 'node' distrobox still not available — retry with 'distrobox assemble create --file /etc/aipc/distrobox/node.ini' then 'distrobox enter node -- sudo npm install -g opencode-ai'" >&2
+  fi
+fi
+
 touch /var/lib/aipc/firstboot-done

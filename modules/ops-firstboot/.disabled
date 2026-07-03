@@ -1,5 +1,0 @@
-ops-firstboot
-
-Scaffolded for Phase 7. TUI wizard not yet implemented;
-schema stub defines the 3-step contract (persona / editor / cloud-keys).
-Needs aipc-init shim implementation.

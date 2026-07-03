@@ -1,4 +1,4 @@
-# firstboot wizard schema — 3 steps
+# firstboot wizard schema — 4 steps
 # Each step: id, title, action
 
 steps:
@@ -16,3 +16,8 @@ steps:
     title: "Encrypt cloud API keys"
     action: sops-encrypt
     description: "Provide cloud API keys; they are SOPS-encrypted and stored in secrets/."
+
+  - id: ai-tools
+    title: "Select AI coding tools"
+    action: select-install
+    description: "Choose which local AI coding tools to install and configure against the LiteLLM gateway."

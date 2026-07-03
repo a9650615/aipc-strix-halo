@@ -1,19 +1,9 @@
 #!/bin/sh
 # post-install.sh — ops-firstboot
-# Build-time: install systemd unit, wizard config, and aipc-init shim.
-# NO systemctl --now (build has no running init).
+# Build-time: wizard config, unit, and aipc-init shim are already staged at
+# their final destinations by the renderer's `COPY modules/ops-firstboot/files/ /`
+# step. NO systemctl --now (build has no running init) — enable only.
 set -eu
 
-install -Dm0644 \
-    "${AIPC_MODULE_SRC}/files/etc/aipc/firstboot/wizard.yaml" \
-    /etc/aipc/firstboot/wizard.yaml
-
-install -Dm0644 \
-    "${AIPC_MODULE_SRC}/files/etc/systemd/system/aipc-firstboot.service" \
-    /etc/systemd/system/aipc-firstboot.service
-
-install -Dm0755 \
-    "${AIPC_MODULE_SRC}/files/usr/lib/aipc/aipc-init" \
-    /usr/lib/aipc/aipc-init
-
+chmod 0755 /usr/lib/aipc/aipc-init
 systemctl enable aipc-firstboot.service
