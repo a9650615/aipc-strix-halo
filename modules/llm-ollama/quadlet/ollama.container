@@ -14,7 +14,13 @@ Environment=OLLAMA_HOST=127.0.0.1:11434
 Environment=OLLAMA_MODELS=/models
 Environment=HSA_OVERRIDE_GFX_VERSION=11.5.1
 Environment=OLLAMA_IGPU_ENABLE=1
-Environment=OLLAMA_KEEP_ALIVE=-1
+# Default eviction for any model without a per-model keep_alive override in
+# llm-litellm's config.yaml (litellm_params.keep_alive) — that override is
+# how resident-small stays loaded forever (-1) while everything else frees
+# its RAM after being idle. Confirmed working end-to-end 2026-07-03: a
+# per-model keep_alive in litellm_params does override this daemon default
+# (some upstream LiteLLM issues report it not taking effect — it does here).
+Environment=OLLAMA_KEEP_ALIVE=10m
 
 [Service]
 Restart=always

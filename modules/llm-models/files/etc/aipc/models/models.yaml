@@ -3,36 +3,67 @@
 # llm-litellm renders its router config from here; backends pre-pull weights
 # listed here. See CLAUDE.md §7.
 
+# keep_alive (ollama backend only): how long Ollama keeps the model loaded
+# in memory after its last request. "-1" = forever (only for resident-small
+# — a big model list all keeping "-1" is exactly the RAM-exhaustion risk
+# flagged 2026-07-03: with 128GB unified memory but several 10-45GB models
+# in the registry, loading a few concurrently and never evicting any of
+# them is a real ceiling, not a hypothetical one). Everything else on
+# ollama gets a 10m idle eviction so switching tasks/models doesn't
+# permanently accumulate resident memory. Confirmed end-to-end that a
+# per-model keep_alive in llm-litellm's config.yaml litellm_params
+# actually overrides this daemon-wide default (some upstream LiteLLM
+# issues report the override not taking effect — it does here).
 models:
   - alias: router-1b
     backend: ollama
     model_id: qwen2.5:1.5b-instruct-q4_K_M
     size_gb: 1.0
+    keep_alive: "-1"
 
   - alias: intent-3b
     backend: lemonade
     model_id: amd/Qwen2.5-3B-Instruct-ryzen-ai
     size_gb: 2.5
 
+  # Small, always-on general-purpose assistant model — the resident
+  # counterpart to the large on-demand coder-agentic below. gemma4 family
+  # again (not qwen2.5): confirmed correct structured tool_calls even at
+  # this size, same as the 26B variant, and MoE (~4B active of ~9.6GB on
+  # disk) suits this hardware's abundant-memory/limited-compute profile
+  # well — more headroom for better quality at roughly the same inference
+  # cost as a dense 4B model. llama3.1:8b was also confirmed correct for
+  # tool_calls as a non-MoE alternative if this one's reasoning-token
+  # overhead turns out to matter for a resident/low-latency role.
+  - alias: resident-small
+    backend: ollama
+    model_id: gemma4:e4b
+    size_gb: 9.6
+    keep_alive: "-1"
+
   - alias: main-70b
     backend: ollama
     model_id: qwen2.5:72b-instruct-q4_K_M
     size_gb: 45.0
+    keep_alive: "10m"
 
   - alias: coder-fast
     backend: ollama
     model_id: qwen2.5-coder:7b-instruct-q4_K_M
     size_gb: 4.5
+    keep_alive: "10m"
 
   - alias: coder-strong
     backend: ollama
     model_id: qwen2.5-coder:32b-instruct-q4_K_M
     size_gb: 19.0
+    keep_alive: "10m"
 
   - alias: coder-thinking
     backend: ollama
     model_id: deepseek-r1:14b-q4_K_M
     size_gb: 9.0
+    keep_alive: "10m"
 
   # gemma4 (not qwen2.5-coder) on purpose: Ollama's streaming tool-call
   # support is broken for the qwen2 family (repro'd directly against
@@ -48,6 +79,7 @@ models:
     backend: ollama
     model_id: gemma4:26b
     size_gb: 18.0
+    keep_alive: "10m"
 
   - alias: embed-bge
     backend: lemonade
@@ -58,6 +90,7 @@ models:
     backend: ollama
     model_id: qwen2-vl:7b-instruct-q4_K_M
     size_gb: 4.5
+    keep_alive: "10m"
 
   - alias: main-cloud
     backend: anthropic
