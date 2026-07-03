@@ -1,6 +1,6 @@
 # AGENTS.md — Rules for AI Working in This Repository
 
-This document tells any AI (Codex, Goose, Cline, Aider, Continue.dev, Qwen via Aider/Goose, future local agents) how to make changes to this repo without breaking it.
+This document tells any AI (Codex, OpenCode, Goose, Cline, Aider, Continue.dev, Qwen via Aider/Goose, future local agents) how to make changes to this repo without breaking it. OpenCode reads this file automatically as `AGENTS.md` — no extra config needed.
 
 It is enforced socially — there is no CI gate against AI behaviour today. But the structure of this repo makes deviations easy to spot in review.
 
@@ -32,10 +32,10 @@ Precedence: **user's explicit signal > task shape > model tier**. A Sonnet asked
 
 ### 0.2 Dispatch Protocol (大哥 → worker)
 
-1. **大哥 writes a bounded task spec** before dispatching: exact files to touch, `tasks.md` ids served, verification commands to run, and the commit trailer template (including `Agent-Orchestrator:`).
+1. **大哥 writes a bounded task spec** before dispatching: exact files to touch, `tasks.md` ids served, verification commands to run (and which tier per §9 the worker is expected to reach — most workers have no hardware access and top out at render-verified), and the commit trailer template (including `Agent-Orchestrator:`).
 2. **Worker executes only the named files/tasks.** Anything else it discovers goes in the report, not the diff.
 3. **Worker commits its own work** with its own model id in `Co-authored-by:` and the dispatching session in `Agent-Orchestrator:` (§11). The 大哥 never commits on a worker's behalf.
-4. **Worker reports back**: what was done, what was skipped and why, and the verification output (not just "passed").
+4. **Worker reports back**: what was done, what was skipped and why, and which verification tier (§9) was actually reached for each check — not just "passed". State plainly when a claim is render-verified only, so it isn't mistaken for hardware-verified.
 5. **大哥 reviews the diff** before it reaches `main`. Branch/worktree merges are the 大哥's job.
 6. **Parallel workers must not share files.** If two tasks touch the same file (e.g. `tasks.md`), the 大哥 serializes them or reserves that file for itself.
 7. **A worker that hits a spec gap stops and reports** — it does not improvise a design decision. Design decisions belong to the 大哥 or an OpenSpec change.
@@ -55,15 +55,7 @@ If you cannot find a spec for what you are about to do, **stop and propose a cha
 
 ## 2. The OpenSpec Loop
 
-All work flows through one of these states:
-
-```
-   propose          implement         review            archive
- ┌─────────┐      ┌──────────┐      ┌────────┐      ┌─────────┐
- │ changes/│ ───▶ │ branch   │ ───▶ │ user   │ ───▶ │ specs/  │
- │ <id>-…  │      │ work     │      │ approves│      │ updated │
- └─────────┘      └──────────┘      └────────┘      └─────────┘
-```
+All work flows through one of these states: `changes/<id>-…` (propose) → branch work (implement) → user approves (review) → `specs/` updated (archive).
 
 **Never edit `openspec/specs/<capability>/spec.md` directly.** Specs are only updated when a change is archived. If you need new behaviour, write a change proposal:
 
@@ -138,7 +130,7 @@ Any change that breaks these constraints needs an OpenSpec change to widen them.
 
 ## 7. The LiteLLM Contract
 
-All AI consumers (Pipecat, Continue.dev, Cline, Aider, Goose, Open Interpreter, LangGraph, agent tools, scripts, …) **must** make LLM calls via the LiteLLM gateway at the address declared in `modules/llm-litellm/env/endpoint`.
+All AI consumers (Pipecat, Continue.dev, Cline, Aider, Goose, OpenCode, Open Interpreter, LangGraph, agent tools, scripts, …) **must** make LLM calls via the LiteLLM gateway at the address declared in `modules/llm-litellm/env/endpoint`.
 
 Reasons:
 
@@ -158,21 +150,26 @@ Direct calls to Ollama / Lemonade / vLLM endpoints are allowed only inside the c
 - Idempotency in `post-install.sh` is mandatory (image rebuilds may re-execute parts during recovery).
 - Each `verify.sh` exits non-zero on failure with a one-line diagnosis on stderr.
 - `verify.sh` exit codes: `0` = pass, `2` = intentionally disabled/optional (reported as OPTIONAL by `aipc doctor`), any other non-zero = fail.
+- **Build-time vs runtime split is mandatory and explicit.** `post-install.sh` runs during image build inside a container with no live services, no GPU/NPU, and no network beyond package repos — it must never `systemctl --now`, `curl` a healthcheck, or otherwise assume a running daemon. Anything that needs the service alive (DB init, model pulls, health checks) belongs in a runtime oneshot unit (`ConditionPathExists` sentinel pattern) or in `verify.sh`, not in `post-install.sh`. This is the most repeated bug class in `docs/agent-log.md` (db-postgres, memory-mem0, rag-embedder, dev-ai-* all hit it) — check it first when a module regresses.
 
 ---
 
-## 9. Testing Expectations
+## 9. Testing Expectations — Verification Tiers
 
-Phase 0 is hardware-verified by the user, not by CI. Once Phase 0 passes, CI gates everything else:
+A verification claim is only as useful as the tier it names. "Passed" or "verified" alone is not enough — say which tier. Real bugs (keep_alive quoting, wrong `HSA_OVERRIDE_GFX_VERSION`, quadlet `Environment`/`Exec` errors, build-time/runtime conflation) have repeatedly shipped past lint + render + pytest green and only surfaced on physical hardware; treat static/render checks as necessary, not sufficient.
 
-| Layer | Test |
-|---|---|
-| Per module | `verify.sh` runs in a privileged container; exits 0 |
-| Cross-module | `aipc doctor` runs end-to-end; reports all green |
-| Image | `bootc switch` to fresh tag on a sacrificial VM succeeds |
-| Render parity | bootc image and ansible-applied VM produce identical `aipc doctor` output |
+| Tier | Who can run it | What it proves | Commands |
+|---|---|---|---|
+| **Static** | Any model, no hardware needed | Syntax/schema/lint is clean | shellcheck, yamllint, ruff, pytest, `openspec validate --strict` |
+| **Render-verified** | Any model, no hardware needed | The module renders correctly into both targets and stays in sync (§4) | `tools/aipc render bootc`, `tools/aipc render ansible --check`, render-parity test |
+| **Hardware-verified** | Only a session with access to the physical Strix Halo AI PC | The changed behaviour actually works at runtime — GPU/NPU inference, quadlet startup, real `aipc doctor` output | `bootc switch` + reboot, `aipc doctor`, exercising the specific changed path |
 
-Do not skip these. If a check is flaky, fix the check or the module — never `|| true`.
+Rules:
+
+- A module moves from `.disabled` to enabled only on a **hardware-verified** claim. Render-verified alone is not sufficient grounds to enable it.
+- Most 副官/執行兵 dispatches have no hardware access and top out at render-verified — that's expected, not a shortfall, as long as the report says so plainly (§0.2.4) instead of implying more than was checked.
+- There is no VM tier: this repo's hardware assumptions (§6) include GPU/NPU passthrough that a VM cannot exercise meaningfully, so a VM-based bootc-switch check proves boot-only, not the thing that actually breaks. Gate real changes on the physical AI PC instead of a sacrificial VM.
+- Do not skip static or render tiers to save time — they're cheap and catch real regressions. If a check is flaky, fix the check or the module — never `|| true`.
 
 ---
 
@@ -213,18 +210,16 @@ Agent-Orchestrator: <orchestrator-id>   (optional; omit when worker and orchestr
 - `Spec-Task:` references the OpenSpec change + task id (e.g. `phase-1-ai-runtime#1.3`). If the work falls outside any spec task, omit AND open a change first (see §1 — "stop and propose").
 - `Agent-Orchestrator:` When the model named in `Co-authored-by:` was dispatched by a different model or a different Codex instance, fill this with a short, greppable identifier of the dispatching session (e.g. `Codex-instance-A` or `Codex-sonnet-4.6/session-B`). Same model + same session: omit.
 
-**Example — same session (omit `Agent-Orchestrator:`):**
+**Examples:**
 
 ```
+# same session — omit Agent-Orchestrator:
 Co-authored-by: Codex-sonnet-4-6 <noreply@anthropic.com>
 Agent-Role: 副官
 Agent-Run: phase-0-review-fix-2026-06-28
 Spec-Task: phase-0-foundation#R4
-```
 
-**Example — nested dispatch (fill `Agent-Orchestrator:`):**
-
-```
+# nested dispatch — fill Agent-Orchestrator:
 Co-authored-by: Qwen3.7-max <noreply@anthropic.com>
 Agent-Role: 副官
 Agent-Run: phase1-lemonade-port-fix-2026-06-28
