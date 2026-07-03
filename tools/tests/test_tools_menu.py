@@ -49,3 +49,12 @@ def test_every_tool_is_installed_check_is_callable_and_boolean() -> None:
         for tool in tools:
             result = tool.is_installed()
             assert isinstance(result, bool)
+
+
+def test_every_tool_has_an_uninstall_callable() -> None:
+    # Not run here (would actually remove things on this machine) — just
+    # confirms the modularity contract (install implies a matching removal
+    # path) holds for every entry, so none can be added install-only.
+    for tools in tools_menu.CATEGORIES.values():
+        for tool in tools:
+            assert callable(tool.uninstall)

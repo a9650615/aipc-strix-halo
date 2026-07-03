@@ -21,6 +21,7 @@ class Tool:
     name: str
     is_installed: Callable[[], bool]
     install: Callable[[], subprocess.CompletedProcess]
+    uninstall: Callable[[], subprocess.CompletedProcess]
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -43,16 +44,40 @@ def _opencode_installed() -> bool:
     return _has("opencode")
 
 
+def _remove_which(name: str) -> subprocess.CompletedProcess:
+    """Best-effort removal of whatever binary `name` currently resolves to.
+
+    Used for tools whose installer script picks its own drop location
+    (goose, ccstatus) — if it's not on PATH there's nothing to remove.
+    """
+    path = shutil.which(name)
+    if path:
+        Path(path).unlink(missing_ok=True)
+    return subprocess.CompletedProcess(args=["rm", path or name], returncode=0)
+
+
 def _install_aider() -> subprocess.CompletedProcess:
     return _run(["pipx", "install", "aider-chat"])
+
+
+def _uninstall_aider() -> subprocess.CompletedProcess:
+    return _run(["pipx", "uninstall", "aider-chat"])
 
 
 def _install_cline() -> subprocess.CompletedProcess:
     return _run(["code", "--install-extension", "saoudrizwan.claude-dev"])
 
 
+def _uninstall_cline() -> subprocess.CompletedProcess:
+    return _run(["code", "--uninstall-extension", "saoudrizwan.claude-dev"])
+
+
 def _install_continue() -> subprocess.CompletedProcess:
     return _run(["code", "--install-extension", "Continue.continue", "--force"])
+
+
+def _uninstall_continue() -> subprocess.CompletedProcess:
+    return _run(["code", "--uninstall-extension", "Continue.continue"])
 
 
 def _install_goose() -> subprocess.CompletedProcess:
@@ -61,6 +86,10 @@ def _install_goose() -> subprocess.CompletedProcess:
         shell=True,
         check=False,
     )
+
+
+def _uninstall_goose() -> subprocess.CompletedProcess:
+    return _remove_which("goose")
 
 
 def _install_opencode() -> subprocess.CompletedProcess:
@@ -72,6 +101,10 @@ def _install_opencode() -> subprocess.CompletedProcess:
         if create.returncode != 0:
             return create
     return _run(["distrobox", "enter", "node", "--", "sudo", "npm", "install", "-g", "opencode-ai"])
+
+
+def _uninstall_opencode() -> subprocess.CompletedProcess:
+    return _run(["distrobox", "enter", "node", "--", "sudo", "npm", "uninstall", "-g", "opencode-ai"])
 
 
 CCSTATUS_VERSION = "v0.3.0"
@@ -95,15 +128,32 @@ def _install_ccstatus() -> subprocess.CompletedProcess:
     return result
 
 
+def _uninstall_ccstatus() -> subprocess.CompletedProcess:
+    # Best-effort: undo the statusline registration before removing the
+    # binary itself (ignore failure — it may already be gone/unregistered).
+    subprocess.run(f"{Path.home() / '.local' / 'bin' / 'ccstatus'} uninstall", shell=True, check=False)
+    return _remove_which("ccstatus")
+
+
 CATEGORIES: dict[str, list[Tool]] = {
     "AI coding tools": [
-        Tool("aider", lambda: _has("aider"), _install_aider),
-        Tool("cline (VSCode)", lambda: _vscode_ext_installed("saoudrizwan.claude-dev"), _install_cline),
-        Tool("continue (VSCode)", lambda: _vscode_ext_installed("Continue.continue"), _install_continue),
-        Tool("goose", lambda: _has("goose"), _install_goose),
-        Tool("opencode", _opencode_installed, _install_opencode),
+        Tool("aider", lambda: _has("aider"), _install_aider, _uninstall_aider),
+        Tool(
+            "cline (VSCode)",
+            lambda: _vscode_ext_installed("saoudrizwan.claude-dev"),
+            _install_cline,
+            _uninstall_cline,
+        ),
+        Tool(
+            "continue (VSCode)",
+            lambda: _vscode_ext_installed("Continue.continue"),
+            _install_continue,
+            _uninstall_continue,
+        ),
+        Tool("goose", lambda: _has("goose"), _install_goose, _uninstall_goose),
+        Tool("opencode", _opencode_installed, _install_opencode, _uninstall_opencode),
     ],
     "Terminal": [
-        Tool("ccstatus", lambda: _has("ccstatus"), _install_ccstatus),
+        Tool("ccstatus", lambda: _has("ccstatus"), _install_ccstatus, _uninstall_ccstatus),
     ],
 }
