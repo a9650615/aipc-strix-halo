@@ -5,3 +5,4 @@ bat
 eza
 jetbrains-mono-fonts
 fira-code-fonts
+btop
