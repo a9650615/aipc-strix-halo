@@ -77,10 +77,8 @@ def pull_command(entry: ModelEntry) -> list[str] | None:
         # config_menu.py already does for `sudo systemctl restart`.
         return ["sudo", "podman", "exec", "ollama", "ollama", "pull", entry.model_id]
     if entry.backend == "lemonade":
-        # ponytail: host-side pull CLI unconfirmed — llm-lemonade's container
-        # schema is still TODO-marked (tasks.md #1.5). Best-guess command;
-        # revisit once verified against a running amd/lemonade-sdk container.
-        return ["lemonade-server", "pull", entry.model_id]
+        # Following the pattern of ollama backend: pull via the container itself.
+        return ["sudo", "podman", "exec", "lemonade", "lemonade-server", "pull", entry.model_id]
     return None
 
 
