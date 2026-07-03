@@ -68,7 +68,14 @@ def sync_check(entries: list[ModelEntry], models_root: Path) -> list[ModelEntry]
 def pull_command(entry: ModelEntry) -> list[str] | None:
     """argv to fetch this entry's weights, or None if there's nothing to pull."""
     if entry.backend == "ollama":
-        return ["ollama", "pull", entry.model_id]
+        # Ollama runs as a root-owned system quadlet (modules/llm-ollama),
+        # not a host binary — hardware-verified 2026-07-03 that a bare
+        # `ollama pull` here has no daemon to reach (no host-side `ollama`
+        # CLI/socket at all) and instead a caller talking to the daemon
+        # over HTTP for a not-yet-pulled model just gets repeated 404s.
+        # Pull has to go through the container itself, same as
+        # config_menu.py already does for `sudo systemctl restart`.
+        return ["sudo", "podman", "exec", "ollama", "ollama", "pull", entry.model_id]
     if entry.backend == "lemonade":
         # ponytail: host-side pull CLI unconfirmed — llm-lemonade's container
         # schema is still TODO-marked (tasks.md #1.5). Best-guess command;

@@ -119,7 +119,15 @@ def test_sync_check_empty_manifest(tmp_path: Path) -> None:
 
 def test_pull_command_ollama() -> None:
     entry = models.ModelEntry(alias="main-70b", backend="ollama", model_id="llama3.3:70b", size_gb=40)
-    assert models.pull_command(entry) == ["ollama", "pull", "llama3.3:70b"]
+    assert models.pull_command(entry) == [
+        "sudo",
+        "podman",
+        "exec",
+        "ollama",
+        "ollama",
+        "pull",
+        "llama3.3:70b",
+    ]
 
 
 def test_pull_command_lemonade() -> None:
@@ -149,7 +157,7 @@ def test_sync_pull_invokes_backend_command_and_marks_present(tmp_path: Path) -> 
 
     results = models.sync_pull(entries, root, runner=fake_runner)
 
-    assert calls == [["ollama", "pull", "llama3.3:70b"]]
+    assert calls == [["sudo", "podman", "exec", "ollama", "ollama", "pull", "llama3.3:70b"]]
     assert results == [(entries[0], True)]
     assert models.on_disk_status(entries[0], root) == "present"
 
