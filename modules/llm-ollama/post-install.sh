@@ -1,29 +1,14 @@
 #!/bin/sh
 # post-install.sh — llm-ollama
-# Idempotent: safe to re-run on image rebuilds.
+# Build-time: enable the resolver unit that points /var/lib/aipc-models at
+# the primary user's home at real boot (content under /var during build
+# isn't part of the ostree commit, and the target user's home isn't known
+# until the deployed machine's first boot anyway — see aipc-models-dir-setup).
+# NO systemctl --now (build has no running init) and no model pull (build
+# has no guaranteed network); the quadlet's [Install] WantedBy=default.target
+# starts ollama.service at real boot, and `aipc models sync` pulls weights
+# afterward.
 set -eu
 
-model_dir=/var/lib/aipc-models
-if command -v btrfs >/dev/null 2>&1 && btrfs subvolume show / >/dev/null 2>&1; then
-  if [ ! -d "$model_dir" ]; then
-    btrfs subvolume create "$model_dir" 2>/dev/null || mkdir -p "$model_dir"
-  fi
-else
-  mkdir -p "$model_dir"
-fi
-
-systemctl enable --now ollama.service
-
-endpoint=http://127.0.0.1:11434
-default_model=qwen2.5:7b-instruct-q4_K_M
-
-for _i in $(seq 1 30); do
-  curl -fsS "$endpoint/api/tags" >/dev/null 2>&1 && break
-  sleep 1
-done
-
-if ! curl -fsS "$endpoint/api/tags" | grep -q '"name"'; then
-  curl -fsS -X POST "$endpoint/api/pull" \
-    -H "Content-Type: application/json" \
-    -d "{\"name\":\"$default_model\"}" >/dev/null
-fi
+chmod 0755 /usr/lib/aipc/aipc-models-dir-setup
+systemctl enable aipc-models-dir.service

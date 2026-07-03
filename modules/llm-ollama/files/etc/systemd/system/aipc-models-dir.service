@@ -1,0 +1,11 @@
+[Unit]
+Description=Resolve /var/lib/aipc-models to the primary user's home directory
+Before=ollama.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/aipc/aipc-models-dir-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
