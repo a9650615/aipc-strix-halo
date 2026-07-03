@@ -1,0 +1,10 @@
+module gpp_wake_fix 1.0;
+
+require {
+	type proc_t;
+	type init_t;
+	class file write;
+}
+
+#============= init_t ==============
+allow init_t proc_t:file write;

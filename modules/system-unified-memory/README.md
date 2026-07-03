@@ -81,6 +81,18 @@ exact pattern a Z13 owner reported fixing sleep/wake for them in `#1928`. `gpp-w
 disables both at boot (idempotent: only toggles a device that's currently `*enabled`, so
 re-running it or hardware where they're already off is a no-op).
 
+SELinux (targeted policy, enforcing) denies this by default: a plain root systemd service runs
+as `init_t`, which has no `write` permission on `proc_t` (confirmed via `ausearch -m avc` showing
+`denied { write }` for `gpp-wake-fix` against `/proc/acpi/wakeup`). `selinux/gpp_wake_fix.te`
+grants exactly that one permission (nothing broader — an earlier attempt at using
+`SELinuxContext=unconfined_service_t` in the unit instead was rejected too, since
+`unconfined_service_t` also lacks `entrypoint` on the script's `etc_t` label; scoping the fix to
+the actual denied operation avoids stacking more permission problems). The compiled
+`gpp_wake_fix.pp` ships at `files/usr/share/selinux/packages/`; `post-install.sh` loads it via
+`semodule -i` at build time (policy-store-only, no live kernel/enforcement needed). Regenerate
+the `.pp` from the `.te` source with `checkmodule -M -m -o x.mod x.te && semodule_package -o
+x.pp -m x.mod` if the rule ever needs to change.
+
 **This has not yet been confirmed to fully fix suspend on this fleet** — it removes one
 specific, community-verified spurious-wake source, but the freeze-while-charging pattern
 `antheas` describes may have other contributing causes on some units. Re-check by actually

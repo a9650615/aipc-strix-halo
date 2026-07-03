@@ -7,3 +7,13 @@ set -eu
 
 chmod 0755 /usr/lib/aipc/gpp-wake-fix
 systemctl enable gpp-wake-fix.service
+
+# Hardware-verified 2026-07-04: the default targeted policy denies even a
+# root systemd service (runs as init_t) writing to /proc/acpi/wakeup
+# (proc_t) -- confirmed via ausearch -m avc showing `denied { write }`.
+# This custom module grants exactly that one write, nothing broader
+# (source .te lives at modules/system-unified-memory/selinux/ for review;
+# regenerate the .pp with `checkmodule -M -m -o x.mod x.te && semodule_package
+# -o x.pp -m x.mod` if the .te ever changes). semodule only touches the
+# policy store on disk -- no live kernel/enforcement needed, safe at build time.
+semodule -i /usr/share/selinux/packages/gpp_wake_fix.pp
