@@ -1,13 +1,9 @@
 #!/bin/sh
 # post-install.sh — llm-models
-# Idempotent: safe to re-run on image rebuilds.
+# Build-time: models.yaml is already staged at /etc/aipc/models/models.yaml
+# by the renderer's `COPY modules/llm-models/files/ /` step — nothing to
+# copy here. Only an optional consistency check if the aipc CLI is present.
 set -eu
-
-src=$(dirname "$0")/files/etc/aipc/models/models.yaml
-dst=/etc/aipc/models/models.yaml
-
-mkdir -p /etc/aipc/models
-install -m 0644 "${src}" "${dst}"
 
 if command -v aipc >/dev/null 2>&1; then
   aipc models sync --check || true
