@@ -304,7 +304,8 @@ def config_sync_opencode() -> None:
 
 
 @config.command("tools")
-def config_tools() -> None:
+@click.option("--no-tui", is_flag=True, help="Plain sequential y/N prompts instead of the TUI.")
+def config_tools(no_tui: bool) -> None:
     """Categorized checklist: which dev tools are installed, install more.
 
     This is the standalone, re-runnable half of ops-firstboot's aipc-init
@@ -312,7 +313,17 @@ def config_tools() -> None:
     switching). Grouped into broad categories per user direction 2026-07-03
     ("大分類" over a flat list); add new categories here as new tool areas
     come online rather than growing any one category unboundedly.
+
+    Default is a Textual TUI (keyboard Tab/Enter and mouse clicks both
+    work, per user direction 2026-07-03 — "像 claude code"). --no-tui falls
+    back to plain prompts for non-interactive/scripted use.
     """
+    if not no_tui:
+        from aipc_lib.tools_tui import run as run_tui
+
+        run_tui()
+        return
+
     for category, tools in tools_menu_mod.CATEGORIES.items():
         click.echo(f"\n=== {category} ===")
         for tool in tools:
