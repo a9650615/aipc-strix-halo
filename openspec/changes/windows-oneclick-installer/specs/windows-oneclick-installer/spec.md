@@ -19,10 +19,10 @@ A single elevated PowerShell entry script (`targets/windows/install-windows.ps1`
 - **WHEN** rEFInd 0.14.0 and the bazzite-dx ISO are downloaded
 - **THEN** each is SHA-256 verified (`Get-FileHash -Algorithm SHA256`) against its upstream checksum file BEFORE it is expanded/copied/executed, and any mismatch aborts the script
 
-#### Scenario: Live payload partition is exFAT, not FAT32
+#### Scenario: Live payload partition is FAT32, mirroring the full installer tree
 
-- **WHEN** the 30 GB live partition is created
-- **THEN** it is formatted as exFAT (labelled `AIPC_LIVE`) so the greater-than-4 GiB squashfs payload fits (FAT32 is never used for the live payload)
+- **WHEN** the 30 GB live partition is created and the payload is staged
+- **THEN** it is formatted as FAT32 (labelled `AIPC_LIVE`) and the entire Bazzite Anaconda installer tree (`images/install.img`, the `bazzite-stable/` OCI repo, `.treeinfo`) is mirrored onto it, so the kernel booted with `inst.stage2=hd:LABEL=AIPC_LIVE` resolves stage2 (no installer file exceeds FAT32's 4 GiB per-file limit; the installer initrd reliably mounts vfat)
 
 #### Scenario: Destructive disk operations are confirmation-gated
 

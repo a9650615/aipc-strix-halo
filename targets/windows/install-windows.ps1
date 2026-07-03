@@ -210,16 +210,19 @@ function Ensure-LivePartition {
     Set-Phase 'partition'
     $volume = Get-Volume -FileSystemLabel 'AIPC_LIVE' -ErrorAction SilentlyContinue
     if ($volume) {
-        if ($volume.FileSystem -ne 'exFAT') { throw 'AIPC_LIVE exists but is not exFAT.' }
+        if ($volume.FileSystem -ne 'FAT32') { throw 'AIPC_LIVE exists but is not FAT32; delete it in Disk Management and retry.' }
         Write-Log "  AIPC_LIVE already exists at $($volume.DriveLetter):" DarkGray
         Complete-Phase 'partition'
         return "$($volume.DriveLetter):"
     }
 
+    # FAT32 (not exFAT): the Bazzite installer initrd mounts this partition via
+    # inst.stage2=hd:LABEL=AIPC_LIVE and reliably reads vfat; the largest file in
+    # the installer tree (images/install.img) is < 4 GiB, so FAT32 suffices.
     $diskNumber = Get-SystemDiskNumber
-    Invoke-Confirmed "Disk $diskNumber" 'create and format 30 GiB AIPC_LIVE exFAT partition' {
+    Invoke-Confirmed "Disk $diskNumber" 'create and format 30 GiB AIPC_LIVE FAT32 partition' {
         $partition = New-Partition -DiskNumber $diskNumber -Size $LiveBytes -AssignDriveLetter
-        Format-Volume -Partition $partition -FileSystem exFAT -NewFileSystemLabel 'AIPC_LIVE' -Confirm:$false | Out-Null
+        Format-Volume -Partition $partition -FileSystem FAT32 -NewFileSystemLabel 'AIPC_LIVE' -Confirm:$false | Out-Null
     }
 
     $volume = Get-Volume -FileSystemLabel 'AIPC_LIVE'
@@ -244,17 +247,20 @@ function Ensure-Payload($Esp, $LiveDrive) {
     Ensure-BazziteIso
     $aipcDir = Join-Path $Esp 'EFI\refind\aipc'
     New-Item -ItemType Directory -Force -Path $aipcDir | Out-Null
-    $liveOs = Join-Path $LiveDrive 'LiveOS'
 
     $image = Mount-DiskImage -ImagePath $BazziteIso -PassThru
     try {
-        $isoVolume = $image | Get-Volume
-        $isoDrive = "$($isoVolume.DriveLetter):"
-        if (-not (Test-Path $liveOs)) {
-            Write-Log '  copying LiveOS to AIPC_LIVE...'
-            Copy-Item (Join-Path $isoDrive 'LiveOS') $LiveDrive -Recurse -Force
+        $isoDrive = "$(($image | Get-Volume).DriveLetter):"
+        # Bazzite ships an Anaconda installer ISO (images/install.img), not a
+        # dracut live ISO (LiveOS/squashfs.img). Mirror the whole tree onto
+        # AIPC_LIVE so inst.stage2=hd:LABEL=AIPC_LIVE finds install.img, the
+        # OCI repo, and .treeinfo — exactly what a dd-written USB would hold.
+        $marker = Join-Path $LiveDrive 'images\install.img'
+        if (-not (Test-Path $marker)) {
+            Write-Log '  copying installer tree to AIPC_LIVE...'
+            Copy-Item "$isoDrive\*" "$LiveDrive\" -Recurse -Force
         } else {
-            Write-Log '  LiveOS already staged' DarkGray
+            Write-Log '  installer tree already staged' DarkGray
         }
         Copy-First $isoDrive 'vmlinuz*' (Join-Path $aipcDir 'vmlinuz')
         Copy-First $isoDrive 'initrd*' (Join-Path $aipcDir 'initrd.img')
@@ -281,7 +287,7 @@ menuentry "AIPC Bazzite Installer (UNVERIFIED on Strix Halo)" {
     icon /EFI/refind/icons/os_linux.png
     loader /EFI/refind/aipc/vmlinuz
     initrd /EFI/refind/aipc/initrd.img
-    options "root=live:LABEL=AIPC_LIVE rd.live.image quiet"
+    options "inst.stage2=hd:LABEL=AIPC_LIVE quiet"
 }
 '@
     Add-Content -Path $conf -Value $entry

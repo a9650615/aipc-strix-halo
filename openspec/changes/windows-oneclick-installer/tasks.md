@@ -7,15 +7,15 @@
   BitLocker off, UEFI, Secure Boot off, C: can shrink by 150 GiB) → WinRE System
   Image Backup acknowledgement → verified rEFInd download+checksum+install →
   verified bazzite ISO+CHECKSUM download → confirmed C: shrink (150 GiB
-  unallocated) → confirmed 30 GiB **exFAT** `AIPC_LIVE` partition + payload
-  staging → `vmlinuz`+`initrd` to ESP + rEFInd menuentry
-  (`root=live:LABEL=AIPC_LIVE`) → print next steps (no auto-reboot). Every
+  unallocated) → confirmed 30 GiB **FAT32** `AIPC_LIVE` partition + full
+  installer-tree staging → `vmlinuz`+`initrd` to ESP + rEFInd menuentry
+  (`inst.stage2=hd:LABEL=AIPC_LIVE`) → print next steps (no auto-reboot). Every
   phase idempotent; Q1/Q2 fallbacks as comments; "UNVERIFIED on Strix Halo"
   warning printed.
 - [x] 1.2 `preflight-check.ps1` — read-only. Phase-1 checks only: elevation,
   BitLocker off, UEFI, Secure Boot off, and C: can shrink by 150 GiB; print `OK` /
   one-line failure; exit 0 / non-zero.
-- [x] 1.3 `README.md` — why this exists, the exFAT-vs-FAT32 decision, the
+- [x] 1.3 `README.md` — why this exists, the FAT32 payload decision, the
   unverified-boot caveat, root usage
   (`Unblock-File .\Install-AIPC-Windows.ps1`; `powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\Install-AIPC-Windows.ps1`); cross-ref
   `docs/install-windows-direct-runbook.md`.
@@ -31,14 +31,14 @@
 - [x] 2.3 Grep-audit: every `Resize-Partition|New-Partition|Format-Volume|Remove-Partition|Set-Partition|diskpart`
   has a `Read-Host`/`ShouldProcess` confirm in the same phase; `Get-FileHash` +
   compare appears before first `Expand-Archive` and before ISO copy; live
-  partition uses `-FileSystem exFAT` (never `FAT32`); no secret shapes; no
-  auto-wipe of the Windows partition.
+  partition uses `-FileSystem FAT32` (Anaconda initrd reads vfat; no file
+  > 4 GiB); no secret shapes; no auto-wipe of the Windows partition.
 - [x] 2.4 `cd tools && python -m pytest -q` → still green (no Python added).
 
 ## Constraints
 
 - Do NOT reboot the machine or wipe the Windows partition — out of scope.
-- Do NOT use FAT32 for the live payload — exFAT only.
+- Use FAT32 for the live payload (Anaconda initrd reads vfat; no installer file > 4 GiB) — not exFAT.
 - Do NOT run any destructive disk op without a confirmation gate.
 - Do NOT use any download before SHA-256 verification.
 - Do NOT modify existing modules, `tools/`, or the `install-windows-direct` change.

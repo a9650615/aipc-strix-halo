@@ -7,7 +7,7 @@ Two install paths are available from Windows 11:
 | **USB SSD** (recommended) | You have a USB SSD or large USB stick available |
 | **No-USB** | No USB drive available; stages installer from Windows directly |
 
-The no-USB path stages the bazzite-dx installer from `docs/install-windows-direct-runbook.md`: verified downloads, rEFInd, a 30 GiB `AIPC_LIVE` exFAT partition, and a rEFInd entry.
+The no-USB path stages the bazzite-dx installer from `docs/install-windows-direct-runbook.md`: verified downloads, rEFInd, a 30 GiB `AIPC_LIVE` FAT32 partition holding the full Anaconda installer tree, and a rEFInd entry.
 
 ## Guided menu (recommended)
 
@@ -68,4 +68,4 @@ Both paths log all phases with timestamps to `%ProgramData%\aipc-windows-install
 
 All phases are idempotent — retrying skips completed work. Cached downloads are reused if checksum still matches.
 
-The live payload partition is exFAT because the squashfs payload can exceed FAT32's 4 GiB single-file limit. The boot path is UNVERIFIED on Strix Halo; test it once before trusting it. Keep Windows until `aipc doctor` has been green for at least 30 days.
+The no-USB live payload partition is FAT32: Bazzite is an Anaconda installer ISO whose largest file (`images/install.img`) is under FAT32's 4 GiB per-file limit, and the installer initrd mounts vfat reliably (exFAT support is not guaranteed). The whole installer tree is mirrored onto it and booted via `inst.stage2=hd:LABEL=AIPC_LIVE`. The boot path is UNVERIFIED on Strix Halo; test it once before trusting it. Keep Windows until `aipc doctor` has been green for at least 30 days.

@@ -2,33 +2,41 @@
 
 ## Decisions
 
-### D1 — Live payload partition is exFAT, not FAT32
+### D1 — Live payload partition is FAT32, not exFAT
 
-The bazzite-dx squashfs/ISO payload exceeds FAT32's 4 GiB single-file
-limit. The install-windows-direct runbook specified FAT32 (step 7), which
-is a latent blocker — the payload would not fit.
+Bazzite ships an **Anaconda installer ISO** (`images/install.img`), not a
+dracut live ISO (`LiveOS/squashfs.img`). The largest file in the whole
+installer tree is `images/install.img` at ~2.8 GiB — under FAT32's 4 GiB
+per-file limit. The installer initrd mounts the payload partition via
+`inst.stage2=hd:LABEL=…` and reliably reads **vfat**; exFAT support in that
+initrd is not guaranteed, so exFAT risks the installer never finding stage2.
 
-**Chosen:** create the 30 GB live partition as **exFAT** (`-FileSystem
-exFAT`), labelled `AIPC_LIVE`.
-
-- Alternatives considered:
-  - **FAT32** (runbook's original choice) — rejected, 4 GiB file ceiling.
-  - **NTFS** — rEFInd has read support via a driver but reliability is
-    weaker than exFAT; not worth the saved partition.
-
-### D2 — Kernel + initrd on the FAT ESP; squashfs on the exFAT live partition
-
-The ESP is FAT (small, firmware-readable). The full ISO/squashfs does not
-fit there. Split the boot payload: `vmlinuz` + `initrd` live on the ESP
-under `EFI/refind/aipc/`; the squashfs/ISO body lives on the exFAT
-`AIPC_LIVE` partition. rEFInd boots the kernel with
-`root=live:LABEL=AIPC_LIVE` (+ `rd.live.image`).
+**Chosen:** create the 30 GB live partition as **FAT32** (`-FileSystem
+FAT32`), labelled `AIPC_LIVE` (≤ 11 chars, satisfies FAT32's label limit).
 
 - Alternatives considered:
-  - **Whole ISO on the ESP** — rejected, FAT32 4 GiB limit again.
+  - **exFAT** (the original choice, on the mistaken premise of a > 4 GiB
+    squashfs) — rejected; no file exceeds 4 GiB, and the installer initrd
+    may not mount exFAT.
+  - **NTFS** — the installer initrd does not mount NTFS read-write for
+    stage2; rejected.
+
+### D2 — Kernel + initrd on the FAT ESP; full installer tree on the FAT32 live partition
+
+The ESP is FAT (small, firmware-readable). Split the boot payload: `vmlinuz`
++ `initrd` are copied to the ESP under `EFI/refind/aipc/` for rEFInd to
+load; the **entire ISO tree** (`images/install.img`, the `bazzite-stable/`
+OCI repo, `.treeinfo`, …) is mirrored onto the FAT32 `AIPC_LIVE` partition —
+exactly what a `dd`-written USB would contain. rEFInd boots the kernel with
+`inst.stage2=hd:LABEL=AIPC_LIVE`, matching the ISO's own grub.cfg
+(`inst.stage2=hd:LABEL=bazzite-x86_64-stable`) with our partition label.
+
+- Alternatives considered:
+  - **Copy only `LiveOS/` + kernel** (original design) — rejected; this is
+    an Anaconda ISO with no `LiveOS/`, and Anaconda needs the full tree.
   - **rEFInd ISO chainload** — kept as the Q1 fallback (see D6), not the
     primary path, because in-place kernel+initrd gives clearer cmdline
-    control over the live source.
+    control over the install source.
 
 ### D3 — Every destructive disk operation is confirmation-gated
 
@@ -50,9 +58,11 @@ Supply-chain risk: a tampered rEFInd zip or bazzite ISO executed/copied
 verbatim.
 
 **Chosen:** `Get-FileHash -Algorithm SHA256` is computed and compared
-against the upstream checksum file (`refind-bin-0.14.0.zip.txt` and the
-bazzite CHECKSUM) BEFORE `Expand-Archive` / copy / execute. Hard abort on
-mismatch.
+BEFORE `Expand-Archive` / copy / execute. rEFInd publishes no per-file
+checksum, so its zip hash is **pinned to the release** in the script; the
+bazzite ISO is verified against its upstream `-CHECKSUM` file. Hard abort on
+mismatch. (rEFInd is also fetched from a `*.dl.sourceforge.net` mirror —
+the `/files/.../download` URLs serve an HTML interstitial, not the binary.)
 
 - Alternatives considered:
   - **Trust the HTTPS download** — rejected; HTTPS is not an integrity
@@ -101,9 +111,10 @@ active code.
   Mitigation: boot path documented as UNVERIFIED; Q1 (bcdedit chainload) +
   Q2 (Fedora Live + bootc switch) fallbacks included as comments; script
   prints a "test once" warning and never asserts boot success.
-- **Risk: FAT32 4 GiB ceiling silently truncates the payload** →
-  Mitigation: live partition is exFAT (D1); kernel+initrd split from
-  squashfs (D2).
+- **Risk: installer initrd cannot mount the payload partition** →
+  Mitigation: live partition is FAT32, which the Anaconda initrd reliably
+  mounts (D1); no installer file exceeds FAT32's 4 GiB per-file limit; the
+  full tree is mirrored so `inst.stage2=hd:LABEL=AIPC_LIVE` resolves (D2).
 
 ## Implementation notes
 
@@ -112,18 +123,19 @@ active code.
 - `install-windows.ps1`: elevated entry. Phases: (1) preflight guard,
   (2) verified download + install rEFInd to ESP, (3) verified download of
   bazzite ISO, (4) confirmed shrink of C: to yield 150 GiB unallocated,
-  (5) create 30 GiB exFAT partition labelled `AIPC_LIVE` + stage live
-  payload, (6) extract `vmlinuz`+`initrd` to the ESP and write a rEFInd
-  menuentry booting `root=live:LABEL=AIPC_LIVE`, (7) print next-steps
+  (5) create 30 GiB FAT32 partition labelled `AIPC_LIVE` + mirror the full
+  installer tree, (6) copy `vmlinuz`+`initrd` to the ESP and write a rEFInd
+  menuentry booting `inst.stage2=hd:LABEL=AIPC_LIVE`, (7) print next-steps
   (reboot → pick entry → installer "install to free space" not "use entire
   disk").
 - `preflight-check.ps1`: read-only subset of phase 1; exit non-zero +
   one-line diagnosis on any failure (mirrors the module `verify.sh`
   contract).
-- Boot mechanism note: kernel+initrd live on FAT ESP (small); squashfs
-  lives on the exFAT partition; this sidesteps FAT32's 4 GiB limit. rEFInd
-  NVRAM persistence + Strix firmware boot is UNVERIFIED — carries the
-  §7.3 Q1/Q2 fallbacks as documented comments, not code.
+- Boot mechanism note: kernel+initrd live on FAT ESP (small); the full
+  Anaconda installer tree lives on the FAT32 `AIPC_LIVE` partition and is
+  found via `inst.stage2=hd:LABEL=AIPC_LIVE`. rEFInd NVRAM persistence +
+  Strix firmware boot is UNVERIFIED — carries the §7.3 Q1/Q2 fallbacks as
+  documented comments, not code.
 
 ## Cross-references
 
