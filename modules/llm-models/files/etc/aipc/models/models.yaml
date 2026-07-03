@@ -46,6 +46,14 @@ models:
     model_id: qwen2.5:72b-instruct-q4_K_M
     size_gb: 45.0
     keep_alive: "10m"
+    # mlock: pin this model's resident weights in RAM once loaded so the
+    # OS never swaps/compresses them out — the 45GB reload cost is what
+    # actually justifies this (see llm-ollama's post-install.sh + quadlet
+    # for how this becomes LLAMA_ARG_MLOCK; Ollama has no per-model mlock
+    # knob, so it's daemon-wide for whatever's currently resident once any
+    # entry here requests it — harmless for smaller models if this is ever
+    # set on more than one alias).
+    mlock: true
 
   - alias: coder-fast
     backend: ollama

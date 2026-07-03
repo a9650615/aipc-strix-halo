@@ -10,6 +10,18 @@ Network=host
 AddDevice=/dev/kfd:/dev/kfd
 AddDevice=/dev/dri:/dev/dri
 Volume=/var/lib/aipc-models:/models:rw,Z
+# mlock (see models.yaml's main-70b entry + post-install.sh): grants exactly
+# the capability llama-server's LLAMA_ARG_MLOCK needs to actually succeed at
+# 45GB scale (mlock() is permitted by Podman's default seccomp profile
+# already — the missing piece is CAP_IPC_LOCK, which also lets the kernel
+# ignore RLIMIT_MEMLOCK entirely per mlock(2), so no ulimit override needed).
+# post-install.sh always creates mlock.env (empty or not), so no need for
+# systemd's `-` optional-file prefix here — hardware-verified 2026-07-04
+# that quadlet's EnvironmentFile= does NOT honor that prefix like native
+# systemd units do; it just becomes part of a literal relative path and
+# 404s the container start (`open .../-/etc/aipc/...: no such file`).
+AddCapability=CAP_IPC_LOCK
+EnvironmentFile=/etc/aipc/env.d/llm-ollama/mlock.env
 Environment=OLLAMA_HOST=127.0.0.1:11434
 Environment=OLLAMA_MODELS=/models
 Environment=HSA_OVERRIDE_GFX_VERSION=11.5.1
@@ -19,7 +31,7 @@ Environment=OLLAMA_IGPU_ENABLE=1
 # how resident-small stays loaded forever (-1) while everything else frees
 # its RAM after being idle. Confirmed working end-to-end 2026-07-03: a
 # per-model keep_alive in litellm_params does override this daemon default
-# (some upstream LiteLLM issues report it not taking effect — it does here).
+# (some upstream LiteLLM issues report the override not taking effect — it does here).
 Environment=OLLAMA_KEEP_ALIVE=10m
 
 [Service]
