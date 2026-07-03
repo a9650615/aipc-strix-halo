@@ -10,7 +10,7 @@ AddDevice=/dev/kfd:/dev/kfd
 AddDevice=/dev/dri:/dev/dri
 Volume=/var/lib/aipc-models:/models:rw,Z
 Environment=MODEL_CACHE=/models
-Environment=HSA_OVERRIDE_GFX_VERSION=11.0.0
+Environment=HSA_OVERRIDE_GFX_VERSION=11.5.1
 PublishPort=127.0.0.1:8201:8201
 
 [Service]

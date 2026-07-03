@@ -3,19 +3,31 @@ Description=vLLM serving backend for AIPC (optional)
 After=ollama.service
 
 [Container]
-Image=rocm/vllm:latest
+# Pinned to the gfx1151-specific build (not the generic :latest, which
+# resolves to an MI300/Instinct datacenter-GPU tag unrelated to this
+# hardware). Re-verify via:
+#   skopeo inspect docker://docker.io/rocm/vllm:rocm7.13.0_gfx1151_ubuntu24.04_py3.13_pytorch_2.10.0_vllm_0.19.1
+Image=docker.io/rocm/vllm@sha256:394194d36edcf9b36bcb563e143b21b80e64e7d04f33a447b448c0c0c00c04a8
 ContainerName=vllm
+Network=host
+AddDevice=/dev/kfd:/dev/kfd
+AddDevice=/dev/dri:/dev/dri
+# TODO(unresolved): vLLM does not read Ollama's blob-store format — it needs
+# a real HuggingFace-format model directory (config.json, tokenizer,
+# safetensors) or a hub model ID to download itself. /models/default does
+# not exist yet; this path and the Exec= model argument below are
+# placeholders until a compatible model is actually provisioned. Do not
+# enable this service until that's resolved.
 Volume=/var/lib/aipc-models:/models:Z
-Device=/dev/kfd
-Device=/dev/dri
-Environment=HSA_OVERRIDE_GFX_VERSION=11.0.0
+Environment=HSA_OVERRIDE_GFX_VERSION=11.5.1
 Environment=VLLM_TARGET_DEVICE=rocm
-PublishPort=127.0.0.1:8000:8000
-Exec=vllm serve /models/default --host 0.0.0.0 --port 8000
+Exec=vllm serve /models/default --host 127.0.0.1 --port 8000
 
 [Service]
 Restart=always
 TimeoutStartSec=120
 
-[Install]
-WantedBy=default.target
+# No [Install] section: this backend is optional/on-demand (per README) and
+# must never auto-start at boot. An admin who wants it running explicitly
+# does `systemctl enable --now vllm.service` themselves once a real model
+# is in place.
