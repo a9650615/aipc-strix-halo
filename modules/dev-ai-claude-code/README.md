@@ -5,7 +5,7 @@ Claude Code CLI — Anthropic's terminal coding agent, routed through LiteLLM.
 ## Install
 
 ```
-distrobox enter node -- npm install -g @anthropic-ai/claude-code
+distrobox enter node -- sudo npm install -g @anthropic-ai/claude-code
 ```
 
 User must run `claude login` post-install.

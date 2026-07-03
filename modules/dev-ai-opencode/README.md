@@ -5,7 +5,7 @@ OpenCode CLI — terminal AI coding tool, configured for LiteLLM.
 ## Install
 
 ```
-distrobox enter node -- npm install -g opencode-ai
+distrobox enter node -- sudo npm install -g opencode-ai
 ```
 
 ## Configuration

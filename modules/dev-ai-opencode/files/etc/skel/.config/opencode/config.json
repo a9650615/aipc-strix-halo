@@ -1,5 +1,18 @@
 {
-  "provider": "openai",
-  "baseUrl": "http://127.0.0.1:4000",
-  "model": "coder-strong"
+  "$schema": "https://opencode.ai/config.json",
+  "model": "aipc/__AIPC_DEFAULT_TIER__",
+  "provider": {
+    "aipc": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "AIPC (LiteLLM)",
+      "options": {
+        "baseURL": "http://127.0.0.1:4000/v1"
+      },
+      "models": {
+        "coder-fast": { "name": "coder-fast (Qwen2.5-Coder-7B)" },
+        "coder-strong": { "name": "coder-strong (Qwen2.5-Coder-32B)" },
+        "coder-thinking": { "name": "coder-thinking (DeepSeek-R1-14B)" }
+      }
+    }
+  }
 }

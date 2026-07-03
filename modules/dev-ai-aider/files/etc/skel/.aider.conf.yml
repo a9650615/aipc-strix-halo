@@ -1,2 +1,2 @@
 openai-api-base: http://127.0.0.1:4000
-model: openai/coder-strong
+model: openai/__AIPC_DEFAULT_TIER__

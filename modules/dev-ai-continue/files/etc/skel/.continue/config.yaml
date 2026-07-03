@@ -1,9 +1,13 @@
 models:
+  - name: coder-fast
+    provider: ollama
+    model: coder-fast
+    apiBase: http://127.0.0.1:4000
   - name: coder-strong
     provider: ollama
     model: coder-strong
     apiBase: http://127.0.0.1:4000
-  - name: coder-fast
+  - name: coder-thinking
     provider: ollama
-    model: coder-fast
+    model: coder-thinking
     apiBase: http://127.0.0.1:4000
