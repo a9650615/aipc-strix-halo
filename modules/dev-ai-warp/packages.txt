@@ -1,0 +1,4 @@
+# warp-terminal installed via files/etc/yum.repos.d/warpdotdev.repo — see
+# post-install.sh. Cannot go in the top-level aggregated packages.txt
+# install: that runs before this module's files/ is copied in, so the repo
+# isn't resolvable yet (same constraint as ai-rocm).
