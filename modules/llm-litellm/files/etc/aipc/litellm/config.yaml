@@ -13,7 +13,7 @@ model_list:
     litellm_params:
       model: ollama_chat/qwen2.5:1.5b-instruct-q4_K_M
       api_base: http://127.0.0.1:11434
-      keep_alive: "-1"
+      keep_alive: -1
 
   - model_name: intent-3b
     litellm_params:
@@ -28,7 +28,7 @@ model_list:
     litellm_params:
       model: ollama_chat/gemma4:e4b
       api_base: http://127.0.0.1:11434
-      keep_alive: "-1"
+      keep_alive: -1
 
   - model_name: main-70b
     litellm_params:

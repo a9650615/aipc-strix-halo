@@ -19,7 +19,7 @@ models:
     backend: ollama
     model_id: qwen2.5:1.5b-instruct-q4_K_M
     size_gb: 1.0
-    keep_alive: "-1"
+    keep_alive: -1
 
   - alias: intent-3b
     backend: lemonade
@@ -39,7 +39,7 @@ models:
     backend: ollama
     model_id: gemma4:e4b
     size_gb: 9.6
-    keep_alive: "-1"
+    keep_alive: -1
 
   - alias: main-70b
     backend: ollama
