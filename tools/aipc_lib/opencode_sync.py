@@ -5,6 +5,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from aipc_lib.models import DEFAULT_MANIFEST, load_manifest
+
 DEFAULT_LITELLM_BASE = "http://127.0.0.1:4000"
 DEFAULT_OPENCODE_CONFIG = Path.home() / ".config" / "opencode" / "config.json"
 
@@ -15,6 +17,13 @@ DEFAULT_OPENCODE_CONFIG = Path.home() / ".config" / "opencode" / "config.json"
 # rewrites the static dict to match, so the two don't drift out of sync
 # by hand.
 
+# Aliases that exist in the LiteLLM model_list but aren't meant for
+# interactive chat — embed-bge is an embeddings-only endpoint, intent-3b
+# is a classification model. Listing them in OpenCode's model picker next
+# to actual chat models is confusing (a user reported the mixed list
+# "isn't intuitive") and selecting either would just error.
+NON_CHAT_ALIASES = {"embed-bge", "intent-3b"}
+
 
 def fetch_model_ids(base_url: str = DEFAULT_LITELLM_BASE) -> list[str]:
     """Query LiteLLM's /v1/models. Raises URLError if unreachable."""
@@ -23,25 +32,51 @@ def fetch_model_ids(base_url: str = DEFAULT_LITELLM_BASE) -> list[str]:
     return [m["id"] for m in data.get("data", [])]
 
 
+def _display_names(model_ids: list[str], manifest_path: Path) -> dict[str, str]:
+    """alias -> "alias (model_id, size)" using models.yaml for the concrete
+    model_id and size_gb (the closest available proxy for parameter count —
+    models.yaml has no separate params field, and model_id tags spell it
+    inconsistently across backends: "7b-instruct", "e4b", "35b-a3b", ...).
+    size_gb is "cloud" (string) for remote aliases — shown as-is, not "GB".
+    Falls back to the bare alias for anything not in the manifest."""
+    by_alias = {e.alias: e for e in load_manifest(manifest_path)}
+    names: dict[str, str] = {}
+    for mid in model_ids:
+        entry = by_alias.get(mid)
+        if entry is None:
+            names[mid] = mid
+            continue
+        size = "cloud" if entry.size_gb == "cloud" else f"{entry.size_gb}GB"
+        names[mid] = f"{mid} ({entry.model_id}, {size})"
+    return names
+
+
 def sync_config(
     config_path: Path = DEFAULT_OPENCODE_CONFIG,
     base_url: str = DEFAULT_LITELLM_BASE,
     provider_id: str = "aipc",
+    manifest_path: Path = DEFAULT_MANIFEST,
+    exclude: set[str] = NON_CHAT_ALIASES,
 ) -> list[str]:
     """Rewrite config_path's provider.<provider_id>.models to match LiteLLM's
-    current model list. Returns the list of model ids written.
+    current model list (minus *exclude*). Returns the list of model ids
+    written, with friendly "alias (model_id)" display names sourced from
+    models.yaml where available.
 
     Cloud aliases (main-cloud, coder-cloud, ...) are included like everything
     else — LiteLLM doesn't distinguish them in /v1/models, and OpenCode
     doesn't care that they're remote as long as the gateway does.
     """
-    model_ids = fetch_model_ids(base_url)
+    all_ids = fetch_model_ids(base_url)
+    model_ids = [mid for mid in all_ids if mid not in exclude]
     if not model_ids:
-        raise ValueError(f"{base_url}/v1/models returned no models")
+        raise ValueError(f"{base_url}/v1/models returned no chat-eligible models")
+
+    names = _display_names(model_ids, manifest_path)
 
     config = json.loads(config_path.read_text()) if config_path.exists() else {}
     provider = config.setdefault("provider", {}).setdefault(provider_id, {})
-    provider["models"] = {mid: {"name": mid} for mid in model_ids}
+    provider["models"] = {mid: {"name": names[mid]} for mid in model_ids}
 
     current_default = config.get("model", "")
     default_id = current_default.split("/", 1)[-1] if "/" in current_default else current_default
