@@ -14,6 +14,7 @@ from aipc_lib import models as models_mod
 from aipc_lib import opencode_sync as opencode_sync_mod
 from aipc_lib import secrets
 from aipc_lib import status_dashboard as status_mod
+from aipc_lib import tools_menu as tools_menu_mod
 from aipc_lib.modules import discover
 from aipc_lib.render_bootc import render as render_bootc
 from aipc_lib.render_ansible import render as render_ansible
@@ -300,6 +301,33 @@ def config_sync_opencode() -> None:
     click.echo(f"Synced {len(model_ids)} models to {opencode_sync_mod.DEFAULT_OPENCODE_CONFIG}:")
     for mid in model_ids:
         click.echo(f"  - {mid}")
+
+
+@config.command("tools")
+def config_tools() -> None:
+    """Categorized checklist: which dev tools are installed, install more.
+
+    This is the standalone, re-runnable half of ops-firstboot's aipc-init
+    ai-tools screen (install only — see `aipc config model` for tier
+    switching). Grouped into broad categories per user direction 2026-07-03
+    ("大分類" over a flat list); add new categories here as new tool areas
+    come online rather than growing any one category unboundedly.
+    """
+    for category, tools in tools_menu_mod.CATEGORIES.items():
+        click.echo(f"\n=== {category} ===")
+        for tool in tools:
+            installed = tool.is_installed()
+            status = "[installed]" if installed else "[not installed]"
+            click.echo(f"  {tool.name} {status}")
+            if installed:
+                continue
+            if not click.confirm(f"  Install {tool.name}?", default=False):
+                continue
+            result = tool.install()
+            if result.returncode != 0:
+                click.echo(f"  {tool.name}: install failed (exit {result.returncode})", err=True)
+            else:
+                click.echo(f"  {tool.name}: installed")
 
 
 @main.command("status")
