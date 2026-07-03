@@ -334,7 +334,8 @@ def status_cmd() -> None:
     else:
         for m in models:
             size_gb = m.get("size", 0) / 1e9
-            model_table.add_row(m.get("name", "?"), f"{size_gb:.1f}GB", m.get("expires_at", "?"))
+            name = status_mod.alias_display_name(m.get("name", "?"))
+            model_table.add_row(name, f"{size_gb:.1f}GB", m.get("expires_at", "?"))
         console.print(model_table)
 
 

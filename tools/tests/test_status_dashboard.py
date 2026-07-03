@@ -70,3 +70,24 @@ def test_loaded_models_returns_none_when_unreachable() -> None:
     # Nothing listening on this port — must not raise.
     result = status_dashboard.loaded_models(base_url="http://127.0.0.1:1")
     assert result is None
+
+
+def test_alias_display_name_matches_manifest_entry(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "models.yaml"
+    manifest_path.write_text(
+        "models:\n"
+        "  - alias: coder-agentic\n"
+        "    backend: ollama\n"
+        "    model_id: gemma4:26b\n"
+        "    size_gb: 18.0\n"
+    )
+    assert (
+        status_dashboard.alias_display_name("gemma4:26b", manifest_path)
+        == "coder-agentic (gemma4:26b)"
+    )
+
+
+def test_alias_display_name_falls_back_to_bare_id_when_unregistered(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "models.yaml"
+    manifest_path.write_text("models:\n  - alias: coder-fast\n    backend: ollama\n    model_id: qwen2.5-coder:7b\n")
+    assert status_dashboard.alias_display_name("llama3.2:3b", manifest_path) == "llama3.2:3b"

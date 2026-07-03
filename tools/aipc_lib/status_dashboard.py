@@ -7,6 +7,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from aipc_lib.models import DEFAULT_MANIFEST, load_manifest
 from aipc_lib.modules import Module, discover
 
 DEFAULT_OLLAMA_BASE = "http://127.0.0.1:11434"
@@ -63,3 +64,16 @@ def loaded_models(base_url: str = DEFAULT_OLLAMA_BASE) -> list[dict] | None:
     except (urllib.error.URLError, TimeoutError, OSError):
         return None
     return data.get("models", [])
+
+
+def alias_display_name(model_id: str, manifest_path: Path = DEFAULT_MANIFEST) -> str:
+    """"alias (model_id)" for whichever models.yaml alias points at this
+    ollama model_id (/api/ps reports the raw model_id, not the LiteLLM-
+    facing alias) — same naming convention as `aipc config sync-opencode`,
+    so the model column reads the same way across every aipc subcommand.
+    Falls back to the bare model_id if nothing in the manifest matches
+    (e.g. a model pulled by hand for testing, not yet registered)."""
+    for entry in load_manifest(manifest_path):
+        if entry.model_id == model_id:
+            return f"{entry.alias} ({model_id})"
+    return model_id
