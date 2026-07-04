@@ -1,24 +1,32 @@
 #!/usr/bin/env python3
-"""Unified-memory-aware OOM guard.
+"""Unified-memory-aware OOM guard (painless-soft / forceful-hard).
 
-Watches system RAM + per-backend cgroup memory + GPU/NPU allocation. On
-pressure, relieves gracefully for model backends (their unload API) and
-forcefully for apps (SIGTERM/SIGKILL). Victims are chosen by a priority
-score, NOT a service whitelist — only "kill-the-box" core units are
-hard-protected. See openspec/changes/memory-oom-guard/.
+Memory is meant to be USED — fill the 128 GB before acting. SOFT relief is
+painless (drop caches + unload only idle/non-pinned models, NEVER kill). HARD
+relief (kill/restart) fires only at a true near-OOM floor. Victim selection is
+by RSS-based priority (cgroup memory.current freshness = idle, + a model
+restart-cost bias), NEVER by VmSize — on this box node/V8 and mmap-heavy
+processes (baloo ~269 GB, claude/opencode ~78 GB) reserve huge virtual but
+commit little real RAM, so VmSize picks the wrong victim. VmSize is logged
+only. Whole user@<uid> sessions are protected (killing one logs you out);
+individual apps under them are fair game.
+
+KILL SWITCH: touch /etc/aipc/oom-guard.disabled to suspend (monitor only).
+See openspec/changes/memory-oom-guard/.
 """
 import glob
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
 import urllib.request
 
-import yaml
-
 NORMAL, SOFT, HARD = "NORMAL", "SOFT", "HARD"
+DEFAULT_DISABLE_SENTINEL = "/etc/aipc/oom-guard.disabled"
+_SESSION_RE = re.compile(r"user@\d+\.service$")
 
 
 class OomGuard:
@@ -27,6 +35,7 @@ class OomGuard:
         self.state = NORMAL
         self.since = time.time()
         self.log_path = cfg["ring_buffer"]
+        self.sentinel = cfg.get("disable_sentinel", DEFAULT_DISABLE_SENTINEL)
         os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
         self.self_cgroup = self._self_cgroup()
 
@@ -38,26 +47,14 @@ class OomGuard:
                     return int(line.split()[1]) // 1024
         return 0
 
-    def gpu_vram_mb(self):
-        # ponytail: rocm-smi optional; unified-memory VRAM the kernel undercounts.
-        # ceiling: card/key naming varies across rocm-smi versions; failure = skip.
-        try:
-            out = subprocess.run(
-                ["rocm-smi", "--showmeminfo", "vram", "--json"],
-                capture_output=True, text=True, timeout=4).stdout
-            tot = 0
-            for d in json.loads(out).values():
-                if isinstance(d, dict):
-                    for k, v in d.items():
-                        if "VRAM" in k and "Used" in k:
-                            tot += int(v)
-            return tot // (1024 * 1024)
-        except Exception:
-            return None
-
     def top_cgroups(self, n):
-        # ponytail: glob service cgroups under system.slice + user.slice;
-        # O(services) per poll, fine at 1 Hz.
+        # ponytail: victim metric is RSS (memory.current), not VmSize. This
+        # box's node/V8 + mmap processes reserve huge virtual but little real
+        # RAM; VmSize picks the wrong victim. memory.current is the real
+        # resident cost of killing the cgroup. NOTE: model backends that map
+        # weights into unified GPU/NPU memory may under-report here — SOFT
+        # unloads them via the backend API (not this metric); HARD relies on
+        # priority/idle, so an under-reported backend just ranks safe.
         entries = []
         for pat in ("/sys/fs/cgroup/system.slice/*.service",
                     "/sys/fs/cgroup/user.slice/**/*.service"):
@@ -86,9 +83,13 @@ class OomGuard:
         return ("app", None)
 
     def is_protected(self, entry):
-        # anti-self-kill: core system + self. NOT a service whitelist.
         name = entry["cgroup"]
         if name in (self.self_cgroup, "system.slice/oom-guard.service"):
+            return True
+        # never target a whole user@<uid> session cgroup — killing it logs the
+        # user out. Individual apps live under it in app.slice/ (different
+        # basename) and remain eligible.
+        if _SESSION_RE.search(name.split("/")[-1]):
             return True
         return any(p in name for p in self.cfg.get("protected_patterns", []))
 
@@ -101,79 +102,97 @@ class OomGuard:
 
     # --- relief ---
     def relieve(self, level):
+        if level == SOFT and not self.cfg.get("dry_run"):
+            self._relieve_soft()  # painless only — never kills
+            return
+        # dry_run (any level) or HARD: pick a victim by PRIORITY (idle-heavy
+        # apps first, models carry a restart-cost bias) — NOT highest RSS.
+        # An in-use service (fresh memory.current = low idle) ranks safe; a
+        # long-idle hog ranks first. top_cgroups is already RSS-sorted but we
+        # re-sort by priority for the decision.
         victims = [e for e in self.top_cgroups(self.cfg["top_n"])
                    if not self.is_protected(e)]
         if not victims:
-            self.log_event(level=level, action="noop", result="no-victim",
-                           reason="all top cgroups protected")
+            self.log_event(level=level, dry_run=bool(self.cfg.get("dry_run")),
+                           action="noop", result="no-victim")
             return
         victims.sort(key=lambda e: (self.classify(e)[0] != "app", self.priority(e)))
         target = victims[0]
         cls, backend = self.classify(target)
+        pid = self._cgroup_main_pid(target["path"])
+        detail = self._proc_detail(pid)
+        if self.cfg.get("dry_run"):
+            self.log_event(level=level, dry_run=True, action="would-act", would=cls,
+                           target_cgroup=target["cgroup"], target_mb=target["mb"], **detail)
+            return
+        # HARD: forceful
         mem_before = self.mem_available_mb()
         if cls == "model":
-            self._relieve_model(level, backend)
+            self._restart(self.cfg["backends"][backend]["unit"])
+            action = f"restart:{backend}"
         else:
-            self._relieve_app(level, target)
-        self.log_event(level=level, mem_before=mem_before,
-                       mem_after=self.mem_available_mb(),
-                       target_cgroup=target["cgroup"], cls=cls,
-                       backend=backend, target_mb=target["mb"])
+            self._relieve_app(target)
+            action = "kill:app"
+        mem_after = self.mem_available_mb()
+        self.log_event(level=HARD, action=action, mem_before=mem_before,
+                       mem_after=mem_after, target_cgroup=target["cgroup"],
+                       cls=cls, backend=backend, target_mb=target["mb"], **detail)
+        self._notify(f"OOM guard: {action}",
+                     f"mem free {mem_before}->{mem_after}MB | "
+                     f"{target['cgroup']} (RSS {target['mb']}MB)")
 
-    def _relieve_model(self, level, backend):
-        bcfg = self.cfg["backends"][backend]
-        if level == SOFT:
-            self._backend_unload(backend, bcfg)
-        else:
-            self._restart(bcfg["unit"])
+    def _relieve_soft(self):
+        # painless: drop page cache (kernel rebuilds it, user can't tell) +
+        # unload ONE idle/non-pinned model. No process is killed in SOFT.
+        self._drop_caches()
+        self._unload_idle_model()
 
-    def _backend_unload(self, backend, bcfg):
+    def _drop_caches(self):
         try:
-            if backend == "ollama":
-                return self._ollama_unload(bcfg)
-            if backend == "lemonade":
-                return self._lemonade_unload(bcfg)
-            if backend == "vllm":
-                return self._vllm_sleep(bcfg)
-        except Exception as e:
-            self.log_event(action=f"unload:{backend}", result="error", reason=repr(e))
+            with open("/proc/sys/vm/drop_caches", "w") as f:
+                f.write("1")
+            self.log_event(level=SOFT, action="drop_caches", result="ok")
+        except OSError as e:
+            self.log_event(level=SOFT, action="drop_caches", result="error", reason=repr(e))
 
-    def _ollama_unload(self, bcfg):
-        models = self._http(bcfg["base_url"] + "/api/tags").get("models", [])
-        if not models:
+    def _unload_idle_model(self):
+        # unload one idle non-pinned loaded model from whichever backend has
+        # one. Best-effort; backends not running are skipped.
+        for backend, bcfg in self.cfg.get("backends", {}).items():
+            try:
+                if backend == "ollama":
+                    models = self._http(bcfg["base_url"] + "/api/tags").get("models", [])
+                    if models:
+                        v = min(models, key=lambda m: m.get("expires_at", 0))
+                        self._http(bcfg["base_url"] + "/api/generate",
+                                   {"model": v["name"], "keep_alive": 0})
+                        self.log_event(level=SOFT, action="unload:ollama", result="ok", target=v["name"])
+                        return
+                elif backend == "lemonade":
+                    # payload verified 2026-07-05: POST {model_name} -> 200.
+                    # /api/v0/load times out (>90s); rely on on-demand auto-load
+                    # to restore. SOFT unloads only idle non-pinned.
+                    health = self._http(bcfg["base_url"] + "/api/v0/health")
+                    loaded = [m for m in health.get("all_models_loaded", [])
+                              if m.get("loaded") and not m.get("pinned")]
+                    if loaded:
+                        v = max(loaded, key=lambda m: m.get("last_use", 0))
+                        self._http(bcfg["base_url"] + bcfg["unload_path"],
+                                   {"model_name": v["model_name"]})
+                        self.log_event(level=SOFT, action="unload:lemonade", result="ok", target=v["model_name"])
+                        return
+                # vllm: no per-idle unload; HARD falls back to systemctl restart.
+            except Exception as e:
+                self.log_event(level=SOFT, action=f"probe:{backend}", result="error", reason=repr(e))
+        self.log_event(level=SOFT, action="unload", result="no-idle-model")
+
+    def _relieve_app(self, target):
+        pid = self._cgroup_main_pid(target["path"])
+        if not pid:
             return
-        victim = min(models, key=lambda m: m.get("expires_at", 0))  # LRU
-        self._http(bcfg["base_url"] + "/api/generate",
-                   {"model": victim["name"], "keep_alive": 0})
-        self.log_event(action="unload:ollama", result="ok", target=victim["name"])
-
-    def _lemonade_unload(self, bcfg):
-        # endpoint verified to exist (405 on GET) 2026-07-04; payload field
-        # name confirmed on hardware in the (AI PC) task — see how.md risk.
-        health = self._http(bcfg["base_url"] + "/api/v0/health")
-        loaded = [m for m in health.get("all_models_loaded", [])
-                  if m.get("loaded") and not m.get("pinned")]
-        if not loaded:
-            return
-        victim = max(loaded, key=lambda m: m.get("last_use", 0))
-        self._http(bcfg["base_url"] + bcfg["unload_path"],
-                   {"model_name": victim["model_name"]})
-        self.log_event(action="unload:lemonade", result="ok",
-                       target=victim["model_name"])
-
-    def _vllm_sleep(self, bcfg):
-        self._http(bcfg["base_url"] + bcfg["sleep_path"], {}, method="POST")
-        self.log_event(action="sleep:vllm", result="ok")
-
-    def _relieve_app(self, level, target):
-        pids = self._cgroup_pids(target["path"])
-        if not pids:
-            return
-        pid = min(pids)  # ponytail: main process is lowest pid in the cgroup
-        sig = signal.SIGKILL if level == HARD else signal.SIGTERM
         try:
-            os.kill(pid, sig)
-            self.log_event(action=f"kill:{sig.name}", pid=pid)
+            os.kill(pid, signal.SIGKILL)  # HARD only
+            self.log_event(action="kill:SIGKILL", pid=pid, **self._proc_detail(pid))
         except ProcessLookupError:
             pass
 
@@ -182,11 +201,62 @@ class OomGuard:
         subprocess.run(["systemctl", "restart", unit], timeout=30)
         self.log_event(action=f"restart:{unit}")
 
-    def _cgroup_pids(self, cgroup_path):
+    def _cgroup_main_pid(self, cgroup_path):
         try:
-            return [int(x) for x in open(cgroup_path + "/cgroup.procs") if x.strip()]
+            pids = [int(x) for x in open(cgroup_path + "/cgroup.procs") if x.strip()]
+            return min(pids) if pids else None
         except OSError:
-            return []
+            return None
+
+    def _proc_detail(self, pid):
+        # log-only memory breakdown — distinguishes a real hog (high RssAnon)
+        # from a virtual-reserve phantom (high VmSize, low RssAnon, e.g.
+        # opencode/baloo/claude). NEVER feeds a decision; see top_cgroups.
+        if not pid:
+            return {}
+        try:
+            s = {}
+            for l in open(f"/proc/{pid}/status"):
+                if ":" in l:
+                    k, v = l.split(":", 1); s[k.strip()] = v.strip()
+            cmd = open(f"/proc/{pid}/cmdline").read().replace("\x00", " ").strip()[:80]
+            return {"cmd": cmd, "VmSize": s.get("VmSize", "?"),
+                    "RssAnon": s.get("RssAnon", "?"), "RssFile": s.get("RssFile", "?"),
+                    "RssShmem": s.get("RssShmem", "?")}
+        except OSError:
+            return {}
+
+    def _primary_uid(self):
+        # resolve the desktop user dynamically — never hardcode a username.
+        try:
+            uids = [int(d) for d in os.listdir("/run/user") if d.isdigit()]
+            return min((u for u in uids if u >= 1000), default=None)
+        except OSError:
+            return None
+
+    def _notify(self, title, body):
+        # desktop notification on FORCEFUL action only (HARD), so the user
+        # sees the guard acted. Sent into the primary user's Plasma session.
+        # ponytail ceiling: DISPLAY/WAYLAND/DBUS paths assume a single-user
+        # Plasma login; if notify-send fails we just log it and never block.
+        uid = self._primary_uid()
+        if not uid:
+            return
+        import pwd
+        try:
+            user = pwd.getpwuid(uid).pw_name
+        except KeyError:
+            return
+        env = {"XDG_RUNTIME_DIR": f"/run/user/{uid}",
+               "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+               "DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0", "PATH": "/usr/bin:/bin"}
+        try:
+            subprocess.run(["runuser", "-u", user, "--", "notify-send",
+                            "--icon=dialog-warning", "--urgency=critical",
+                            title, body[:200]],
+                           env=env, timeout=5, capture_output=True)
+        except Exception as e:
+            self.log_event(action="notify", result="error", reason=repr(e))
 
     def _self_cgroup(self):
         try:
@@ -212,6 +282,8 @@ class OomGuard:
 
     # --- state machine ---
     def step(self):
+        if os.path.exists(self.sentinel):
+            return  # kill switch active: monitor only, never act
         mem = self.mem_available_mb()
         soft, hard = self.cfg["soft_bar_mb"], self.cfg["hard_bar_mb"]
         elapsed = time.time() - self.since
@@ -252,12 +324,15 @@ def self_test():
     lemon = {"cgroup": "system.slice/lemonade.service", "mb": 9000, "idle": 5}
     app = {"cgroup": "user.slice/user-1000.slice/user@1000.service/"
                      "app.slice/firefox.service", "mb": 4000, "idle": 5}
+    session = {"cgroup": "user.slice/user-1000.slice/user@1000.service", "mb": 7222, "idle": 5}
     journald = {"cgroup": "system.slice/systemd-journald.service", "mb": 100, "idle": 9999}
     assert g.classify(lemon) == ("model", "lemonade")
     assert g.classify(app) == ("app", None)
     assert g.is_protected(journald) is True
-    assert g.is_protected(lemon) is False      # models relieved, not protected
-    assert g.priority(app) < g.priority(lemon)  # app evicted before model at equal idle
+    assert g.is_protected(session) is True      # whole session must be protected
+    assert g.is_protected(app) is False          # individual app under it is eligible
+    assert g.is_protected(lemon) is False
+    assert g.priority(app) < g.priority(lemon)
     print("self-test passed")
 
 
@@ -266,5 +341,6 @@ if __name__ == "__main__":
         self_test()
         sys.exit(0)
     cfg_path = os.environ.get("OOM_GUARD_CONFIG", "/etc/aipc/oom-guard/config.yaml")
+    import yaml
     with open(cfg_path) as f:
         OomGuard(yaml.safe_load(f)).run()

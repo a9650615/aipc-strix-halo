@@ -1,13 +1,24 @@
-# OOM guard configuration — all values tunable, calibrate on hardware (AI PC).
+# OOM guard configuration — memory is meant to be used: fill the 128 GB
+# before acting. All values tunable, calibrate on hardware (AI PC).
 # See openspec/changes/memory-oom-guard/.
 poll_interval: 1            # seconds between pressure reads
-soft_bar_mb: 12288          # ~12 GB free -> graceful relief
-hard_bar_mb: 4096           # ~4 GB free -> forceful relief
+soft_bar_mb: 8192           # ~8 GB free -> PAINLESS relief (drop caches + idle model unload)
+hard_bar_mb: 2048           # ~2 GB free -> FORCEFUL relief (kill app / restart model)
 t_soft: 10                  # seconds below soft_bar before SOFT trip
 t_hard: 3                   # seconds below hard_bar before HARD trip
 top_n: 8                    # candidate cgroups examined per relief
 model_protect_bias: 600     # seconds added to model priority (restart cost)
 ring_buffer: /var/lib/aipc-oom-guard/events.jsonl
+
+# KILL SWITCH: touch this file to suspend the guard immediately (it keeps
+# polling but never acts); remove it to resume. systemd also checks it at
+# boot via ConditionPathExists, so a touched sentinel means no autostart.
+disable_sentinel: /etc/aipc/oom-guard.disabled
+
+# OBSERVE-ONLY: log the relief decision (would-act) but execute nothing —
+# safe to run while calibrating thresholds against real pressure ("跑不炸").
+# Flip to false once the event log shows the guard picks the right victims.
+dry_run: true
 
 backends:
   lemonade:
