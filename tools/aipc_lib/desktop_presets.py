@@ -6,58 +6,45 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-KWIN_SCRIPT_ID = "focused-screen-panels"
+KWIN_SCRIPT_ID = "fullscreen-hides-dock"
 
 _METADATA_JSON = """{
     "KPackageStructure": "KWin/Script",
     "KPlugin": {
         "Authors": [{"Name": "aipc"}],
-        "Description": "Shows the Dock/top bar only on the currently focused screen; even that screen hides them while a window on it is truly fullscreen",
+        "Description": "Hides a screen's Dock only while a window on that specific screen is truly fullscreen; the Dock and top bar are otherwise always visible on every screen",
         "Icon": "preferences-system-windows-script-test",
-        "Id": "focused-screen-panels",
+        "Id": "fullscreen-hides-dock",
         "License": "MIT",
-        "Name": "Focused Screen Panels"
+        "Name": "Fullscreen Hides Dock"
     },
     "X-Plasma-API": "javascript"
 }
 """
 
-# Three bugs, three wrong fixes, this is the fourth and correct one (2026-07-04):
-#   1. hiding="none"/"dodgewindows" reserve strut space, so a truly
-#      fullscreen window gets squeezed down to fit around the panel instead
-#      of using the whole screen.
-#   2. hiding="autohide" on *every* panel fixes (1) but now the Dock/top bar
-#      disappear even on a screen with no fullscreen window at all.
-#   3. Only autohiding the *active* screen while fullscreen (leaving other
-#      screens' panels untouched) fixed (2) but never re-hid the
-#      *unfocused* screens at all, since nothing ever set them back to
-#      autohide -- both screens' Docks stayed visible permanently. The user
-#      explicitly wants only the focused screen's Dock/top bar shown, the
-#      rest hidden.
-# The fix has to touch *every* panel on *every* recheck: the focused
-# screen's panels are visible unless its window is truly fullscreen (in
-# which case autohide, per bug 1/2); every other screen's panels are always
-# autohide. Plasma's built-in panel visibility modes have no single option
-# for any of this (the closest, "Windows Can Cover", was removed in Plasma 6:
-# https://discuss.kde.org/t/windows-can-cover-panel-can-we-have-it-back-in-plasma-6/15706),
-# hence the KWin script.
+# Went through several designs in one session (2026-07-04) trying to make the
+# Dock/top bar only show on the focused screen -- each fix uncovered another
+# bug (forgetting to reset other screens, not tracking pre-existing windows,
+# an un-verifiable fix), and the whole "which screen is focused" tracking
+# turned out to not even be what was wanted. Direct user feedback: "頂部選單列
+# 要常駐,dock focus 才出現 or 做不到的話就常駐也沒關係" (top bar should be
+# persistent; Dock only on focus, or if that can't be done, persistent is
+# fine too) -- given how much fragility the focus-tracking version had, this
+# takes the offered simpler fallback instead of continuing to chase it:
 #
-# Screen identity is matched by array position between KWin's workspace.screens
-# and Plasma's panels() `.screen` index -- the only correlation the two separate
-# scripting APIs (KWin JS vs Plasma Shell JS) expose. If a screen is
-# unplugged/replugged in a different order the mapping can drift until KWin
-# restarts.
+#   - Top bar: always visible on every screen, hiding="none" set once at
+#     panel creation, never touched again. No script involvement.
+#   - Dock: always visible (hiding="none") *except* on whichever specific
+#     screen currently has an active window that is truly fullscreen --
+#     that screen's Dock (only that one) switches to "autohide" so the
+#     fullscreen window isn't squeezed by reserved strut space (the one part
+#     of the original "Mac experience" request that's an actual visual bug,
+#     not a preference).
 #
-# workspace.windowAdded only fires for windows created *after* this script
-# loads -- any window already open at load/reload time (i.e. every window,
-# right after `aipc config preset apply` runs a KWin reconfigure) never got
-# fullScreenChanged wired up, so toggling fullscreen on it did nothing until
-# some unrelated event (e.g. a focus change) happened to force a recheck --
-# visible as an extra jump/flicker on top of the panel-hide layout jump that
-# switching hiding modes inherently causes (there's no way to avoid that one;
-# real macOS fullscreen uses an animated dedicated Space, which Plasma panel
-# visibility toggling doesn't replicate). Fixed by also walking
-# workspace.stackingOrder (every currently-managed window) at script load.
+# This only ever needs to know, for the window that was just
+# activated/toggled, which single screen it's on -- no more "reset every
+# other screen too" step, which removes the riskiest and buggiest part of
+# the previous design.
 _MAIN_JS = """\
 function findOutputIndex(output) {
     var screens = workspace.screens;
@@ -69,17 +56,13 @@ function findOutputIndex(output) {
     return 0;
 }
 
-function applyAllPanels(activeIdx, activeFullScreen) {
+function updateDockForScreen(screenIdx, fullScreen) {
     var script =
         "var ps = panels();" +
         "for (var i = 0; i < ps.length; i++) {" +
         "  var p = ps[i];" +
-        "  if (p.location === 'bottom' || p.location === 'top') {" +
-        "    if (p.screen === " + activeIdx + ") {" +
-        "      p.hiding = " + (activeFullScreen ? "'autohide'" : "'none'") + ";" +
-        "    } else {" +
-        "      p.hiding = 'autohide';" +
-        "    }" +
+        "  if (p.location === 'bottom' && p.screen === " + screenIdx + ") {" +
+        "    p.hiding = " + (fullScreen ? "'autohide'" : "'none'") + ";" +
         "  }" +
         "}";
     callDBus("org.kde.plasmashell", "/PlasmaShell", "org.kde.PlasmaShell", "evaluateScript", script);
@@ -89,7 +72,7 @@ function recheck(window) {
     if (!window || !window.output) {
         return;
     }
-    applyAllPanels(findOutputIndex(window.output), !!window.fullScreen);
+    updateDockForScreen(findOutputIndex(window.output), !!window.fullScreen);
 }
 
 function trackWindow(window) {
@@ -104,6 +87,10 @@ function trackWindow(window) {
 workspace.windowActivated.connect(recheck);
 workspace.windowAdded.connect(trackWindow);
 
+// workspace.windowAdded only fires for windows created after this script
+// loads -- walk every already-open window too (workspace.stackingOrder),
+// or toggling fullscreen on one does nothing until an unrelated event
+// forces a recheck.
 var existing = workspace.stackingOrder;
 for (var i = 0; i < existing.length; i++) {
     trackWindow(existing[i]);
@@ -153,7 +140,7 @@ def touchpad_mac_style_commands() -> list[list[str]]:
     ]
 
 
-def dock_follow_focus_enable_command() -> list[str]:
+def enable_kwin_script_command() -> list[str]:
     return [
         "kwriteconfig6",
         "--file",
@@ -200,12 +187,6 @@ def ensure_panels_script(screen_count: int, primary_x: int, primary_y: int) -> s
     list onto every other connected screen, replacing anything already
     there.
 
-    User feedback 2026-07-04: "我希望能直接同步 main screen 設定" (I want to
-    directly sync the main screen's config) -- a hardcoded widget list
-    baked into this module meant customizing the Dock meant editing Python;
-    reading the primary screen's live panels() state instead means the GUI
-    is the only place you ever need to touch.
-
     Every apply removes *all* existing bottom/top panels first and
     recreates them from the primary screen's spec (not idempotent-by-
     skipping on purpose -- an earlier "only create if this screen doesn't
@@ -214,9 +195,10 @@ def ensure_panels_script(screen_count: int, primary_x: int, primary_y: int) -> s
     screen has no bottom/top panel yet (first-ever run), falls back to a
     reasonable default spec so there's something to clone next time.
 
-    New panels default to `hiding = "autohide"`; focused-screen-panels.kwinscript
-    then makes the currently focused screen's panels visible (unless its
-    window is truly fullscreen), keeping every other screen's autohidden.
+    Both panels default to `hiding = "none"` (always visible) -- the top
+    bar stays that way permanently; fullscreen-hides-dock.kwinscript then
+    autohides only a screen's Dock, only while that screen actually has a
+    fullscreen window.
     """
     return f"""\
 var screenCount = {screen_count};
@@ -276,7 +258,7 @@ function applySpec(panel, location, spec) {{
   panel.height = spec.height;
   panel.floating = spec.floating;
   panel.opacity = spec.opacity;
-  panel.hiding = "autohide";
+  panel.hiding = "none";
   for (var i = 0; i < spec.widgets.length; i++) {{ panel.addWidget(spec.widgets[i]); }}
 }}
 
@@ -323,9 +305,10 @@ PRESETS: dict[str, Preset] = {
         name="mac",
         description=(
             "macOS-like KDE Plasma desktop: window buttons on the left, "
-            "natural-scroll + tap-to-click touchpad, Dock + menu bar shown "
-            "only on the focused screen (autohidden elsewhere, and even "
-            "there while fullscreen) (GZ302EA touchpad id hardcoded)"
+            "natural-scroll + tap-to-click touchpad, top bar always "
+            "visible, Dock always visible except autohidden on a screen "
+            "while it has a truly fullscreen window (GZ302EA touchpad id "
+            "hardcoded)"
         ),
     ),
 }
@@ -343,7 +326,7 @@ def apply_preset(name: str, home: Path, runner: RunnerT = subprocess.run) -> Non
     for cmd in touchpad_mac_style_commands():
         runner(cmd, check=True)
     install_kwin_script(home)
-    runner(dock_follow_focus_enable_command(), check=True)
+    runner(enable_kwin_script_command(), check=True)
     screen_count = connected_screen_count(runner)
     primary_x, primary_y = primary_screen_position(runner)
     runner(ensure_panels_command(screen_count, primary_x, primary_y), check=True)

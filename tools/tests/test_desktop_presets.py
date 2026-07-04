@@ -62,18 +62,25 @@ def test_primary_screen_position_picks_lowest_priority_output() -> None:
 
 
 def test_ensure_panels_script_clones_primary_screens_current_panel() -> None:
-    # User feedback 2026-07-04: "我希望能直接同步 main screen 設定" -- the
-    # widget list is no longer hardcoded in Python; the script itself reads
-    # whatever the primary screen's panels() currently look like and clones
-    # that onto every screen, so customizing via the GUI is enough.
     script = desktop_presets.ensure_panels_script(2, 331, 1271)
     assert "screenCount = 2" in script
     assert "g.x === 331 && g.y === 1271" in script
     assert "function readSpec(panel)" in script
     assert "ps[i].remove()" in script
-    # still has a bootstrap default for the very first run (no panel to clone yet)
     assert "org.kde.plasma.kickoff" in script
-    assert 'panel.hiding = "autohide"' in script
+
+
+def test_ensure_panels_script_panels_default_to_always_visible() -> None:
+    # Direct user feedback 2026-07-04: "頂部選單列要常駐,dock focus 才出現 or
+    # 做不到的話就常駐也沒關係" (top bar should be persistent; Dock only on
+    # focus, or persistent is fine too if that can't be done) -- given how
+    # buggy the focus-tracking design turned out to be, both panels now
+    # default to always-visible; fullscreen-hides-dock.kwinscript is the
+    # only thing that ever hides the Dock (never the top bar), and only on
+    # the one screen that actually has a fullscreen window.
+    script = desktop_presets.ensure_panels_script(2, 0, 0)
+    assert 'panel.hiding = "none"' in script
+    assert "autohide" not in script
 
 
 def test_install_kwin_script_writes_metadata_and_main_js(tmp_path: Path) -> None:
@@ -85,17 +92,11 @@ def test_install_kwin_script_writes_metadata_and_main_js(tmp_path: Path) -> None
     main_js = (script_dir / "contents/code/main.js").read_text()
     assert "workspace.windowActivated.connect(recheck)" in main_js
     assert "window.fullScreenChanged" in main_js
-    # Regression (bug report #3): every recheck must set *every* panel's
-    # hiding, not just the focused screen's -- otherwise unfocused screens
-    # never get re-hidden once they've been shown.
-    assert "} else {" in main_js
-    assert "'autohide';" in main_js
-    # Regression: windowAdded only fires for windows opened *after* the
-    # script loads -- must also wire up every already-open window via
-    # stackingOrder, or toggling fullscreen on a pre-existing window does
-    # nothing until an unrelated event forces a recheck (visible as a
-    # jump/flicker).
     assert "workspace.stackingOrder" in main_js
+    # Regression: must only ever touch 'bottom' (Dock) panels, never 'top'
+    # (top bar stays permanently visible, no script involvement).
+    assert "p.location === 'bottom'" in main_js
+    assert "p.location === 'top'" not in main_js
 
 
 def test_apply_preset_unknown_name_raises_key_error(tmp_path: Path) -> None:
