@@ -47,29 +47,33 @@ def test_connected_screen_count_counts_only_connected_and_enabled() -> None:
     assert desktop_presets.connected_screen_count(runner=fake_runner) == 1
 
 
-def test_ensure_panels_script_creates_autohidden_panels_by_default() -> None:
-    # New panels default to autohide -- focused-screen-panels.kwinscript is
-    # what makes the focused screen's panels visible on each recheck; other
-    # screens (and the focused one before the script's first recheck) stay
-    # hidden. This must not regress to a permanent "none"/visible default
-    # (bug report #3, 2026-07-04): only the focused screen should ever show
-    # its Dock/top bar.
-    script = desktop_presets.ensure_panels_script(2)
+def test_primary_screen_position_picks_lowest_priority_output() -> None:
+    payload = {
+        "outputs": [
+            {"connected": True, "enabled": True, "priority": 2, "pos": {"x": 0, "y": 0}},
+            {"connected": True, "enabled": True, "priority": 1, "pos": {"x": 331, "y": 1271}},
+        ]
+    }
+
+    def fake_runner(cmd, **kwargs):
+        return _FakeCompletedProcess(stdout=json.dumps(payload))
+
+    assert desktop_presets.primary_screen_position(runner=fake_runner) == (331, 1271)
+
+
+def test_ensure_panels_script_clones_primary_screens_current_panel() -> None:
+    # User feedback 2026-07-04: "我希望能直接同步 main screen 設定" -- the
+    # widget list is no longer hardcoded in Python; the script itself reads
+    # whatever the primary screen's panels() currently look like and clones
+    # that onto every screen, so customizing via the GUI is enough.
+    script = desktop_presets.ensure_panels_script(2, 331, 1271)
     assert "screenCount = 2" in script
-    assert 'p.hiding = "autohide"' in script
-    assert 't.hiding = "autohide"' in script
-
-
-def test_ensure_panels_script_removes_existing_panels_before_recreating() -> None:
-    # Regression (bug report #4, 2026-07-04): "only create if this screen
-    # doesn't already have a panel" let one screen's hand-made panel (extra
-    # widgets) drift out of sync with the others, reported as "layout
-    # broken" on that screen. The preset must be the single source of
-    # truth -- remove every existing bottom/top panel first, then recreate
-    # identical ones on every screen, so no screen can ever diverge.
-    script = desktop_presets.ensure_panels_script(2)
+    assert "g.x === 331 && g.y === 1271" in script
+    assert "function readSpec(panel)" in script
     assert "ps[i].remove()" in script
-    assert "haveBottom" not in script
+    # still has a bootstrap default for the very first run (no panel to clone yet)
+    assert "org.kde.plasma.kickoff" in script
+    assert 'panel.hiding = "autohide"' in script
 
 
 def test_install_kwin_script_writes_metadata_and_main_js(tmp_path: Path) -> None:
@@ -102,7 +106,11 @@ def test_apply_preset_mac_runs_expected_commands_and_installs_script(tmp_path: P
     def fake_runner(cmd, **kwargs):
         calls.append(cmd)
         if cmd[:2] == ["kscreen-doctor", "-j"]:
-            return _FakeCompletedProcess(stdout=json.dumps({"outputs": [{"connected": True, "enabled": True}]}))
+            return _FakeCompletedProcess(
+                stdout=json.dumps(
+                    {"outputs": [{"connected": True, "enabled": True, "priority": 1, "pos": {"x": 0, "y": 0}}]}
+                )
+            )
         return _FakeCompletedProcess(0)
 
     desktop_presets.apply_preset("mac", tmp_path, runner=fake_runner)

@@ -164,26 +164,107 @@ def connected_screen_count(runner: RunnerT = subprocess.run) -> int:
     return sum(1 for o in data.get("outputs", []) if o.get("connected") and o.get("enabled"))
 
 
-def ensure_panels_script(screen_count: int) -> str:
-    """Plasma evaluateScript source: this preset is the single source of
-    truth for every screen's Dock + top bar, so every apply removes *all*
-    existing bottom/top panels first and recreates identical ones on every
-    connected screen from this one spec.
+def primary_screen_position(runner: RunnerT = subprocess.run) -> tuple[int, int]:
+    """(x, y) layout position of the primary output (lowest `priority`),
+    per `kscreen-doctor -j`. This is the same coordinate space as Plasma's
+    scripting `screenGeometry(i).x/.y`, so the two can be matched up to find
+    which Plasma panel `.screen` index is the primary display."""
+    result = runner(["kscreen-doctor", "-j"], capture_output=True, text=True, check=True)
+    data = json.loads(result.stdout)
+    outputs = [o for o in data.get("outputs", []) if o.get("connected") and o.get("enabled")]
+    primary = min(outputs, key=lambda o: o.get("priority", 999))
+    pos = primary["pos"]
+    return pos["x"], pos["y"]
 
-    Not idempotent-by-skipping on purpose: an earlier "only create if this
-    screen doesn't already have one" version let a screen's panel drift out
-    of sync with the others (a hand-made panel with extra widgets on one
-    monitor never got reconciled, reported as "layout broken" on that
-    screen -- 2026-07-04). Removing and recreating guarantees every screen
-    matches, at the cost of discarding any manual per-screen customization.
 
-    New panels default to `hiding = "autohide"`. focused-screen-panels.kwinscript
+def ensure_panels_script(screen_count: int, primary_x: int, primary_y: int) -> str:
+    """Plasma evaluateScript source: the primary screen's *current* Dock +
+    top bar (whatever the user has actually configured for it via the GUI)
+    is the single source of truth -- clone its panel properties and widget
+    list onto every other connected screen, replacing anything already
+    there.
+
+    User feedback 2026-07-04: "我希望能直接同步 main screen 設定" (I want to
+    directly sync the main screen's config) -- a hardcoded widget list
+    baked into this module meant customizing the Dock meant editing Python;
+    reading the primary screen's live panels() state instead means the GUI
+    is the only place you ever need to touch.
+
+    Every apply removes *all* existing bottom/top panels first and
+    recreates them from the primary screen's spec (not idempotent-by-
+    skipping on purpose -- an earlier "only create if this screen doesn't
+    already have one" version let a screen's panel drift out of sync with
+    the others, reported as "layout broken" on that screen). If the primary
+    screen has no bottom/top panel yet (first-ever run), falls back to a
+    reasonable default spec so there's something to clone next time.
+
+    New panels default to `hiding = "autohide"`; focused-screen-panels.kwinscript
     then makes the currently focused screen's panels visible (unless its
     window is truly fullscreen), keeping every other screen's autohidden.
     """
     return f"""\
 var screenCount = {screen_count};
+var primaryIdx = 0;
+for (var i = 0; i < screenCount; i++) {{
+  var g = screenGeometry(i);
+  if (g.x === {primary_x} && g.y === {primary_y}) {{
+    primaryIdx = i;
+    break;
+  }}
+}}
+
+function readSpec(panel) {{
+  var widgets = panel.widgets();
+  var types = [];
+  for (var i = 0; i < widgets.length; i++) {{ types.push(widgets[i].type); }}
+  return {{
+    alignment: panel.alignment, offset: panel.offset, lengthMode: panel.lengthMode,
+    length: panel.length, height: panel.height, floating: panel.floating,
+    opacity: panel.opacity, widgets: types
+  }};
+}}
+
 var ps = panels();
+var bottomSpec = null, topSpec = null;
+for (var i = 0; i < ps.length; i++) {{
+  if (ps[i].screen !== primaryIdx) continue;
+  if (ps[i].location === "bottom") bottomSpec = readSpec(ps[i]);
+  if (ps[i].location === "top") topSpec = readSpec(ps[i]);
+}}
+
+if (!bottomSpec) {{
+  bottomSpec = {{
+    alignment: "center", offset: 0, lengthMode: "fit", length: 0, height: 44,
+    floating: true, opacity: "adaptive",
+    widgets: ["org.kde.plasma.kickoff", "org.kde.plasma.pager", "org.kde.plasma.icontasks",
+              "org.kde.plasma.marginsseparator", "org.kde.plasma.folder"]
+  }};
+}}
+if (!topSpec) {{
+  topSpec = {{
+    alignment: "center", offset: 0, lengthMode: "fill", length: 0, height: 30,
+    floating: false, opacity: "translucent",
+    widgets: ["org.kde.plasma.digitalclock", "org.kde.plasma.showdesktop",
+              "org.kde.plasma.systemtray", "org.kde.plasma.battery", "org.kde.plasma.panelspacer"]
+  }};
+}}
+
+function applySpec(panel, location, spec) {{
+  panel.location = location;
+  panel.alignment = spec.alignment;
+  panel.offset = spec.offset;
+  panel.lengthMode = spec.lengthMode;
+  if (spec.lengthMode !== "fit" && spec.lengthMode !== "fill" && spec.length > 0) {{
+    panel.length = spec.length;
+  }}
+  panel.height = spec.height;
+  panel.floating = spec.floating;
+  panel.opacity = spec.opacity;
+  panel.hiding = "autohide";
+  for (var i = 0; i < spec.widgets.length; i++) {{ panel.addWidget(spec.widgets[i]); }}
+}}
+
+ps = panels();
 for (var i = ps.length - 1; i >= 0; i--) {{
   if (ps[i].location === "bottom" || ps[i].location === "top") {{
     ps[i].remove();
@@ -191,35 +272,23 @@ for (var i = ps.length - 1; i >= 0; i--) {{
 }}
 for (var s = 0; s < screenCount; s++) {{
   var p = new Panel;
-  p.screen = s; p.location = "bottom"; p.alignment = "center"; p.offset = 0;
-  p.lengthMode = "fit"; p.height = 44; p.floating = true; p.opacity = "adaptive";
-  p.hiding = "autohide";
-  p.addWidget("org.kde.plasma.kickoff");
-  p.addWidget("org.kde.plasma.pager");
-  p.addWidget("org.kde.plasma.icontasks");
-  p.addWidget("org.kde.plasma.marginsseparator");
-  p.addWidget("org.kde.plasma.folder");
+  p.screen = s;
+  applySpec(p, "bottom", bottomSpec);
 
   var t = new Panel;
-  t.screen = s; t.location = "top"; t.alignment = "center";
-  t.lengthMode = "fill"; t.height = 30; t.floating = false; t.opacity = "translucent";
-  t.hiding = "autohide";
-  t.addWidget("org.kde.plasma.digitalclock");
-  t.addWidget("org.kde.plasma.showdesktop");
-  t.addWidget("org.kde.plasma.systemtray");
-  t.addWidget("org.kde.plasma.battery");
-  t.addWidget("org.kde.plasma.panelspacer");
+  t.screen = s;
+  applySpec(t, "top", topSpec);
 }}
 """
 
 
-def ensure_panels_command(screen_count: int) -> list[str]:
+def ensure_panels_command(screen_count: int, primary_x: int, primary_y: int) -> list[str]:
     return [
         "qdbus",
         "org.kde.plasmashell",
         "/PlasmaShell",
         "org.kde.PlasmaShell.evaluateScript",
-        ensure_panels_script(screen_count),
+        ensure_panels_script(screen_count, primary_x, primary_y),
     ]
 
 
@@ -260,5 +329,6 @@ def apply_preset(name: str, home: Path, runner: RunnerT = subprocess.run) -> Non
     install_kwin_script(home)
     runner(dock_follow_focus_enable_command(), check=True)
     screen_count = connected_screen_count(runner)
-    runner(ensure_panels_command(screen_count), check=True)
+    primary_x, primary_y = primary_screen_position(runner)
+    runner(ensure_panels_command(screen_count, primary_x, primary_y), check=True)
     runner(reconfigure_kwin_command(), check=False)
