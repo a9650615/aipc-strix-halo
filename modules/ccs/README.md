@@ -51,6 +51,25 @@ Hardware-verified 2026-07-04: `ccs aipc --print "reply with exactly: pong"`
 round-tripped through CCS's local proxy -> LiteLLM -> Ollama (`coder-agentic`
 / gemma4:26b) and printed `pong`.
 
+`ccs api create` has no flag for Claude Code's permission mode, so add it by
+hand once, right after the command above — append to the generated
+`~/.ccs/aipc.settings.json`:
+
+```json
+{
+  "env": { "...": "..." },
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  }
+}
+```
+
+This profile is local-model-only and never touches the paid Claude
+subscription/API (see below), so the usual reason to keep permission prompts
+— a mistaken edit costs real tokens/money — doesn't apply here. Hardware-
+verified 2026-07-04: `ccs aipc --print "run \`echo bypass-ok\` using the Bash
+tool..."` executed the Bash tool with no permission prompt.
+
 Notes on the flags:
 
 - `--base-url http://127.0.0.1:4000` points at LiteLLM (`llm-litellm`),
