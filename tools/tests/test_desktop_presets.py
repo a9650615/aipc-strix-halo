@@ -90,6 +90,12 @@ def test_install_kwin_script_writes_metadata_and_main_js(tmp_path: Path) -> None
     # never get re-hidden once they've been shown.
     assert "} else {" in main_js
     assert "'autohide';" in main_js
+    # Regression: windowAdded only fires for windows opened *after* the
+    # script loads -- must also wire up every already-open window via
+    # stackingOrder, or toggling fullscreen on a pre-existing window does
+    # nothing until an unrelated event forces a recheck (visible as a
+    # jump/flicker).
+    assert "workspace.stackingOrder" in main_js
 
 
 def test_apply_preset_unknown_name_raises_key_error(tmp_path: Path) -> None:

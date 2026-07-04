@@ -47,6 +47,17 @@ _METADATA_JSON = """{
 # scripting APIs (KWin JS vs Plasma Shell JS) expose. If a screen is
 # unplugged/replugged in a different order the mapping can drift until KWin
 # restarts.
+#
+# workspace.windowAdded only fires for windows created *after* this script
+# loads -- any window already open at load/reload time (i.e. every window,
+# right after `aipc config preset apply` runs a KWin reconfigure) never got
+# fullScreenChanged wired up, so toggling fullscreen on it did nothing until
+# some unrelated event (e.g. a focus change) happened to force a recheck --
+# visible as an extra jump/flicker on top of the panel-hide layout jump that
+# switching hiding modes inherently causes (there's no way to avoid that one;
+# real macOS fullscreen uses an animated dedicated Space, which Plasma panel
+# visibility toggling doesn't replicate). Fixed by also walking
+# workspace.stackingOrder (every currently-managed window) at script load.
 _MAIN_JS = """\
 function findOutputIndex(output) {
     var screens = workspace.screens;
@@ -92,6 +103,11 @@ function trackWindow(window) {
 
 workspace.windowActivated.connect(recheck);
 workspace.windowAdded.connect(trackWindow);
+
+var existing = workspace.stackingOrder;
+for (var i = 0; i < existing.length; i++) {
+    trackWindow(existing[i]);
+}
 
 if (workspace.activeWindow) {
     recheck(workspace.activeWindow);
