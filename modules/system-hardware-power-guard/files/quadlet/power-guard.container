@@ -1,0 +1,11 @@
+[Container]
+Image=python:3.12-slim
+ContainerName=power-guard
+Environment=PYTHONUNBUFFERED=1
+
+[Mounts]
+/sys/class/power_supply:/sys/class/power_supply:ro
+/sys/devices/system/cpu:/sys/devices/system/cpu:rw
+
+[Command]
+python3 /app/src/guard_daemon.py
