@@ -51,3 +51,22 @@ printf '%s' "$config_json" | grep -q '"max_loaded_models": *2' \
   || fail "llm-lemonade: config.json max_loaded_models != 2 — restart lemonade.service to reapply, or check jq is installed"
 printf '%s' "$config_json" | grep -q '"enable_dgpu_gtt": *true' \
   || fail "llm-lemonade: config.json enable_dgpu_gtt != true — restart lemonade.service to reapply, or check jq is installed"
+
+# coder-agentic/ornith-35b must be saved with -np 2 -kvu (see README's
+# "Concurrency" section) — without kv-unified, an explicit -np statically
+# divides the context budget per slot, and Claude Code's system prompt
+# (36.8k-56k tokens, hardware-verified 2026-07-05) blows past a divided
+# per-slot cap with a context_length_exceeded 400. This is a saved
+# per-model load option, not a config.json key, so it doesn't self-heal on
+# restart — a missing entry here means someone needs to re-run the
+# `lemonade load ... --llamacpp-args "-np 2 -kvu" --save-options` command
+# from the README for that model.
+recipe_options=$(podman exec lemonade cat /root/.cache/lemonade/recipe_options.json 2>/dev/null || echo '{}')
+printf '%s' "$recipe_options" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for key in ('builtin.Gemma-4-26B-A4B-it-GGUF', 'user.Ornith-1.0-35B-GGUF-Q4_K_M'):
+    args = d.get(key, {}).get('llamacpp_args', '')
+    if '-np' not in args or '-kvu' not in args:
+        sys.exit(1)
+" 2>/dev/null || fail "llm-lemonade: recipe_options.json missing -np/-kvu for coder-agentic/ornith-35b — see README's Concurrency section"
