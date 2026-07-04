@@ -1,0 +1,4 @@
+Render-verified only. Enabling needs a hardware-verified claim (§9):
+confirm the Lemonade /api/v0/unload payload signature and calibrate the
+soft/hard thresholds against real pressure on the Strix Halo machine.
+See openspec/changes/memory-oom-guard/ task "(AI PC)".

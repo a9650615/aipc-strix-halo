@@ -1,0 +1,18 @@
+[Unit]
+Description=AIPC unified-memory-aware OOM guard
+After=network-online.target
+Wants=lemonade.service ollama.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/lib/aipc-oom-guard/oom_guard.py
+Environment=OOM_GUARD_CONFIG=/etc/aipc/oom-guard/config.yaml
+Restart=always
+RestartSec=5
+# Runs on host, not a container: it reads /proc + /sys/fs/cgroup, calls
+# systemctl restart, and sends signals — none of which work usefully from
+# inside a quadlet. Mirrors lemonade.service's host-unit approach.
+ReadWritePaths=/var/lib/aipc-oom-guard
+
+[Install]
+WantedBy=multi-user.target

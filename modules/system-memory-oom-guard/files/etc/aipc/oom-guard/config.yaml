@@ -1,0 +1,38 @@
+# OOM guard configuration — all values tunable, calibrate on hardware (AI PC).
+# See openspec/changes/memory-oom-guard/.
+poll_interval: 1            # seconds between pressure reads
+soft_bar_mb: 12288          # ~12 GB free -> graceful relief
+hard_bar_mb: 4096           # ~4 GB free -> forceful relief
+t_soft: 10                  # seconds below soft_bar before SOFT trip
+t_hard: 3                   # seconds below hard_bar before HARD trip
+top_n: 8                    # candidate cgroups examined per relief
+model_protect_bias: 600     # seconds added to model priority (restart cost)
+ring_buffer: /var/lib/aipc-oom-guard/events.jsonl
+
+backends:
+  lemonade:
+    cgroup: system.slice/lemonade.service
+    base_url: http://127.0.0.1:8001
+    unload_path: /api/v0/unload
+    unit: lemonade.service
+  ollama:
+    cgroup: system.slice/ollama.service
+    base_url: http://127.0.0.1:11434
+    unit: ollama.service
+  vllm:
+    cgroup: system.slice/vllm.service
+    base_url: http://127.0.0.1:8000
+    sleep_path: /sleep
+    unit: vllm.service
+
+# anti-self-kill: substring match against cgroup name. NOT a service
+# whitelist — only "kill the box" core units. Apps & models are handled by
+# the priority scorer, never listed here.
+protected_patterns:
+  - systemd-
+  - dbus
+  - journald
+  - login
+  - display-manager
+  - init.scope
+  - oom-guard
