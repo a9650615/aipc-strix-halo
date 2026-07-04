@@ -48,6 +48,12 @@ Precedence: **user's explicit signal > task shape > model tier**. A Sonnet asked
 1. `docs/architecture.md` — the long-form source of truth for the project's design (7 phases / 44 modules)
 2. `openspec/changes/<change-name>/{proposal,design,specs/**,tasks}.md` for the area you are changing
 3. `openspec/specs/<capability>/spec.md` for already-archived requirements
+4. `docs/live-hotfix-workflow.md` — before hand-patching anything on the running machine to
+   test a fix without a full rebuild+reboot: why the repo's `files/usr/lib/aipc/...` paths
+   often aren't where the live file actually is on this read-only ostree image, how to find
+   the real path, and the copy/verify/commit loop to use.
+5. `docs/secrets-setup.md` — the full SOPS + age workflow for reading/writing anything
+   under `secrets/`. See also §5 below.
 
 If you cannot find a spec for what you are about to do, **stop and propose a change first** (`npx -y @fission-ai/openspec new change <name>`).
 
@@ -104,6 +110,11 @@ If a feature is only achievable on bootc (e.g., kernel-baked driver), explicitly
 - Decryption requires the user's age private key, which is **not** in the repo and **never** in CI logs.
 - `post-install.sh` and `quadlet/*` may reference `${SOPS_DECRYPTED:foo}` placeholders; the runtime resolves them.
 - If you find a plaintext secret anywhere in a diff, refuse the change and flag it.
+- Full workflow (generating keys, encrypting/decrypting, rotation, recovery): `docs/secrets-setup.md`.
+  Before assuming any secret-backed feature (e.g. a cloud LLM alias) actually works, check
+  whether the real deployment key + encrypted file are actually present on this machine —
+  `docs/live-hotfix-workflow.md`'s Secrets section records this machine's actual state as of
+  the last check, which has repeatedly not matched what the mechanism is designed to do.
 
 ---
 
