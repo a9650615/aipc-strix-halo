@@ -56,7 +56,51 @@ config.
 
 ---
 
-### Requirement: iGPU Main Inference Via Ollama With Pinned Resident Model
+### Requirement: iGPU Main Inference Via Lemonade's llamacpp:vulkan Backend
+
+The `llm-lemonade` module SHALL run the Lemonade SDK container as a systemd
+service on `127.0.0.1:8001` (same service as the NPU Requirement below — one
+Lemonade instance serves both the NPU/FLM backend and the iGPU/Vulkan
+backend). `coder-agentic` and `ornith-35b`, as declared in `models.yaml`,
+SHALL both be resident simultaneously via `config.json`'s
+`max_loaded_models: 2` (Lemonade's own default of 1 would otherwise evict one
+when the other loads).
+
+**SUPERSEDED 2026-07-05** note: the original text of this Requirement (kept
+below, per repo convention of leaving the reasoning trail visible rather than
+deleting it — see `design.md`'s D3) described Ollama serving a pinned
+`main-70b`. That model was cut from `models.yaml` before this Requirement was
+ever hardware-verified, and the two models that replaced it as the "resident,
+coding-capable" tier — `coder-agentic` and `ornith-35b` — run on Lemonade's
+`llamacpp:vulkan` backend instead, migrated there from Ollama on 2026-07-05
+(35-51% faster on identical GGUF weights, hardware-verified; see
+`modules/llm-lemonade/README.md`).
+
+#### Scenario: Both resident models stay loaded simultaneously
+
+- **WHEN** `coder-agentic` and `ornith-35b` have both been served at least once
+- **THEN** `podman exec lemonade cat /root/.cache/lemonade/config.json` shows
+  `max_loaded_models: 2` and both models' processes are present, neither
+  evicted by loading the other
+
+#### Scenario: llama.cpp backend is Vulkan, not ROCm
+
+- **WHEN** either `coder-agentic` or `ornith-35b` is loaded
+- **THEN** the active backend is `llamacpp:vulkan` (confirmed via
+  `/root/.cache/lemonade/bin/llamacpp/vulkan/llama-server` binary presence),
+  not `llamacpp:rocm` — ROCm was measured ~4x slower on this hardware despite
+  being AMD's documented recommendation for this chip
+
+#### Scenario: `llm-ollama` stays installed but idle
+
+- **WHEN** `models.yaml` is inspected
+- **THEN** no alias declares `backend: ollama`; `ollama.service` remains
+  installed/enabled (not retired, in case a future model needs it) and
+  `aipc doctor` reports it OK despite having nothing to serve
+
+---
+
+### Requirement: iGPU Main Inference Via Ollama With Pinned Resident Model [ORIGINAL TEXT, SUPERSEDED — see Requirement above]
 
 The `llm-ollama` module SHALL run the `ollama/ollama:rocm` container as a
 systemd service on `127.0.0.1:11434`. The container SHALL set

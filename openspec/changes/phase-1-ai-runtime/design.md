@@ -1,10 +1,25 @@
 ## Context
 
+**SUPERSEDED 2026-07-05 (see notes inline below):** this design targeted a
+single always-resident `main-70b` served by Ollama. That model was cut from
+`models.yaml` in a 2026-07-04 manifest trim before Phase 1 shipped, and the
+two models that actually matter now (`coder-agentic`, `ornith-35b`) migrated
+from Ollama to Lemonade's `llamacpp:vulkan` backend on 2026-07-05
+(hardware-verified: 35-51% faster than Ollama for identical GGUF weights; see
+`modules/llm-lemonade/README.md`). Kept in place rather than rewritten
+wholesale — this document was never archived, so it's fair game to correct,
+but the original reasoning trail is left visible per repo convention (see
+`models.yaml`'s own comments for the same pattern) rather than deleted.
+
 The AMD Ryzen AI MAX+ 395 has two inference-capable silicon blocks: an RDNA 4
 iGPU (Radeon 8060S, gfx1151) and an XDNA 2 NPU. Both share the 128 GB unified
-DDR5X pool. The goal is to keep the 70B main-brain model resident in GTT at all
-times (Mac-like fluidity), while routing small/latency-sensitive intents to the
-NPU and lazy-loading specialist models only when explicitly requested.
+DDR5X pool. The original goal was to keep a single 70B main-brain model
+resident in GTT at all times (Mac-like fluidity), while routing
+small/latency-sensitive intents to the NPU and lazy-loading specialist models
+only when explicitly requested. **As actually shipped:** there is no single
+pinned 70B; instead `coder-agentic` (16.9 GB) and `ornith-35b` (19.7 GB) both
+stay resident simultaneously via Lemonade's `max_loaded_models: 2`, and
+`resident-small` runs on the NPU via Lemonade's FLM backend.
 
 All seven modules are containerised Podman quadlets. No host package installs
 beyond what Phase 0 (`ai-rocm`, `ai-xdna`) puts in the image layer.
@@ -62,7 +77,7 @@ on port 8001.
 in 2026; alternatives are either unsupported or contradict the NPU-for-small
 constraint from architecture.md §6.
 
-**D3 — Ollama (not llama.cpp direct) for iGPU main inference**
+**D3 — Ollama (not llama.cpp direct) for iGPU main inference [SUPERSEDED 2026-07-05]**
 
 *Chosen:* `ollama/ollama:rocm` container, port 11434, with HSA_OVERRIDE_GFX_VERSION
 pinned to 11.0.0 for gfx1151.
@@ -77,6 +92,20 @@ pinned to 11.0.0 for gfx1151.
 *Why rejected:* Ollama's model-pinning (`OLLAMA_KEEP_ALIVE=-1`) and
 GGUF-native format make it the best match for a single always-resident large
 model. The OpenAI-compat API it exposes plugs directly into LiteLLM.
+
+*SUPERSEDED:* Ollama was the real initial choice through most of Phase 1, but
+`coder-agentic`/`ornith-35b` migrated wholesale to Lemonade's `llamacpp:vulkan`
+backend on 2026-07-05 — llama.cpp direct after all, just via Lemonade's own
+`lemond` router (spawns/swaps `llama-server` child processes per model) rather
+than as a bare binary, which resolves the original "no keep-alive semantics"
+objection since Lemonade owns its own `max_loaded_models`/config persistence.
+Hardware-measured: Vulkan beat Ollama by 35-51% on identical GGUF weights, and
+ROCm (tried first, matching AMD's own guidance for this chip) was rejected on
+measurement — 9.4 tok/s vs Vulkan's 38.6-58.6 tok/s, ~4x slower, despite being
+the "officially recommended" backend. `llm-ollama` stays installed/enabled
+(idle, not retired) in case a future model needs it. See
+`modules/llm-lemonade/README.md`'s "Backend choice: Vulkan, not ROCm" section
+for the full writeup.
 
 **D4 — vLLM is on-demand, not always-on**
 
@@ -100,7 +129,7 @@ into the image. The BTRFS subvolume layout was chosen in Phase 0 so image
 updates never touch weights; snapshots capture model state independently of
 the OS layer.
 
-**D6 — Idle eviction: `main-70b` pinned, specialists evict after 10 min**
+**D6 — Idle eviction: `main-70b` pinned, specialists evict after 10 min [SUPERSEDED 2026-07-05]**
 
 *Chosen:* `OLLAMA_KEEP_ALIVE=-1` in `llm-ollama` quadlet keeps main-70B loaded
 indefinitely. LiteLLM's `idle_timeout` parameter (or equivalent) triggers
@@ -112,6 +141,15 @@ of zero traffic (architecture.md §12 risk row: "Idle memory drift").
   ~30 s, unacceptable for a conversational assistant.
 - Never evict: specialists hold GTT until reboot; user would notice degraded
   performance when multiple specialists are loaded concurrently.
+
+*SUPERSEDED:* There is no `main-70b` (cut from `models.yaml` 2026-07-04).
+Residency for `coder-agentic` + `ornith-35b` is now Lemonade's own concern:
+`config.json`'s `max_loaded_models: 2` keeps both loaded simultaneously
+(Lemonade's own default of 1 would otherwise evict one when the other loads —
+fixed via `modules/llm-lemonade/files/usr/lib/aipc/llm-lemonade/configure-lemonade.sh`).
+No 10-minute idle-eviction timer exists for these two; `system-memory-oom-guard`
+(a separate, later module) handles memory-pressure-triggered unloading instead
+of a fixed idle timer.
 
 ## Risks / Trade-offs
 

@@ -21,7 +21,12 @@
   runs on port 11434 with HSA_OVERRIDE_GFX_VERSION — shipped.
 - [x] 1.8 `llm-ollama`: add `Environment=OLLAMA_KEEP_ALIVE=-1` to
   `quadlet/ollama.service` so main-70B stays resident (R3 gap — currently
-  missing from the shipped quadlet).
+  missing from the shipped quadlet). SUPERSEDED 2026-07-05: `main-70b` was cut
+  from `models.yaml`, and `coder-agentic`/`ornith-35b` (the models that took
+  over the "resident, capable" role) migrated to Lemonade's `llamacpp:vulkan`
+  backend — residency is now `config.json`'s `max_loaded_models: 2`, not this
+  Ollama env var. Left checked since the quadlet work itself was real and
+  shipped; the requirement it served no longer applies.
 - [x] 1.9 `llm-vllm`: quadlet, post-install.sh, verify.sh exist; disabled by
   default; verify.sh exits 2 when disabled — shipped.
 - [x] 1.10 `llm-vllm`: confirm that `aipc doctor` treats verify.sh exit 2 as
