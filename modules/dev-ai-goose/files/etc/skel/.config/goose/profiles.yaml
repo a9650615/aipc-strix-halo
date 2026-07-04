@@ -1,5 +1,5 @@
 default:
   provider: openai
   processor: __AIPC_DEFAULT_TIER__
-  accelerator: coder-fast
+  accelerator: resident-small
   host: http://127.0.0.1:4000

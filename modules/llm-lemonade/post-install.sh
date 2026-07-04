@@ -1,18 +1,16 @@
 #!/bin/sh
 # post-install.sh — llm-lemonade
+# Build-time only: enable the unit (a symlink write, not a running
+# process) and stage the port marker. NO systemctl --now (build has no
+# running init) and no device check here — the build container never has
+# /dev/accel/accel0 regardless of the real target machine, so gating
+# `systemctl enable` on it here would always skip it. The unit's own
+# ConditionPathExists=/dev/accel/accel0 is what actually gates whether the
+# service starts, evaluated for real at boot on the deployed machine.
 set -eu
 
 mkdir -p /etc/aipc/env.d/llm-lemonade
 printf '8001\n' > /etc/aipc/env.d/llm-lemonade/port
 
-install -D -m 0644 "$(dirname "$0")/files/etc/aipc/lemonade/models.yaml" \
-    /etc/aipc/lemonade/models.yaml
-
 systemctl daemon-reload
-
-if [ ! -e /dev/accel/accel0 ]; then
-    printf 'post-install llm-lemonade: /dev/accel/accel0 not found — leaving service disabled\n' >&2
-    exit 0
-fi
-
-systemctl enable --now lemonade.service
+systemctl enable lemonade.service

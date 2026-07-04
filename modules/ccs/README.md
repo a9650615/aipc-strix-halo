@@ -43,7 +43,7 @@ ccs api create aipc --preset ollama \
   --base-url http://127.0.0.1:4000 \
   --api-key aipc-local \
   --model coder-agentic \
-  --extra-models main-70b,coder-strong,coder-thinking,ornith-35b,vlm-qwen2vl,resident-small,router-1b \
+  --extra-models ornith-35b,resident-small \
   --target claude --yes
 ```
 
@@ -88,11 +88,12 @@ Notes on the flags:
   `dev-ai-opencode` picked it: the `qwen2.5-coder` family's streaming
   tool-calls come back as unstructured text through this
   Ollama/LiteLLM/proxy chain (see `dev-ai-opencode`'s README for the full
-  repro). `--extra-models` exposes the rest of `llm-models`' registry for
-  CCS's `profile:model` request-time selector, e.g. `aipc:main-70b`.
+  repro). `--extra-models` exposes the rest of `llm-models`' small
+  deliberate set (2026-07-04 trim) for CCS's `profile:model` request-time
+  selector, e.g. `aipc:ornith-35b`.
 
-Large local models (`main-70b` especially, cold-loading 45GB) can take
-longer than CCS's default proxy timeout to return a first token; if you see
+Large local models can take longer than CCS's default proxy timeout to
+return a first token; if you see
 "socket connection was closed unexpectedly", add
 `CCS_OPENAI_PROXY_REQUEST_TIMEOUT_MS` to `~/.ccs/aipc.settings.json`'s `env`
 block and restart the proxy (`ccs proxy stop aipc && ccs aipc`).

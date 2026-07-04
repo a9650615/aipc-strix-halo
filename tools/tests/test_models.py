@@ -137,7 +137,7 @@ def test_pull_command_lemonade() -> None:
         "podman",
         "exec",
         "lemonade",
-        "lemonade-server",
+        "/opt/lemonade/lemonade",
         "pull",
         "amd/Llama-3.2-1B",
     ]

@@ -1,58 +1,22 @@
 # keep_alive on each ollama_chat/ entry: per-model override of the
 # ollama.container daemon default (10m — see modules/llm-ollama's quadlet).
-# "-1" = never evict, reserved for the always-on resident-small model.
-# Everything else evicts after 10m idle so switching between tools/tasks
-# doesn't leave every previously-used model permanently resident — with
-# several 10-45GB models in the registry and 128GB total unified memory,
-# "everything stays loaded forever" is a real ceiling, not hypothetical.
-# Confirmed end-to-end 2026-07-03 that this override actually takes effect
-# against the pinned LiteLLM version (some upstream LiteLLM issues report
-# it not working — it does here: verified via Ollama's /api/ps expires_at).
+# Trimmed 2026-07-04 to match models.yaml's small deliberate local set
+# (resident-small, coder-agentic, ornith-35b) — router-1b/intent-3b/
+# main-70b/coder-strong (qwen2.5 family, dated) and coder-thinking/
+# embed-bge/vlm-qwen2vl/fastbatch-4b (extras with no clear use) were cut.
+# Cloud aliases are untouched.
 model_list:
-  - model_name: router-1b
-    litellm_params:
-      model: ollama_chat/qwen2.5:1.5b-instruct-q4_K_M
-      api_base: http://127.0.0.1:11434
-      keep_alive: -1
-
-  - model_name: intent-3b
-    litellm_params:
-      model: openai/intent-3b
-      api_base: http://127.0.0.1:8001/v1
-      api_key: none
-
   # Small, always-on general-purpose assistant — see models.yaml for why
   # gemma4:e4b (MoE, ~4B active) was picked over a dense alternative like
-  # llama3.1:8b.
+  # llama3.1:8b. Runs on Lemonade's NPU/FLM backend (gemma4-it-e4b-FLM),
+  # not Ollama — hardware-verified 2026-07-04 end-to-end including
+  # persistence across a service restart, so an always-on model doesn't
+  # permanently compete with big interactive models for iGPU/GTT memory.
   - model_name: resident-small
     litellm_params:
-      model: ollama_chat/gemma4:e4b
-      api_base: http://127.0.0.1:11434
-      keep_alive: -1
-
-  - model_name: main-70b
-    litellm_params:
-      model: ollama_chat/qwen2.5:72b-instruct-q4_K_M
-      api_base: http://127.0.0.1:11434
-      keep_alive: "10m"
-
-  - model_name: coder-fast
-    litellm_params:
-      model: ollama_chat/qwen2.5-coder:7b-instruct-q4_K_M
-      api_base: http://127.0.0.1:11434
-      keep_alive: "10m"
-
-  - model_name: coder-strong
-    litellm_params:
-      model: ollama_chat/qwen2.5-coder:32b-instruct-q4_K_M
-      api_base: http://127.0.0.1:11434
-      keep_alive: "10m"
-
-  - model_name: coder-thinking
-    litellm_params:
-      model: ollama_chat/deepseek-r1:14b-q4_K_M
-      api_base: http://127.0.0.1:11434
-      keep_alive: "10m"
+      model: openai/gemma4-it-e4b-FLM
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
 
   # See models.yaml for why this is gemma4 and not qwen2.5-coder: Ollama's
   # streaming tool-call support is broken for the qwen2 family regardless
@@ -60,18 +24,6 @@ model_list:
   - model_name: coder-agentic
     litellm_params:
       model: ollama_chat/gemma4:26b
-      api_base: http://127.0.0.1:11434
-      keep_alive: "10m"
-
-  - model_name: embed-bge
-    litellm_params:
-      model: openai/bge-m3
-      api_base: http://127.0.0.1:8001/v1
-      api_key: none
-
-  - model_name: vlm-qwen2vl
-    litellm_params:
-      model: ollama_chat/qwen2-vl:7b-instruct-q4_K_M
       api_base: http://127.0.0.1:11434
       keep_alive: "10m"
 

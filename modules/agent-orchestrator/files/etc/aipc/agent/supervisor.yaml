@@ -1,4 +1,10 @@
 # LangGraph supervisor configuration — D1
+# Not consumed by any code yet — sub-agent dispatch is deferred (tasks
+# 2.3-2.6). The model names below match design.md's D2 decision as
+# originally written; models.yaml/llm-litellm were trimmed 2026-07-04 and
+# no longer have coder-fast/vlm-qwen2vl/intent-3b registered — revisit
+# these bindings against whatever's actually available when sub-agents
+# are implemented, don't assume this file is current.
 sub_agents:
   researcher:
     model: coder-fast

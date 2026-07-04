@@ -146,7 +146,7 @@ All AI consumers (Pipecat, Continue.dev, Cline, Aider, Goose, OpenCode, Open Int
 Reasons:
 
 - A single place to swap engines, route by model name, observe costs, and rate-limit.
-- The model namespace (`router-1b`, `intent-3b`, `main-70b`, `coder-fast`, `coder-strong`, `coder-thinking`, `embed-bge`, `vlm-qwen2vl`, …) is the public API surface.
+- The model namespace (`resident-small`, `coder-agentic`, `ornith-35b`, plus cloud aliases — see `llm-models`) is the public API surface.
 - Adding a new logical model = a LiteLLM config entry, nothing else.
 
 Direct calls to Ollama / Lemonade / vLLM endpoints are allowed only inside the corresponding `modules/llm-*/` itself.

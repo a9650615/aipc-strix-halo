@@ -5,7 +5,11 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-TIERS = ["coder-fast", "coder-strong", "coder-thinking"]
+# Trimmed 2026-07-04 to match models.yaml's small deliberate local set —
+# coder-fast/coder-strong/coder-thinking (qwen2.5 family) were cut entirely,
+# leaving two real coding-capable models rather than a fast/strong/thinking
+# spectrum of one family.
+TIERS = ["coder-agentic", "ornith-35b"]
 _TIER_PATTERN = re.compile(r"\b(?:" + "|".join(TIERS) + r")\b")
 
 

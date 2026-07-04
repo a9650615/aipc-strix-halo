@@ -1,13 +1,12 @@
+# Trimmed 2026-07-04 to models.yaml's current small local set. The
+# fast/strong/thinking tiered lineup (qwen2.5 family) is gone for now —
+# may come back later with a different model family, not a permanent cut.
 models:
-  - name: coder-fast
+  - name: coder-agentic
     provider: ollama
-    model: coder-fast
+    model: coder-agentic
     apiBase: http://127.0.0.1:4000
-  - name: coder-strong
+  - name: ornith-35b
     provider: ollama
-    model: coder-strong
-    apiBase: http://127.0.0.1:4000
-  - name: coder-thinking
-    provider: ollama
-    model: coder-thinking
+    model: ornith-35b
     apiBase: http://127.0.0.1:4000

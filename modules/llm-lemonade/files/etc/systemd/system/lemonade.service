@@ -1,5 +1,5 @@
 [Unit]
-Description=Lemonade SDK NPU inference server
+Description=Lemonade SDK NPU/ROCm inference server
 After=network-online.target systemd-machined.service
 Requires=network-online.target
 ConditionPathExists=/dev/accel/accel0
@@ -8,15 +8,32 @@ ConditionPathExists=/dev/accel/accel0
 Type=simple
 Restart=always
 RestartSec=5
+# FLM's NPU driver validation fails ("Memlock limits are too low") under
+# systemd's restrictive default LimitMEMLOCK for system units — hardware-
+# verified 2026-07-04: the identical `podman run` invocation succeeds when
+# launched from an interactive shell (higher inherited ulimit) and fails
+# under this real service unit without this. --ulimit on the podman
+# command itself is the one that actually matters (podman gives the
+# container its own default ulimits regardless of the launching process's
+# limits); LimitMEMLOCK= here covers the podman process itself.
+LimitMEMLOCK=infinity
 ExecStartPre=-/usr/bin/podman rm -f lemonade
+ExecStartPre=/usr/bin/mkdir -p /var/lib/aipc-lemonade/cache /var/lib/aipc-lemonade/flm /var/lib/aipc-lemonade/huggingface
 ExecStart=/usr/bin/podman run \
     --name lemonade \
     --rm \
     --device=/dev/accel/accel0:/dev/accel/accel0 \
+    --device=/dev/kfd:/dev/kfd \
+    --device=/dev/dri:/dev/dri \
     --group-add=keep-groups \
+    --ulimit memlock=-1:-1 \
+    -e HSA_OVERRIDE_GFX_VERSION=11.5.1 \
     -p 127.0.0.1:8001:8001 \
-    -v /etc/aipc/lemonade:/etc/aipc/lemonade:ro,Z \
-    ghcr.io/lemonade-sdk/lemonade-server@sha256:e727643dad3b0680ececbcf7ee1430e5f447a3bdf3700824335d3ee18a3dcfb5
+    -v /var/lib/aipc-lemonade/cache:/root/.cache/lemonade:Z \
+    -v /var/lib/aipc-lemonade/flm:/root/.config/flm:Z \
+    -v /var/lib/aipc-lemonade/huggingface:/root/.cache/huggingface:Z \
+    ghcr.io/lemonade-sdk/lemonade-server@sha256:e727643dad3b0680ececbcf7ee1430e5f447a3bdf3700824335d3ee18a3dcfb5 \
+    ./lemond --host 0.0.0.0 --port 8001
 ExecStop=/usr/bin/podman stop lemonade
 
 [Install]

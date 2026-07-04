@@ -9,9 +9,12 @@
   confirm the LiteLLM config key against the pinned version.
 - [x] 1.4 `llm-lemonade`: quadlet, post-install.sh, verify.sh exist; service
   runs on port 8001; conditional on `/dev/accel/accel0` — shipped.
-- [ ] 1.5 `llm-lemonade`: validate `files/etc/aipc/lemonade/models.yaml` field
-  names against a running `amd/lemonade-sdk` container; remove the TODO comment
-  once confirmed.
+- [x] 1.5 `llm-lemonade`: validated against a real running container
+  2026-07-04 — the premise was wrong, not just the field names: Lemonade
+  Server doesn't consume a mounted `models.yaml` at all (manages models via
+  its own CLI). Removed the file; see `llm-lemonade`'s README "Corrected
+  assumptions" section for the full list of what else this uncovered
+  (port, ROCm env, pull binary name, memlock ulimit).
 - [x] 1.6 `llm-lemonade`: pin `amd/lemonade-sdk` container to a digest;
   document in README.
 - [x] 1.7 `llm-ollama`: quadlet, post-install.sh, verify.sh exist; service

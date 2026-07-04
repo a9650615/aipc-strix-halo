@@ -11,8 +11,9 @@ distrobox enter node -- sudo npm install -g opencode-ai
 ## Configuration
 
 Skel config at `/etc/skel/.config/opencode/config.json` points at LiteLLM.
-Default model is `coder-agentic` (gemma4:26b) — **not** the `coder-fast`/
-`coder-strong`/`coder-thinking` qwen2.5-coder aliases.
+Default model is `coder-agentic` (gemma4:26b) — **not** any qwen2.5-coder
+alias (see below for why). `ornith-35b` is also registered as a second
+option.
 
 ## Known issue: qwen2.5-coder tool calls are unreliable in this harness
 
@@ -33,10 +34,12 @@ agentic-coding model) was also tried and rejected: across two attempts it
 either silently skipped the tool call or refused outright even when
 explicitly instructed to use it.
 
-The `coder-fast`/`coder-strong`/`coder-thinking` aliases remain registered
-in this config for manual switching (plain code Q&A works fine on them —
-only tool-calling is affected), but are not the default for exactly this
-reason.
+The `coder-fast`/`coder-strong`/`coder-thinking` qwen2.5 aliases were
+removed from `models.yaml`/`llm-litellm` entirely 2026-07-04 (general
+manifest trim, not specifically because of this issue) — this section
+stays as the record of why they weren't the default while they existed,
+and why any reintroduced qwen2.5-coder tier later should default to
+`false` for OpenCode until re-verified.
 
 Re-check when revisiting: has upstream Ollama fixed qwen2/qwen2.5
 streaming tool-call parsing (no tracking issue number confirmed yet — the

@@ -15,7 +15,10 @@ from langchain_litellm import ChatLiteLLM
 from langgraph.graph import END, StateGraph
 
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
-SUPERVISOR_MODEL = "main-70b"
+# main-70b (the spec's original default) was cut from models.yaml/llm-litellm
+# 2026-07-04 in a manifest trim — ornith-35b (35B MoE reasoning + agentic
+# coding) is the closest remaining fit for a supervisor role.
+SUPERVISOR_MODEL = "ornith-35b"
 
 
 class SupervisorState(TypedDict):

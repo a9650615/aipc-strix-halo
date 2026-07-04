@@ -12,8 +12,12 @@ agent tools, scripts).
 
 ## Model namespace (public API surface)
 
-`router-1b`, `intent-3b`, `main-70b`, `coder-fast`, `coder-strong`,
-`coder-thinking`, `embed-bge`, `vlm-qwen2vl`.
+`resident-small`, `coder-agentic`, `ornith-35b`, plus the cloud aliases
+(`main-cloud`, `coder-cloud`, `thinking-cloud`, `gpt4o-cloud`,
+`gemini-cloud`) — see `llm-models`. Trimmed 2026-07-04 to this small
+deliberate set; a wider local lineup (fast/strong/thinking tiers, a
+router/intent classifier, a VLM, a dedicated embedder) may come back later
+but isn't needed right now.
 
 Adding a new logical model = a LiteLLM config entry, nothing else.
 
@@ -67,9 +71,10 @@ longer hand-copies the unit or runs `systemctl --user`.
 
 ## Dependencies
 
-- `llm-ollama` (iGPU backend for most models).
-- `llm-lemonade` (NPU backend for `intent-3b`, `embed-bge`).
-- `llm-vllm` (optional, for high-throughput serving).
+- `llm-ollama` (iGPU backend for `coder-agentic`/`ornith-35b`).
+- `llm-lemonade` (NPU backend for `resident-small`; also bundles a vLLM/ROCm
+  backend, not currently wired to a registered alias — see its README).
+- `llm-vllm` (superseded by `llm-lemonade`'s vLLM backend, kept `.disabled`).
 - `secrets-sops` (API keys for any cloud fallback routes).
 
 ## Consumers

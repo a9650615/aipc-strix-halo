@@ -11,9 +11,11 @@ LangGraph supervisor (D1). Full design dispatches 4 sub-agents (D2):
 Implemented (tasks 1.1, 2.1, 2.2, 7.1–7.3):
 - `files/usr/lib/aipc-agent/aipc_agent/graphs.py`: `supervisor()` — a
   single-node LangGraph graph that answers directly via the LiteLLM
-  gateway, model alias `main-70b` (the spec's supervisor default). No
-  sub-agent dispatch yet — `researcher`/`coder`/`browser`/`daily_assistant`
-  don't exist.
+  gateway, model alias `ornith-35b` (`main-70b`, the spec's original
+  supervisor default, was cut from the manifest in a 2026-07-04 trim —
+  `ornith-35b`, a 35B reasoning + agentic-coding model, is the closest
+  remaining fit). No sub-agent dispatch yet —
+  `researcher`/`coder`/`browser`/`daily_assistant` don't exist.
 - `files/usr/lib/aipc-agent/aipc_agent/server.py`: FastAPI `POST /chat`
   accepting `{text, session_id?}`, returning `{text, task_id}` on success
   or `{error: {code, message}}` with a non-200 status on failure.
@@ -36,9 +38,9 @@ custom_llm_provider="openai", api_key="aipc-local")` round-trips a real chat
 completion against the live LiteLLM gateway (tested against `resident-small`).
 The `supervisor` graph and the `/chat` endpoint's happy/error paths are
 verified with the LLM call mocked (state flows through correctly, model
-alias `main-70b` is what gets called, error path returns the documented
+alias `ornith-35b` is what gets called, error path returns the documented
 `502`/`error.code` shape). Live end-to-end verification of the full
-`/chat` → supervisor → LiteLLM → Ollama round trip on `main-70b` itself is
+`/chat` → supervisor → LiteLLM → Ollama round trip on `ornith-35b` itself is
 **not yet done** — Ollama was continuously busy with unrelated large
 background jobs (apparent mem0 session-summarization traffic) every time
 this was attempted; re-run once Ollama has an idle window. Module stays

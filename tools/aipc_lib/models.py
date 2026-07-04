@@ -77,8 +77,22 @@ def pull_command(entry: ModelEntry) -> list[str] | None:
         # config_menu.py already does for `sudo systemctl restart`.
         return ["sudo", "podman", "exec", "ollama", "ollama", "pull", entry.model_id]
     if entry.backend == "lemonade":
-        # Following the pattern of ollama backend: pull via the container itself.
-        return ["sudo", "podman", "exec", "lemonade", "lemonade-server", "pull", entry.model_id]
+        # Following the pattern of ollama backend: pull via the container
+        # itself. Binary is /opt/lemonade/lemonade (the CLI client talking
+        # to lemond, the server it runs alongside) — hardware-verified
+        # 2026-07-04 there is no "lemonade-server" binary/alias in the
+        # image, that was a pre-verification guess. Like Ollama, a pulled
+        # model auto-loads on its first inference request — no separate
+        # "load" step needed here.
+        return [
+            "sudo",
+            "podman",
+            "exec",
+            "lemonade",
+            "/opt/lemonade/lemonade",
+            "pull",
+            entry.model_id,
+        ]
     return None
 
 
