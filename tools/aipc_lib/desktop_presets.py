@@ -6,45 +6,39 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-KWIN_SCRIPT_ID = "fullscreen-hides-dock"
+KWIN_SCRIPT_ID = "fullscreen-hides-panels"
 
 _METADATA_JSON = """{
     "KPackageStructure": "KWin/Script",
     "KPlugin": {
         "Authors": [{"Name": "aipc"}],
-        "Description": "Hides a screen's Dock only while a window on that specific screen is truly fullscreen; the Dock and top bar are otherwise always visible on every screen",
+        "Description": "Hides both the Dock and top bar on a screen while a window on that specific screen is truly fullscreen; both are otherwise always visible, per-screen independent",
         "Icon": "preferences-system-windows-script-test",
-        "Id": "fullscreen-hides-dock",
+        "Id": "fullscreen-hides-panels",
         "License": "MIT",
-        "Name": "Fullscreen Hides Dock"
+        "Name": "Fullscreen Hides Panels"
     },
     "X-Plasma-API": "javascript"
 }
 """
 
-# Went through several designs in one session (2026-07-04) trying to make the
-# Dock/top bar only show on the focused screen -- each fix uncovered another
-# bug (forgetting to reset other screens, not tracking pre-existing windows,
-# an un-verifiable fix), and the whole "which screen is focused" tracking
-# turned out to not even be what was wanted. Direct user feedback: "頂部選單列
-# 要常駐,dock focus 才出現 or 做不到的話就常駐也沒關係" (top bar should be
-# persistent; Dock only on focus, or if that can't be done, persistent is
-# fine too) -- given how much fragility the focus-tracking version had, this
-# takes the offered simpler fallback instead of continuing to chase it:
+# Final design (2026-07-04), after several buggier focus-tracking attempts.
+# Direct user spec: "有全螢幕 app 的部份 頂部底部就隱藏, 沒有就顯示, 每個螢幕的
+# 隱藏設定是分離的" (a screen with a fullscreen app hides both top and bottom;
+# without one, shows both; each screen's hide state is independent):
 #
-#   - Top bar: always visible on every screen, hiding="none" set once at
-#     panel creation, never touched again. No script involvement.
-#   - Dock: always visible (hiding="none") *except* on whichever specific
-#     screen currently has an active window that is truly fullscreen --
-#     that screen's Dock (only that one) switches to "autohide" so the
-#     fullscreen window isn't squeezed by reserved strut space (the one part
-#     of the original "Mac experience" request that's an actual visual bug,
-#     not a preference).
+#   - Both the top bar and the Dock on a given screen are visible
+#     (hiding="none") by default, and switch to "autohide" together while
+#     that screen has a truly fullscreen window -- so the fullscreen app
+#     isn't squeezed by reserved strut space.
+#   - Per-screen and independent: the script only ever touches the single
+#     screen the just-activated/toggled window is on, so each screen's
+#     hide state reflects its own fullscreen situation with no cross-screen
+#     coupling (that coupling was the source of the earlier bugs).
 #
-# This only ever needs to know, for the window that was just
-# activated/toggled, which single screen it's on -- no more "reset every
-# other screen too" step, which removes the riskiest and buggiest part of
-# the previous design.
+# Layout (widget list, size, position) stays unified across screens, but
+# that's handled separately at apply time by cloning the primary screen's
+# panels (see ensure_panels_script), NOT by this script.
 _MAIN_JS = """\
 function findOutputIndex(output) {
     var screens = workspace.screens;
@@ -56,12 +50,12 @@ function findOutputIndex(output) {
     return 0;
 }
 
-function updateDockForScreen(screenIdx, fullScreen) {
+function updatePanelsForScreen(screenIdx, fullScreen) {
     var script =
         "var ps = panels();" +
         "for (var i = 0; i < ps.length; i++) {" +
         "  var p = ps[i];" +
-        "  if (p.location === 'bottom' && p.screen === " + screenIdx + ") {" +
+        "  if ((p.location === 'bottom' || p.location === 'top') && p.screen === " + screenIdx + ") {" +
         "    p.hiding = " + (fullScreen ? "'autohide'" : "'none'") + ";" +
         "  }" +
         "}";
@@ -72,7 +66,7 @@ function recheck(window) {
     if (!window || !window.output) {
         return;
     }
-    updateDockForScreen(findOutputIndex(window.output), !!window.fullScreen);
+    updatePanelsForScreen(findOutputIndex(window.output), !!window.fullScreen);
 }
 
 function trackWindow(window) {
@@ -181,24 +175,30 @@ def primary_screen_position(runner: RunnerT = subprocess.run) -> tuple[int, int]
 
 
 def ensure_panels_script(screen_count: int, primary_x: int, primary_y: int) -> str:
-    """Plasma evaluateScript source: the primary screen's *current* Dock +
-    top bar (whatever the user has actually configured for it via the GUI)
-    is the single source of truth -- clone its panel properties and widget
-    list onto every other connected screen, replacing anything already
-    there.
+    """Plasma evaluateScript source: give every connected screen a Dock +
+    top bar, cloning the primary screen's *current* panels as the template
+    for screens that don't have one yet.
 
-    Every apply removes *all* existing bottom/top panels first and
-    recreates them from the primary screen's spec (not idempotent-by-
-    skipping on purpose -- an earlier "only create if this screen doesn't
-    already have one" version let a screen's panel drift out of sync with
-    the others, reported as "layout broken" on that screen). If the primary
-    screen has no bottom/top panel yet (first-ever run), falls back to a
-    reasonable default spec so there's something to clone next time.
+    NON-DESTRUCTIVE by design (user spec 2026-07-04: "preset 布局不要去動 dock
+    app 那塊, 使用者放什麼就是什麼" -- the preset must not touch the dock's app
+    content; whatever the user places stays). Existing bottom/top panels are
+    left completely untouched -- pinned launchers / task-manager entries live
+    inside a widget's own config, which a destroy-and-recreate would silently
+    wipe. So this only *creates* panels on screens that lack one; it never
+    removes or rewrites an existing panel.
 
-    Both panels default to `hiding = "none"` (always visible) -- the top
-    bar stays that way permanently; fullscreen-hides-dock.kwinscript then
-    autohides only a screen's Dock, only while that screen actually has a
-    fullscreen window.
+    Consequence, stated plainly: this syncs layout to a new/bare screen at
+    creation time (clone of the primary's current structure), but does NOT
+    continuously reconcile already-populated screens back into lockstep --
+    that would mean clobbering exactly the per-screen dock content the user
+    asked to preserve. To re-clone a screen from scratch, remove its panels
+    by hand first, then re-run.
+
+    If the primary screen has no bottom/top panel yet (first-ever run),
+    falls back to a reasonable default template. New panels are created with
+    `hiding = "none"` (always visible); fullscreen-hides-panels.kwinscript
+    then autohides both of a screen's panels together, per-screen
+    independent, only while that screen actually has a fullscreen window.
     """
     return f"""\
 var screenCount = {screen_count};
@@ -224,7 +224,10 @@ function readSpec(panel) {{
 
 var ps = panels();
 var bottomSpec = null, topSpec = null;
+var haveBottom = {{}}, haveTop = {{}};
 for (var i = 0; i < ps.length; i++) {{
+  if (ps[i].location === "bottom") haveBottom[ps[i].screen] = true;
+  if (ps[i].location === "top") haveTop[ps[i].screen] = true;
   if (ps[i].screen !== primaryIdx) continue;
   if (ps[i].location === "bottom") bottomSpec = readSpec(ps[i]);
   if (ps[i].location === "top") topSpec = readSpec(ps[i]);
@@ -262,20 +265,17 @@ function applySpec(panel, location, spec) {{
   for (var i = 0; i < spec.widgets.length; i++) {{ panel.addWidget(spec.widgets[i]); }}
 }}
 
-ps = panels();
-for (var i = ps.length - 1; i >= 0; i--) {{
-  if (ps[i].location === "bottom" || ps[i].location === "top") {{
-    ps[i].remove();
-  }}
-}}
 for (var s = 0; s < screenCount; s++) {{
-  var p = new Panel;
-  p.screen = s;
-  applySpec(p, "bottom", bottomSpec);
-
-  var t = new Panel;
-  t.screen = s;
-  applySpec(t, "top", topSpec);
+  if (!haveBottom[s]) {{
+    var p = new Panel;
+    p.screen = s;
+    applySpec(p, "bottom", bottomSpec);
+  }}
+  if (!haveTop[s]) {{
+    var t = new Panel;
+    t.screen = s;
+    applySpec(t, "top", topSpec);
+  }}
 }}
 """
 
@@ -305,10 +305,10 @@ PRESETS: dict[str, Preset] = {
         name="mac",
         description=(
             "macOS-like KDE Plasma desktop: window buttons on the left, "
-            "natural-scroll + tap-to-click touchpad, top bar always "
-            "visible, Dock always visible except autohidden on a screen "
-            "while it has a truly fullscreen window (GZ302EA touchpad id "
-            "hardcoded)"
+            "natural-scroll + tap-to-click touchpad, unified panel layout "
+            "cloned across screens, Dock + top bar visible per-screen "
+            "except both autohidden on a screen while it has a truly "
+            "fullscreen window (GZ302EA touchpad id hardcoded)"
         ),
     ),
 }

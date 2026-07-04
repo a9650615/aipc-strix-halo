@@ -66,18 +66,26 @@ def test_ensure_panels_script_clones_primary_screens_current_panel() -> None:
     assert "screenCount = 2" in script
     assert "g.x === 331 && g.y === 1271" in script
     assert "function readSpec(panel)" in script
-    assert "ps[i].remove()" in script
     assert "org.kde.plasma.kickoff" in script
 
 
+def test_ensure_panels_script_is_non_destructive_to_existing_panels() -> None:
+    # User spec 2026-07-04: "preset 布局不要去動 dock app 那塊, 使用者放什麼就是
+    # 什麼" -- the preset must not wipe the dock's app content. A
+    # destroy-and-recreate silently loses pinned launchers / task-manager
+    # entries (they live in a widget's own config), so the script must only
+    # CREATE panels where a screen lacks one and never remove/rewrite an
+    # existing panel.
+    script = desktop_presets.ensure_panels_script(2, 0, 0)
+    assert "remove()" not in script
+    assert "if (!haveBottom[s])" in script
+    assert "if (!haveTop[s])" in script
+
+
 def test_ensure_panels_script_panels_default_to_always_visible() -> None:
-    # Direct user feedback 2026-07-04: "頂部選單列要常駐,dock focus 才出現 or
-    # 做不到的話就常駐也沒關係" (top bar should be persistent; Dock only on
-    # focus, or persistent is fine too if that can't be done) -- given how
-    # buggy the focus-tracking design turned out to be, both panels now
-    # default to always-visible; fullscreen-hides-dock.kwinscript is the
-    # only thing that ever hides the Dock (never the top bar), and only on
-    # the one screen that actually has a fullscreen window.
+    # Both panels default to always-visible; fullscreen-hides-panels.kwinscript
+    # is the only thing that ever hides them, and only on a screen that
+    # actually has a fullscreen window.
     script = desktop_presets.ensure_panels_script(2, 0, 0)
     assert 'panel.hiding = "none"' in script
     assert "autohide" not in script
@@ -93,10 +101,11 @@ def test_install_kwin_script_writes_metadata_and_main_js(tmp_path: Path) -> None
     assert "workspace.windowActivated.connect(recheck)" in main_js
     assert "window.fullScreenChanged" in main_js
     assert "workspace.stackingOrder" in main_js
-    # Regression: must only ever touch 'bottom' (Dock) panels, never 'top'
-    # (top bar stays permanently visible, no script involvement).
-    assert "p.location === 'bottom'" in main_js
-    assert "p.location === 'top'" not in main_js
+    # Direct user spec 2026-07-04: a screen with a fullscreen app hides BOTH
+    # top and bottom; the script must toggle both panel locations together,
+    # scoped to the single screen the window is on (per-screen independent).
+    assert "p.location === 'bottom' || p.location === 'top'" in main_js
+    assert "p.screen === " in main_js
 
 
 def test_apply_preset_unknown_name_raises_key_error(tmp_path: Path) -> None:
