@@ -359,7 +359,7 @@ def config_preset_list() -> None:
 def config_preset_apply(name: str) -> None:
     """Apply a desktop preset by name (see `aipc config preset list`)."""
     try:
-        desktop_presets_mod.apply_preset(name)
+        desktop_presets_mod.apply_preset(name, Path.home())
     except KeyError:
         click.echo(f"Unknown preset: {name!r} (see `aipc config preset list`)", err=True)
         sys.exit(1)

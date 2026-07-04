@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from aipc_lib import desktop_presets
 
@@ -46,32 +47,40 @@ def test_connected_screen_count_counts_only_connected_and_enabled() -> None:
     assert desktop_presets.connected_screen_count(runner=fake_runner) == 1
 
 
-def test_ensure_panels_script_creates_panels_with_autohide() -> None:
+def test_ensure_panels_script_creates_visible_panels_by_default() -> None:
+    # Regression: hiding="autohide" on every panel unconditionally hides the
+    # Dock/top bar even on a screen with no fullscreen window at all
+    # (2026-07-04 bug report #2). New panels must default to "none"
+    # (visible) -- fullscreen-autohide-panels.kwinscript is what switches a
+    # screen to "autohide", and only while something on it is fullscreen.
     script = desktop_presets.ensure_panels_script(2)
     assert "screenCount = 2" in script
     assert "haveBottom[ps[i].screen] = true" in script
-    assert 'p.hiding = "autohide"' in script
-    assert 't.hiding = "autohide"' in script
+    assert 'p.hiding = "none"' in script
+    assert 't.hiding = "none"' in script
+    assert "autohide" not in script
 
 
-def test_ensure_panels_script_forces_autohide_on_existing_panels_too() -> None:
-    # Regression: "none"/"dodgewindows" reserve strut space and squeeze
-    # fullscreen windows down to fit around the panel (2026-07-04 bug
-    # report) -- every apply must re-force autohide on panels that already
-    # existed before this preset ran, not just newly created ones.
-    script = desktop_presets.ensure_panels_script(1)
-    assert 'ps[j].hiding = "autohide"' in script
+def test_install_kwin_script_writes_metadata_and_main_js(tmp_path: Path) -> None:
+    desktop_presets.install_kwin_script(tmp_path)
+    script_dir = tmp_path / ".local/share/kwin/scripts" / desktop_presets.KWIN_SCRIPT_ID
+    metadata = json.loads((script_dir / "metadata.json").read_text())
+    assert metadata["KPackageStructure"] == "KWin/Script"
+    assert metadata["KPlugin"]["Id"] == desktop_presets.KWIN_SCRIPT_ID
+    main_js = (script_dir / "contents/code/main.js").read_text()
+    assert "workspace.windowActivated.connect(recheck)" in main_js
+    assert "window.fullScreenChanged" in main_js
 
 
-def test_apply_preset_unknown_name_raises_key_error() -> None:
+def test_apply_preset_unknown_name_raises_key_error(tmp_path: Path) -> None:
     try:
-        desktop_presets.apply_preset("does-not-exist", runner=lambda *a, **k: _FakeCompletedProcess())
+        desktop_presets.apply_preset("does-not-exist", tmp_path, runner=lambda *a, **k: _FakeCompletedProcess())
     except KeyError:
         return
     raise AssertionError("expected KeyError")
 
 
-def test_apply_preset_mac_runs_expected_commands() -> None:
+def test_apply_preset_mac_runs_expected_commands_and_installs_script(tmp_path: Path) -> None:
     calls = []
 
     def fake_runner(cmd, **kwargs):
@@ -80,8 +89,10 @@ def test_apply_preset_mac_runs_expected_commands() -> None:
             return _FakeCompletedProcess(stdout=json.dumps({"outputs": [{"connected": True, "enabled": True}]}))
         return _FakeCompletedProcess(0)
 
-    desktop_presets.apply_preset("mac", runner=fake_runner)
+    desktop_presets.apply_preset("mac", tmp_path, runner=fake_runner)
 
     assert any(c[:2] == ["kwriteconfig6", "--file"] for c in calls)
     assert any(c[0] == "qdbus" and "PlasmaShell" in c[2] for c in calls)
     assert any(c[0] == "qdbus" and c[2] == "/KWin" for c in calls)
+    script_dir = tmp_path / ".local/share/kwin/scripts" / desktop_presets.KWIN_SCRIPT_ID
+    assert (script_dir / "metadata.json").exists()
