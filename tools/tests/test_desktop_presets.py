@@ -47,18 +47,18 @@ def test_connected_screen_count_counts_only_connected_and_enabled() -> None:
     assert desktop_presets.connected_screen_count(runner=fake_runner) == 1
 
 
-def test_ensure_panels_script_creates_visible_panels_by_default() -> None:
-    # Regression: hiding="autohide" on every panel unconditionally hides the
-    # Dock/top bar even on a screen with no fullscreen window at all
-    # (2026-07-04 bug report #2). New panels must default to "none"
-    # (visible) -- fullscreen-autohide-panels.kwinscript is what switches a
-    # screen to "autohide", and only while something on it is fullscreen.
+def test_ensure_panels_script_creates_autohidden_panels_by_default() -> None:
+    # New panels default to autohide -- focused-screen-panels.kwinscript is
+    # what makes the focused screen's panels visible on each recheck; other
+    # screens (and the focused one before the script's first recheck) stay
+    # hidden. This must not regress to a permanent "none"/visible default
+    # (bug report #3, 2026-07-04): only the focused screen should ever show
+    # its Dock/top bar.
     script = desktop_presets.ensure_panels_script(2)
     assert "screenCount = 2" in script
     assert "haveBottom[ps[i].screen] = true" in script
-    assert 'p.hiding = "none"' in script
-    assert 't.hiding = "none"' in script
-    assert "autohide" not in script
+    assert 'p.hiding = "autohide"' in script
+    assert 't.hiding = "autohide"' in script
 
 
 def test_install_kwin_script_writes_metadata_and_main_js(tmp_path: Path) -> None:
@@ -70,6 +70,11 @@ def test_install_kwin_script_writes_metadata_and_main_js(tmp_path: Path) -> None
     main_js = (script_dir / "contents/code/main.js").read_text()
     assert "workspace.windowActivated.connect(recheck)" in main_js
     assert "window.fullScreenChanged" in main_js
+    # Regression (bug report #3): every recheck must set *every* panel's
+    # hiding, not just the focused screen's -- otherwise unfocused screens
+    # never get re-hidden once they've been shown.
+    assert "} else {" in main_js
+    assert "'autohide';" in main_js
 
 
 def test_apply_preset_unknown_name_raises_key_error(tmp_path: Path) -> None:

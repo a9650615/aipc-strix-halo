@@ -6,36 +6,41 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-KWIN_SCRIPT_ID = "fullscreen-autohide-panels"
+KWIN_SCRIPT_ID = "focused-screen-panels"
 
 _METADATA_JSON = """{
     "KPackageStructure": "KWin/Script",
     "KPlugin": {
         "Authors": [{"Name": "aipc"}],
-        "Description": "Autohides the Dock/top bar only on a screen while a window on it is truly fullscreen; otherwise they stay visible",
+        "Description": "Shows the Dock/top bar only on the currently focused screen; even that screen hides them while a window on it is truly fullscreen",
         "Icon": "preferences-system-windows-script-test",
-        "Id": "fullscreen-autohide-panels",
+        "Id": "focused-screen-panels",
         "License": "MIT",
-        "Name": "Fullscreen Autohide Panels"
+        "Name": "Focused Screen Panels"
     },
     "X-Plasma-API": "javascript"
 }
 """
 
-# Two bugs, two wrong fixes, this is the third and correct one (2026-07-04):
+# Three bugs, three wrong fixes, this is the fourth and correct one (2026-07-04):
 #   1. hiding="none"/"dodgewindows" reserve strut space, so a truly
 #      fullscreen window gets squeezed down to fit around the panel instead
 #      of using the whole screen.
 #   2. hiding="autohide" on *every* panel fixes (1) but now the Dock/top bar
-#      disappear even on a screen with no fullscreen window at all -- it's
-#      always-hidden-until-hover regardless of whether anything needs the
-#      space.
-# The actual fix has to be conditional on whether the active window on that
-# specific screen is truly fullscreen (window.fullScreen), which needs a
-# KWin script -- Plasma's built-in panel visibility modes don't have a
-# "visible unless something is genuinely fullscreen" option (the closest,
-# "Windows Can Cover", was removed in Plasma 6: see
-# https://discuss.kde.org/t/windows-can-cover-panel-can-we-have-it-back-in-plasma-6/15706).
+#      disappear even on a screen with no fullscreen window at all.
+#   3. Only autohiding the *active* screen while fullscreen (leaving other
+#      screens' panels untouched) fixed (2) but never re-hid the
+#      *unfocused* screens at all, since nothing ever set them back to
+#      autohide -- both screens' Docks stayed visible permanently. The user
+#      explicitly wants only the focused screen's Dock/top bar shown, the
+#      rest hidden.
+# The fix has to touch *every* panel on *every* recheck: the focused
+# screen's panels are visible unless its window is truly fullscreen (in
+# which case autohide, per bug 1/2); every other screen's panels are always
+# autohide. Plasma's built-in panel visibility modes have no single option
+# for any of this (the closest, "Windows Can Cover", was removed in Plasma 6:
+# https://discuss.kde.org/t/windows-can-cover-panel-can-we-have-it-back-in-plasma-6/15706),
+# hence the KWin script.
 #
 # Screen identity is matched by array position between KWin's workspace.screens
 # and Plasma's panels() `.screen` index -- the only correlation the two separate
@@ -53,15 +58,17 @@ function findOutputIndex(output) {
     return 0;
 }
 
-function applyPanelsForOutput(output, fullScreen) {
-    var idx = findOutputIndex(output);
-    var mode = fullScreen ? "autohide" : "none";
+function applyAllPanels(activeIdx, activeFullScreen) {
     var script =
         "var ps = panels();" +
         "for (var i = 0; i < ps.length; i++) {" +
         "  var p = ps[i];" +
-        "  if ((p.location === 'bottom' || p.location === 'top') && p.screen === " + idx + ") {" +
-        "    p.hiding = '" + mode + "';" +
+        "  if (p.location === 'bottom' || p.location === 'top') {" +
+        "    if (p.screen === " + activeIdx + ") {" +
+        "      p.hiding = " + (activeFullScreen ? "'autohide'" : "'none'") + ";" +
+        "    } else {" +
+        "      p.hiding = 'autohide';" +
+        "    }" +
         "  }" +
         "}";
     callDBus("org.kde.plasmashell", "/PlasmaShell", "org.kde.PlasmaShell", "evaluateScript", script);
@@ -71,7 +78,7 @@ function recheck(window) {
     if (!window || !window.output) {
         return;
     }
-    applyPanelsForOutput(window.output, !!window.fullScreen);
+    applyAllPanels(findOutputIndex(window.output), !!window.fullScreen);
 }
 
 function trackWindow(window) {
@@ -161,9 +168,9 @@ def ensure_panels_script(screen_count: int) -> str:
     """Plasma evaluateScript source: create a bottom Dock + top bar on every
     connected screen that doesn't already have one (idempotent -- skips
     screens that already have a matching panel), defaulting new panels to
-    `hiding = "none"` (visible). fullscreen-autohide-panels.kwinscript then
-    switches a screen's panels to "autohide" only while something on it is
-    truly fullscreen."""
+    `hiding = "autohide"`. focused-screen-panels.kwinscript then makes the
+    currently focused screen's panels visible (unless its window is truly
+    fullscreen), keeping every other screen's panels autohidden."""
     return f"""\
 var screenCount = {screen_count};
 var ps = panels();
@@ -177,7 +184,7 @@ for (var s = 0; s < screenCount; s++) {{
     var p = new Panel;
     p.screen = s; p.location = "bottom"; p.alignment = "center"; p.offset = 0;
     p.lengthMode = "fit"; p.height = 44; p.floating = true; p.opacity = "adaptive";
-    p.hiding = "none";
+    p.hiding = "autohide";
     p.addWidget("org.kde.plasma.kickoff");
     p.addWidget("org.kde.plasma.pager");
     p.addWidget("org.kde.plasma.icontasks");
@@ -188,7 +195,7 @@ for (var s = 0; s < screenCount; s++) {{
     var t = new Panel;
     t.screen = s; t.location = "top"; t.alignment = "center";
     t.lengthMode = "fill"; t.height = 30; t.floating = false; t.opacity = "translucent";
-    t.hiding = "none";
+    t.hiding = "autohide";
     t.addWidget("org.kde.plasma.digitalclock");
     t.addWidget("org.kde.plasma.showdesktop");
     t.addWidget("org.kde.plasma.systemtray");
@@ -224,9 +231,9 @@ PRESETS: dict[str, Preset] = {
         name="mac",
         description=(
             "macOS-like KDE Plasma desktop: window buttons on the left, "
-            "natural-scroll + tap-to-click touchpad, per-screen Dock + menu "
-            "bar that autohides only while a window on that screen is truly "
-            "fullscreen (GZ302EA touchpad id hardcoded)"
+            "natural-scroll + tap-to-click touchpad, Dock + menu bar shown "
+            "only on the focused screen (autohidden elsewhere, and even "
+            "there while fullscreen) (GZ302EA touchpad id hardcoded)"
         ),
     ),
 }
