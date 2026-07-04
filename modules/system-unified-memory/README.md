@@ -22,7 +22,8 @@ argument workarounds needed for this hardware to boot with a stable display.
 - Enables `platform-profile-auto.service` + a udev rule + a systemd-sleep hook that switch
   the ASUS EC `platform_profile` (`quiet`/`balanced`/`performance`) automatically:
   `performance` on AC power (full burst available), `quiet` on battery, reapplied on every
-  plug/unplug event and after resume.
+  plug/unplug event and after resume. Exception: `balanced`, not `performance`, while
+  `llm-ollama`'s `llama-server` is actively running an inference request — see below.
 - Enables `platform-profile-idle-check.timer`, which runs every 60s and — only while on
   AC — drops to `quiet` after 5 consecutive idle checks (~5 min of low CPU load + low GPU
   busy%), snapping straight back to `performance` on the very next check that sees load.
@@ -121,18 +122,27 @@ knob, unlike `ryzenadj`/`power_dpm_force_performance_level` which are NOT to be 
 without explicit user confirmation — see agent memory).
 
 `platform-profile-auto.service` (+ `90-platform-profile-auto.rules` +
-`system-sleep/platform-profile-resume`) applies `performance` while on AC power (full
-burst available for bursty workloads — e.g. LLM inference) and `quiet` on battery,
-re-evaluated instantly on every AC plug/unplug event and reapplied after suspend/resume
-(the EC can reset `platform_profile` across a sleep cycle).
+`system-sleep/platform-profile-resume`) applies `performance` while on AC power and
+`quiet` on battery, re-evaluated instantly on every AC plug/unplug event and reapplied
+after suspend/resume (the EC can reset `platform_profile` across a sleep cycle).
 
 `platform-profile-idle-check.timer` layers a second, slower-reacting check on top of that,
 active only while on AC: every 60s it reads `/proc/loadavg` (1-min load, threshold 1.00)
 and `gpu_busy_percent`; 5 consecutive idle-looking checks (~5 min) drop the profile to
 `quiet`, but any single check that sees load resets the counter and snaps straight back to
 `performance` — asymmetric on purpose, slow to go quiet, instant to go loud, so bursty
-work is never throttled. Counter lives in `/run/aipc/platform-profile-idle-count` (tmpfs,
-naturally resets on reboot).
+interactive work (games, compiles) is never throttled. Counter lives in
+`/run/aipc/platform-profile-idle-count` (tmpfs, naturally resets on reboot).
+
+**Exception, direct user spec 2026-07-04**: LLM inference is a sustained GPU-bound load,
+not a bursty interactive one — letting the EC chase max clocks for it just makes the
+machine noticeably hotter for no perceptible latency win, which the user judged not worth
+it. Both scripts detect `llm-ollama`'s `llama-server` process (`pgrep -x llama-server`)
+and force `platform_profile=balanced` instead of `performance` whenever it's running (and
+the idle-check treats it as never-idle, so it can't drop further to `quiet` either).
+Everything else that spikes load (games, compiles) still gets full `performance` as
+before. Hardware-verified: triggering both scripts while an actual inference request was
+in flight (`llama-server` resident) flipped the EC from `performance` to `balanced`.
 
 CPU core-parking (offlining unused logical CPUs) was considered and rejected: `cpuidle`
 already uses `acpi_idle` with C1/C2/C3 all enabled and C3 (deepest) is the most-hit state

@@ -3,7 +3,13 @@
 # power: after 5 consecutive idle checks (~5 min) with low CPU load and low
 # GPU busy%, drops the EC platform_profile to quiet to cut idle power/fan
 # noise; any single non-idle check snaps straight back to performance so
-# bursty work (e.g. LLM inference) is never throttled by this.
+# bursty work (e.g. games, compiles) is never throttled by this.
+#
+# Exception, direct user spec 2026-07-04: LLM inference (llm-ollama's
+# llama-server) is a sustained GPU-bound load, not a bursty interactive
+# one -- chasing max clocks for it just makes the machine hotter for no
+# perceptible latency win, so it gets "balanced" instead of "performance"
+# and never counts as idle while it's running.
 #
 # Instant AC-plug/unplug/resume reactions are handled separately by
 # platform-profile-auto (this script never touches battery-mode behaviour).
@@ -22,6 +28,13 @@ GPU_BUSY_IDLE_THRESHOLD=10
 [ "$(cat "$AC_ONLINE_PATH")" = "1" ] || exit 0
 
 mkdir -p /run/aipc
+
+if pgrep -x llama-server > /dev/null 2>&1; then
+	echo 0 > "$COUNT_FILE"
+	echo balanced > "$PROFILE_PATH"
+	exit 0
+fi
+
 count=0
 [ -r "$COUNT_FILE" ] && count=$(cat "$COUNT_FILE")
 

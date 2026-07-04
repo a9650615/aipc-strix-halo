@@ -2,6 +2,13 @@
 # Sets the ASUS EC platform_profile (quiet/balanced/performance) based on AC
 # adapter state: full burst on AC, quiet (and fewer fan/thermal shenanigans)
 # on battery. GZ302EA-specific: see modules/system-unified-memory/README.md.
+#
+# Exception, direct user spec 2026-07-04: LLM inference (llm-ollama's
+# llama-server) is a sustained GPU-bound load, not a bursty interactive one
+# -- letting the EC chase max clocks for it just makes the machine hotter
+# for no perceptible latency win. So "on AC" means "balanced" while an
+# inference request is in flight, and only "performance" otherwise (games,
+# compiles, anything actually latency-sensitive still get full burst).
 set -eu
 
 PROFILE_PATH=/sys/firmware/acpi/platform_profile
@@ -13,7 +20,11 @@ online=1
 [ -r "$AC_ONLINE_PATH" ] && online=$(cat "$AC_ONLINE_PATH")
 
 if [ "$online" = "1" ]; then
-	echo performance > "$PROFILE_PATH"
+	if pgrep -x llama-server > /dev/null 2>&1; then
+		echo balanced > "$PROFILE_PATH"
+	else
+		echo performance > "$PROFILE_PATH"
+	fi
 else
 	echo quiet > "$PROFILE_PATH"
 fi
