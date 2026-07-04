@@ -7,6 +7,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from aipc_lib import ccs_sync as ccs_sync_mod
 from aipc_lib import config_menu as config_menu_mod
 from aipc_lib import desktop_presets as desktop_presets_mod
 from aipc_lib import doctor as doctor_mod
@@ -300,6 +301,25 @@ def config_sync_opencode() -> None:
         click.echo(f"sync failed: {e}", err=True)
         sys.exit(1)
     click.echo(f"Synced {len(model_ids)} models to {opencode_sync_mod.DEFAULT_OPENCODE_CONFIG}:")
+    for mid in model_ids:
+        click.echo(f"  - {mid}")
+
+
+@config.command("sync-ccs")
+def config_sync_ccs() -> None:
+    """Rewrite ccs's ANTHROPIC_EXTRA_MODELS from LiteLLM's live /v1/models.
+
+    Same problem as sync-opencode: CCS's aipc.settings.json is a static
+    snapshot with no dynamic model-discovery of its own — this is that
+    missing half, run by hand whenever the LiteLLM model_list changes.
+    Requires `ccs api create` to have been run at least once already.
+    """
+    try:
+        model_ids = ccs_sync_mod.sync_extra_models()
+    except (OSError, ValueError) as e:
+        click.echo(f"sync failed: {e}", err=True)
+        sys.exit(1)
+    click.echo(f"Synced {len(model_ids)} extra models to {ccs_sync_mod.DEFAULT_CCS_SETTINGS}:")
     for mid in model_ids:
         click.echo(f"  - {mid}")
 
