@@ -89,6 +89,14 @@ models:
     size_gb: 18.0
     keep_alive: "10m"
 
+  # 35B MoE reasoning + agentic-coding model, pulled straight from HF via
+  # Ollama's hf.co/ gateway (deepreinforce-ai/Ornith-1.0-35B-GGUF, Q4_K_M).
+  - alias: ornith-35b
+    backend: ollama
+    model_id: hf.co/deepreinforce-ai/Ornith-1.0-35B-GGUF:Q4_K_M
+    size_gb: 19.7
+    keep_alive: "10m"
+
   - alias: embed-bge
     backend: lemonade
     model_id: BAAI/bge-m3
