@@ -164,17 +164,28 @@ regardless of which charger is plugged in: `BAT0/status == "Discharging"` while
 `AC0/online == 1` means whatever profile is currently active draws more than this charger
 can supply, right now. That instantly forces `platform_profile=quiet` — ahead of every
 other rule, including the LLM-inference `balanced` exception, since a charger too weak for
-`performance` can't be assumed to handle `balanced` either. Self-corrects on the next 60s
-check once the charger can keep up again (e.g. after the burst finishes or the load
-lightens).
+`performance` can't be assumed to handle `balanced` either. Self-corrects on the next check
+once the charger can keep up again (e.g. after the burst finishes or the load lightens).
+
+Direct follow-up, same day: "插著充電器就盡可能不去用到電池電" (avoid drawing from the
+battery as much as possible while plugged in) — the 60s timer alone means up to a minute
+of real drain before this guard reacts. `90-platform-profile-auto.rules` now also fires
+`platform-profile-idle-check.service` on every `BAT0` `change` uevent (the kernel emits one
+the moment the battery driver reports a new status), not just every 60s. This is as close
+to instant as the hardware's own status reporting allows — there's no separate EC/kernel
+toggle on this platform to hard-block battery discharge outright (and there probably
+shouldn't be one: if AC momentarily can't cover a spike, the alternative to a brief battery
+assist is a brownout/crash, not "using less power out of nowhere").
 
 Hardware-verified: with the wrapper's `BAT_STATUS_PATH` pointed at a fake `"Discharging"`
 file (battery itself was actually charging at the time), the script forced `quiet`; the
-real script confirmed a no-op against real `Charging` status. Real end-to-end reproduction
-(a live drain event under the reported travel charger) was not directly captured — the
-underlying job is charger-agnostic by design, so it isn't expected to need per-charger
-tuning, but flag it if `quiet` still isn't enough headroom for a given charger + workload
-combination.
+real script confirmed a no-op against real `Charging` status. `udevadm test --action=change`
+confirmed the new rule resolves `SYSTEMD_WANTS=platform-profile-idle-check.service` for
+`BAT0`, and `udevadm trigger --action=change` on the real device fired the real service
+end-to-end (completed in <1s). Real end-to-end reproduction of an actual drain event under
+the reported travel charger was not directly captured — the underlying job is
+charger-agnostic by design, so it isn't expected to need per-charger tuning, but flag it if
+`quiet` still isn't enough headroom for a given charger + workload combination.
 
 The actual fix, not a software one: use the higher-wattage charger this hardware ships
 with (or any charger ≥100W) for sustained heavy workloads if avoiding *any* battery draw

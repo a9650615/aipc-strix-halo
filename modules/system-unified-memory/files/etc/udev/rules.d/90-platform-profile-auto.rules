@@ -1,1 +1,12 @@
 SUBSYSTEM=="power_supply", KERNEL=="AC0", ACTION=="change", TAG+="systemd", ENV{SYSTEMD_WANTS}+="platform-profile-auto.service"
+
+# Direct user spec 2026-07-04: "插著充電器就盡可能不去用到電池電" (while plugged
+# in, avoid drawing from the battery as much as possible). The 60s
+# idle-check timer alone means up to a minute of real battery drain before
+# the Discharging-while-AC-online guard (see platform-profile-idle-check)
+# reacts. The kernel fires a "change" uevent on BAT0 the moment its driver
+# reports a new status (Charging/Discharging/Full), so react to that
+# directly instead of waiting for the next timer tick -- cuts detection
+# latency from "up to 60s" to "next uevent", which is as close to instant
+# as this hardware's own status reporting allows.
+SUBSYSTEM=="power_supply", KERNEL=="BAT0", ACTION=="change", TAG+="systemd", ENV{SYSTEMD_WANTS}+="platform-profile-idle-check.service"
