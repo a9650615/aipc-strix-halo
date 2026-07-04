@@ -1,0 +1,5 @@
+langgraph==1.2.7
+langchain-litellm==0.6.4
+fastapi==0.139.0
+uvicorn==0.50.0
+aiosqlite==0.22.1

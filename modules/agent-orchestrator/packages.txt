@@ -1,1 +1,5 @@
-# Python runs in agent-runtime distrobox
+# Basic skeleton (no sub-agents/tools/gate yet): plain venv on the host at
+# /usr/lib/aipc-agent/venv, not the agent-runtime sandbox distrobox — that
+# sandbox is for agent-code-shell's Open Interpreter execution, unrelated
+# to where this daemon itself runs. python3 (with venv module) is assumed
+# present on the base image.

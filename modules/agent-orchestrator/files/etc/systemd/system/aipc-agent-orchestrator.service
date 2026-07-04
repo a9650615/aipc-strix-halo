@@ -1,0 +1,13 @@
+[Unit]
+Description=aipc agent-orchestrator (LangGraph supervisor)
+After=network-online.target litellm.service
+Wants=litellm.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/aipc-agent/venv/bin/uvicorn aipc_agent.server:app --host 127.0.0.1 --port 4100
+Environment=PYTHONPATH=/usr/lib/aipc-agent
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
