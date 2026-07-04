@@ -55,7 +55,7 @@ The 128 GB unified memory is the defining capability — large LLMs (70B-class Q
 | Q1.5 | Migration from preinstalled Win11 Home | Full wipe; documented pre-flight + BIOS prep in §9.1-9.2 |
 | Q2 | Distribution | bazzite-dx (Universal Blue, Fedora bootc base) |
 | Q2.5 | Module rendering | `modules/` shared source; `targets/bootc/` (primary) + `targets/ansible/` (fallback) |
-| Q3 | LLM stack | LiteLLM gateway + Lemonade SDK (NPU) + Ollama (iGPU) + vLLM (on-demand) |
+| Q3 | LLM stack | LiteLLM gateway + Lemonade SDK (NPU + iGPU/Vulkan, primary local backend as of 2026-07-05) + Ollama (iGPU, installed/enabled but idle — no aliases registered) + vLLM (on-demand) |
 | Q4 | Voice pipeline | Pipecat orchestrator; openWakeWord (NPU); Silero VAD; SenseVoice (short Chinese) + Paraformer-zh-streaming (long/streaming Chinese); CosyVoice 2 (Chinese TTS) + Kokoro/Piper (English/fallback) |
 | Q5 | RAG + Memory | mem0 + Qdrant + Postgres/pgvector + bge-m3 embeddings + bge-reranker-v2-m3; ingest desktop docs, code, browser history+bookmarks, screen+OCR, email+calendar |
 | Q6 | Agent framework | LangGraph orchestrator + Open Interpreter (code/shell) + browser-use (web) + Computer-Use (Qwen2-VL + xdotool) + MCP gateway; main brain Hermes-3-70B or Qwen2.5-72B-Instruct (Phase 0 bake-off) |
@@ -120,8 +120,8 @@ Pipecat handler
    ▼
 LiteLLM gateway
    │ routed by model name
-   ├─→ Lemonade (NPU)    : routing, small intents
-   ├─→ Ollama (iGPU)     : main 70B reasoning
+   ├─→ Lemonade (NPU + iGPU/Vulkan) : resident-small, coder-agentic, ornith-35b (primary local backend)
+   ├─→ Ollama (iGPU)     : installed/enabled, currently idle — no aliases registered
    └─→ vLLM (iGPU)       : high-throughput / vision (on demand)
    │  response stream
    ▼
@@ -178,7 +178,7 @@ modules/<name>/
 | `ai-xdna` | amd-xdna driver + Lemonade SDK userspace |
 | `llm-litellm` | Gateway daemon + router config |
 | `llm-lemonade` | NPU inference service (small / routing models) |
-| `llm-ollama` | iGPU main inference service |
+| `llm-ollama` | iGPU inference service — installed/enabled but idle as of 2026-07-05 (no aliases registered; Lemonade is the primary local backend, see `llm-lemonade`) |
 | `llm-vllm` | High-throughput / vision inference (on-demand) |
 | `llm-models` | `models.yaml` manifest + `aipc models sync` |
 
@@ -552,7 +552,7 @@ aipc_setup/
 | Strix Halo Wi-Fi 7 firmware in older kernels | Possible no network at bazzite first boot if installer image lags | §9.4 fallback: USB-Ethernet adapter recommended for install day; kernel ≥ 6.14 in current bazzite-dx ships the firmware |
 | Secure Boot disabled in v1 | Reduced boot integrity guarantees | Documented choice; OpenSpec change to enrol MOK and re-enable Secure Boot planned for v2 |
 | BIOS EXPO / SAM not enabled by default on some shipping units | Reduced memory bandwidth, missed unified-memory perf | §9.2 BIOS checklist; `aipc doctor` reports DDR speed and SAM state |
-| Idle memory drift (specialist models holding GTT after use) | Erodes the "Mac-like fluidity" the unified-memory design promises | Owned by `modules/llm-ollama/env/` and `modules/llm-litellm/env/`: main brain pinned (`OLLAMA_KEEP_ALIVE=-1`), specialists (vLLM, Coder-strong, VLM, etc.) evicted after 10 min idle via LiteLLM lazy load. Reviewed in Phase 1. Power-management deferred to Phase 7 (no `ops-power` module in v1). |
+| Idle memory drift (specialist models holding GTT after use) | Erodes the "Mac-like fluidity" the unified-memory design promises | Owned by `modules/llm-lemonade/` (primary local backend as of 2026-07-05): `resident-small` stays resident via NPU/FLM, `coder-agentic`/`ornith-35b` stay resident via `max_loaded_models=2` (Lemonade has no per-model keep_alive knob, unlike Ollama). `llm-ollama`'s `OLLAMA_KEEP_ALIVE` knob still exists but is unused while idle. vLLM eviction remains an open gap (see `llm-litellm` README). Reviewed in Phase 1. Power-management deferred to Phase 7 (no `ops-power` module in v1). |
 
 ---
 
