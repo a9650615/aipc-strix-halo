@@ -165,43 +165,50 @@ def connected_screen_count(runner: RunnerT = subprocess.run) -> int:
 
 
 def ensure_panels_script(screen_count: int) -> str:
-    """Plasma evaluateScript source: create a bottom Dock + top bar on every
-    connected screen that doesn't already have one (idempotent -- skips
-    screens that already have a matching panel), defaulting new panels to
-    `hiding = "autohide"`. focused-screen-panels.kwinscript then makes the
-    currently focused screen's panels visible (unless its window is truly
-    fullscreen), keeping every other screen's panels autohidden."""
+    """Plasma evaluateScript source: this preset is the single source of
+    truth for every screen's Dock + top bar, so every apply removes *all*
+    existing bottom/top panels first and recreates identical ones on every
+    connected screen from this one spec.
+
+    Not idempotent-by-skipping on purpose: an earlier "only create if this
+    screen doesn't already have one" version let a screen's panel drift out
+    of sync with the others (a hand-made panel with extra widgets on one
+    monitor never got reconciled, reported as "layout broken" on that
+    screen -- 2026-07-04). Removing and recreating guarantees every screen
+    matches, at the cost of discarding any manual per-screen customization.
+
+    New panels default to `hiding = "autohide"`. focused-screen-panels.kwinscript
+    then makes the currently focused screen's panels visible (unless its
+    window is truly fullscreen), keeping every other screen's autohidden.
+    """
     return f"""\
 var screenCount = {screen_count};
 var ps = panels();
-var haveBottom = {{}}, haveTop = {{}};
-for (var i = 0; i < ps.length; i++) {{
-  if (ps[i].location === "bottom") haveBottom[ps[i].screen] = true;
-  if (ps[i].location === "top") haveTop[ps[i].screen] = true;
+for (var i = ps.length - 1; i >= 0; i--) {{
+  if (ps[i].location === "bottom" || ps[i].location === "top") {{
+    ps[i].remove();
+  }}
 }}
 for (var s = 0; s < screenCount; s++) {{
-  if (!haveBottom[s]) {{
-    var p = new Panel;
-    p.screen = s; p.location = "bottom"; p.alignment = "center"; p.offset = 0;
-    p.lengthMode = "fit"; p.height = 44; p.floating = true; p.opacity = "adaptive";
-    p.hiding = "autohide";
-    p.addWidget("org.kde.plasma.kickoff");
-    p.addWidget("org.kde.plasma.pager");
-    p.addWidget("org.kde.plasma.icontasks");
-    p.addWidget("org.kde.plasma.marginsseparator");
-    p.addWidget("org.kde.plasma.folder");
-  }}
-  if (!haveTop[s]) {{
-    var t = new Panel;
-    t.screen = s; t.location = "top"; t.alignment = "center";
-    t.lengthMode = "fill"; t.height = 30; t.floating = false; t.opacity = "translucent";
-    t.hiding = "autohide";
-    t.addWidget("org.kde.plasma.digitalclock");
-    t.addWidget("org.kde.plasma.showdesktop");
-    t.addWidget("org.kde.plasma.systemtray");
-    t.addWidget("org.kde.plasma.battery");
-    t.addWidget("org.kde.plasma.panelspacer");
-  }}
+  var p = new Panel;
+  p.screen = s; p.location = "bottom"; p.alignment = "center"; p.offset = 0;
+  p.lengthMode = "fit"; p.height = 44; p.floating = true; p.opacity = "adaptive";
+  p.hiding = "autohide";
+  p.addWidget("org.kde.plasma.kickoff");
+  p.addWidget("org.kde.plasma.pager");
+  p.addWidget("org.kde.plasma.icontasks");
+  p.addWidget("org.kde.plasma.marginsseparator");
+  p.addWidget("org.kde.plasma.folder");
+
+  var t = new Panel;
+  t.screen = s; t.location = "top"; t.alignment = "center";
+  t.lengthMode = "fill"; t.height = 30; t.floating = false; t.opacity = "translucent";
+  t.hiding = "autohide";
+  t.addWidget("org.kde.plasma.digitalclock");
+  t.addWidget("org.kde.plasma.showdesktop");
+  t.addWidget("org.kde.plasma.systemtray");
+  t.addWidget("org.kde.plasma.battery");
+  t.addWidget("org.kde.plasma.panelspacer");
 }}
 """
 

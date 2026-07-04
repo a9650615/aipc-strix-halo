@@ -56,9 +56,20 @@ def test_ensure_panels_script_creates_autohidden_panels_by_default() -> None:
     # its Dock/top bar.
     script = desktop_presets.ensure_panels_script(2)
     assert "screenCount = 2" in script
-    assert "haveBottom[ps[i].screen] = true" in script
     assert 'p.hiding = "autohide"' in script
     assert 't.hiding = "autohide"' in script
+
+
+def test_ensure_panels_script_removes_existing_panels_before_recreating() -> None:
+    # Regression (bug report #4, 2026-07-04): "only create if this screen
+    # doesn't already have a panel" let one screen's hand-made panel (extra
+    # widgets) drift out of sync with the others, reported as "layout
+    # broken" on that screen. The preset must be the single source of
+    # truth -- remove every existing bottom/top panel first, then recreate
+    # identical ones on every screen, so no screen can ever diverge.
+    script = desktop_presets.ensure_panels_script(2)
+    assert "ps[i].remove()" in script
+    assert "haveBottom" not in script
 
 
 def test_install_kwin_script_writes_metadata_and_main_js(tmp_path: Path) -> None:
