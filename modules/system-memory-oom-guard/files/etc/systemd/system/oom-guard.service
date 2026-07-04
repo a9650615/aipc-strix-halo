@@ -2,6 +2,8 @@
 Description=AIPC unified-memory-aware OOM guard
 After=network-online.target
 Wants=lemonade.service ollama.service
+# Kill switch: if /etc/aipc/oom-guard.disabled exists, do not start at boot.
+ConditionPathExists=!/etc/aipc/oom-guard.disabled
 
 [Service]
 Type=simple

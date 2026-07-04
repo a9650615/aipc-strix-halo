@@ -20,6 +20,14 @@ gfx1151 iGPU via ROCm 7.
 Not called directly by applications. All AI consumers route through
 `llm-litellm`, which forwards to Ollama by model name. See `CLAUDE.md §7`.
 
+**Currently idle (as of 2026-07-05).** `coder-agentic` and `ornith-35b` — the
+last two aliases that used to resolve here — migrated to `llm-lemonade`'s
+`llamacpp:vulkan` backend (35-51% faster, hardware-verified; see
+`llm-lemonade`'s README). No alias in `models.yaml` currently points at
+Ollama. The service stays installed/enabled (not retired) in case a future
+alias needs it again; `aipc doctor` will still report it healthy, it just has
+nothing to serve.
+
 ## Runtime requirements
 
 - `HSA_OVERRIDE_GFX_VERSION=11.5.1` inherited from `system-unified-memory`.

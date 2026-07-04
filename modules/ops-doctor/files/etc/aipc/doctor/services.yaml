@@ -24,3 +24,7 @@
 - name: mem0
   unit: mem0.service
   port: nil
+
+- name: oom-guard
+  unit: oom-guard.service
+  port: nil

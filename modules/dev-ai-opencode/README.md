@@ -51,5 +51,6 @@ symptom — index-always-0 for multiple simultaneous tool calls)?
 
 - `llm-litellm` (gateway at `http://127.0.0.1:4000`).
 - `dev-distrobox-templates` (Node template).
-- `llm-models` (registers `coder-agentic` -> `gemma4:26b` in the manifest
-  `llm-ollama` pre-pulls from).
+- `llm-models` (registers `coder-agentic` -> `Gemma-4-26B-A4B-it-GGUF` in the
+  manifest `llm-lemonade` pulls; migrated from `llm-ollama` 2026-07-05, see
+  `llm-lemonade`'s README for the backend-choice writeup).

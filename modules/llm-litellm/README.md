@@ -7,7 +7,7 @@ agent tools, scripts).
 ## What it does
 
 - Accepts OpenAI-compatible requests on a localhost port.
-- Routes by logical model name to Ollama, Lemonade, or vLLM backends.
+- Routes by logical model name to Lemonade, Ollama, or vLLM backends.
 - Provides observability (request logs, cost tracking) and rate limiting.
 
 ## Model namespace (public API surface)
@@ -71,9 +71,12 @@ longer hand-copies the unit or runs `systemctl --user`.
 
 ## Dependencies
 
-- `llm-ollama` (iGPU backend for `coder-agentic`/`ornith-35b`).
-- `llm-lemonade` (NPU backend for `resident-small`; also bundles a vLLM/ROCm
-  backend, not currently wired to a registered alias — see its README).
+- `llm-lemonade` (NPU + iGPU/Vulkan backend for `resident-small`,
+  `coder-agentic`, `ornith-35b` — primary local backend as of 2026-07-05;
+  also bundles a vLLM/ROCm backend, not currently wired to a registered
+  alias — see its README).
+- `llm-ollama` (iGPU backend; installed/enabled but currently idle — no
+  aliases point to it, see `llm-ollama`'s README).
 - `llm-vllm` (superseded by `llm-lemonade`'s vLLM backend, kept `.disabled`).
 - `secrets-sops` (API keys for any cloud fallback routes).
 
