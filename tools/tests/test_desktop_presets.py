@@ -75,37 +75,68 @@ def test_ensure_panels_script_is_non_destructive_to_existing_panels() -> None:
     # destroy-and-recreate silently loses pinned launchers / task-manager
     # entries (they live in a widget's own config), so the script must only
     # CREATE panels where a screen lacks one and never remove/rewrite an
-    # existing panel.
+    # existing panel's widgets.
     script = desktop_presets.ensure_panels_script(2, 0, 0)
     assert "remove()" not in script
     assert "if (!haveBottom[s])" in script
     assert "if (!haveTop[s])" in script
 
 
-def test_ensure_panels_script_panels_default_to_always_visible() -> None:
-    # Both panels default to always-visible; fullscreen-hides-panels.kwinscript
-    # is the only thing that ever hides them, and only on a screen that
-    # actually has a fullscreen window.
+def test_ensure_panels_script_applies_static_hiding_policy() -> None:
+    # Direct user spec 2026-07-04, after the fullscreen-detecting KWin script
+    # repeatedly failed: "每個螢幕的 dock 都設定自動隱藏, 選單列永遠不隱藏就好
+    # 了" -- every screen's Dock (bottom) always autohides, the top bar never
+    # hides. Applied both to newly-created panels and to every pre-existing
+    # panel (setting .hiding never touches widgets, so it doesn't conflict
+    # with the non-destructive rule above).
     script = desktop_presets.ensure_panels_script(2, 0, 0)
-    assert 'panel.hiding = "none"' in script
-    assert "autohide" not in script
+    assert 'applySpec(p, "bottom", bottomSpec, "autohide")' in script
+    assert 'applySpec(t, "top", topSpec, "none")' in script
+    assert 'if (ps[i].location === "bottom") ps[i].hiding = "autohide";' in script
+    assert 'if (ps[i].location === "top") ps[i].hiding = "none";' in script
 
 
-def test_install_kwin_script_writes_metadata_and_main_js(tmp_path: Path) -> None:
-    desktop_presets.install_kwin_script(tmp_path)
-    script_dir = tmp_path / ".local/share/kwin/scripts" / desktop_presets.KWIN_SCRIPT_ID
-    metadata = json.loads((script_dir / "metadata.json").read_text())
-    assert metadata["KPackageStructure"] == "KWin/Script"
-    assert metadata["KPlugin"]["Id"] == desktop_presets.KWIN_SCRIPT_ID
-    main_js = (script_dir / "contents/code/main.js").read_text()
-    assert "workspace.windowActivated.connect(recheck)" in main_js
-    assert "window.fullScreenChanged" in main_js
-    assert "workspace.stackingOrder" in main_js
-    # Direct user spec 2026-07-04: a screen with a fullscreen app hides BOTH
-    # top and bottom; the script must toggle both panel locations together,
-    # scoped to the single screen the window is on (per-screen independent).
-    assert "p.location === 'bottom' || p.location === 'top'" in main_js
-    assert "p.screen === " in main_js
+def test_disable_legacy_kwin_script_command_targets_old_script_id() -> None:
+    cmd = desktop_presets.disable_legacy_kwin_script_command()
+    assert cmd == [
+        "kwriteconfig6",
+        "--file",
+        "kwinrc",
+        "--group",
+        "Plugins",
+        "--key",
+        f"{desktop_presets.LEGACY_KWIN_SCRIPT_ID}Enabled",
+        "false",
+    ]
+
+
+def test_uninstall_legacy_kwin_script_removes_directory_if_present(tmp_path: Path) -> None:
+    script_dir = tmp_path / ".local/share/kwin/scripts" / desktop_presets.LEGACY_KWIN_SCRIPT_ID
+    (script_dir / "contents/code").mkdir(parents=True)
+    (script_dir / "metadata.json").write_text("{}")
+
+    desktop_presets.uninstall_legacy_kwin_script(tmp_path)
+
+    assert not script_dir.exists()
+
+
+def test_uninstall_legacy_kwin_script_is_a_noop_if_absent(tmp_path: Path) -> None:
+    desktop_presets.uninstall_legacy_kwin_script(tmp_path)
+
+
+def test_unload_legacy_kwin_script_command_calls_scripting_interface() -> None:
+    # Hardware-verified 2026-07-04: disabling in kwinrc alone left the old
+    # script's isScriptLoaded() == true and its live signal handlers kept
+    # firing, overwriting the new static hiding policy. Only an explicit
+    # unloadScript() call actually stops it.
+    cmd = desktop_presets.unload_legacy_kwin_script_command()
+    assert cmd == [
+        "qdbus",
+        "org.kde.KWin",
+        "/Scripting",
+        "org.kde.kwin.Scripting.unloadScript",
+        desktop_presets.LEGACY_KWIN_SCRIPT_ID,
+    ]
 
 
 def test_apply_preset_unknown_name_raises_key_error(tmp_path: Path) -> None:
@@ -116,7 +147,7 @@ def test_apply_preset_unknown_name_raises_key_error(tmp_path: Path) -> None:
     raise AssertionError("expected KeyError")
 
 
-def test_apply_preset_mac_runs_expected_commands_and_installs_script(tmp_path: Path) -> None:
+def test_apply_preset_mac_runs_expected_commands_and_cleans_up_legacy_script(tmp_path: Path) -> None:
     calls = []
 
     def fake_runner(cmd, **kwargs):
@@ -129,10 +160,15 @@ def test_apply_preset_mac_runs_expected_commands_and_installs_script(tmp_path: P
             )
         return _FakeCompletedProcess(0)
 
+    script_dir = tmp_path / ".local/share/kwin/scripts" / desktop_presets.LEGACY_KWIN_SCRIPT_ID
+    (script_dir / "contents/code").mkdir(parents=True)
+    (script_dir / "metadata.json").write_text("{}")
+
     desktop_presets.apply_preset("mac", tmp_path, runner=fake_runner)
 
     assert any(c[:2] == ["kwriteconfig6", "--file"] for c in calls)
     assert any(c[0] == "qdbus" and "PlasmaShell" in c[2] for c in calls)
     assert any(c[0] == "qdbus" and c[2] == "/KWin" for c in calls)
-    script_dir = tmp_path / ".local/share/kwin/scripts" / desktop_presets.KWIN_SCRIPT_ID
-    assert (script_dir / "metadata.json").exists()
+    assert any(c[-2:] == [f"{desktop_presets.LEGACY_KWIN_SCRIPT_ID}Enabled", "false"] for c in calls)
+    assert any(c[-2:] == ["org.kde.kwin.Scripting.unloadScript", desktop_presets.LEGACY_KWIN_SCRIPT_ID] for c in calls)
+    assert not script_dir.exists()
