@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from aipc_lib import config_menu as config_menu_mod
+from aipc_lib import desktop_presets as desktop_presets_mod
 from aipc_lib import doctor as doctor_mod
 from aipc_lib import log_append as log_append_mod
 from aipc_lib import models as models_mod
@@ -339,6 +340,30 @@ def config_tools(no_tui: bool) -> None:
                 click.echo(f"  {tool.name}: install failed (exit {result.returncode})", err=True)
             else:
                 click.echo(f"  {tool.name}: installed")
+
+
+@config.group("preset")
+def config_preset() -> None:
+    """Desktop presets: bundled KDE Plasma tweaks (window buttons, touchpad, Dock, ...)."""
+
+
+@config_preset.command("list")
+def config_preset_list() -> None:
+    """List available desktop presets."""
+    for preset in desktop_presets_mod.list_presets():
+        click.echo(f"{preset.name}: {preset.description}")
+
+
+@config_preset.command("apply")
+@click.argument("name")
+def config_preset_apply(name: str) -> None:
+    """Apply a desktop preset by name (see `aipc config preset list`)."""
+    try:
+        desktop_presets_mod.apply_preset(name)
+    except KeyError:
+        click.echo(f"Unknown preset: {name!r} (see `aipc config preset list`)", err=True)
+        sys.exit(1)
+    click.echo(f"Applied preset: {name}")
 
 
 @main.command("status")
