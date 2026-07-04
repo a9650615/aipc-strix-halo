@@ -74,3 +74,15 @@ def test_post_install_script_task(tmp_path: Path) -> None:
     tasks = parsed[0]["tasks"]
     script_tasks = [t for t in tasks if "script" in t or "ansible.builtin.script" in t]
     assert any("mod-x" in str(t) for t in script_tasks)
+
+
+def test_aipc_cli_installed(two_mods: list[Module]) -> None:
+    parsed = yaml.safe_load(render(two_mods))
+    tasks = parsed[0]["tasks"]
+    copy_task = next((t for t in tasks if t.get("copy", {}).get("dest") == "/usr/lib/aipc/tools/"), None)
+    assert copy_task is not None
+    assert copy_task["copy"]["src"] == "tools/"
+    install_task = next((t for t in tasks if "aipc" in str(t.get("shell", ""))), None)
+    assert install_task is not None
+    assert "pip install --no-cache-dir /usr/lib/aipc/tools" in install_task["shell"]
+    assert install_task["args"]["creates"] == "/usr/local/bin/aipc"

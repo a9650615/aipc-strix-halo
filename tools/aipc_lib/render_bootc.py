@@ -22,6 +22,19 @@ def render(
         lines.append("RUN rpm-ostree install -y \\\n    " + " \\\n    ".join(all_pkgs))
         lines.append("")
 
+    # aipc CLI itself: not module-owned (tools/ lives at repo root), but every
+    # image needs it for `aipc doctor`/`aipc render` post-switch — was
+    # previously a manual "pip install --user -e" runbook step
+    # (openspec/changes/phase-0-foundation/tasks.md#8.5) that never actually
+    # ran on a real deployed image.
+    lines.append("COPY tools/ /usr/lib/aipc/tools/")
+    lines.append(
+        "RUN python3 -m venv /usr/lib/aipc/tools/.venv "
+        "&& /usr/lib/aipc/tools/.venv/bin/pip install --no-cache-dir /usr/lib/aipc/tools "
+        "&& ln -sf /usr/lib/aipc/tools/.venv/bin/aipc /usr/local/bin/aipc"
+    )
+    lines.append("")
+
     for m in mods:
         if m.kargs:
             kargs_toml = ", ".join(f'"{k}"' for k in m.kargs)

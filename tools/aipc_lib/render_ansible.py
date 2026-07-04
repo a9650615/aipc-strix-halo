@@ -15,6 +15,23 @@ def render(mods: list[Module]) -> str:
             "dnf": {"name": all_pkgs, "state": "present"},
         })
 
+    # aipc CLI itself: not module-owned (tools/ lives at repo root), but every
+    # image needs it for `aipc doctor`/`aipc render` post-switch — see the
+    # matching comment in render_bootc.py.
+    tasks.append({
+        "name": "Copy aipc CLI tooling",
+        "copy": {"src": "tools/", "dest": "/usr/lib/aipc/tools/"},
+    })
+    tasks.append({
+        "name": "Install aipc CLI",
+        "shell": (
+            "python3 -m venv /usr/lib/aipc/tools/.venv "
+            "&& /usr/lib/aipc/tools/.venv/bin/pip install --no-cache-dir /usr/lib/aipc/tools "
+            "&& ln -sf /usr/lib/aipc/tools/.venv/bin/aipc /usr/local/bin/aipc"
+        ),
+        "args": {"creates": "/usr/local/bin/aipc"},
+    })
+
     for m in mods:
         if m.kargs:
             kargs_toml = ", ".join(f'"{k}"' for k in m.kargs)

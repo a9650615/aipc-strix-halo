@@ -76,8 +76,8 @@
 - [ ] 8.2 On the AI PC: transfer the age public key (paste or USB; private key stays on Mac)
 - [ ] 8.3 On the AI PC: run `tools/bootstrap.sh` with the published URL; choose `:rolling`; confirm GitHub user prompt; allow reboot
 - [ ] 8.4 After reboot: `bootc status` shows the aipc image staged or booted
-- [ ] 8.5 Install `tools/` from the cloned repo (`pip install --user -e ~/aipc_setup/tools`)
-- [ ] 8.6 Run `aipc doctor`; expect three rows OK (with `secrets-sops` noting the age key is absent — expected)
+- [x] 8.5 ~~Install `tools/` from the cloned repo (`pip install --user -e ~/aipc_setup/tools`)~~ — superseded 2026-07-05: both renderers (`render_bootc.py`/`render_ansible.py`) now COPY `tools/` and install the `aipc` CLI into `/usr/lib/aipc/tools/.venv` with a `/usr/local/bin/aipc` symlink as a universal, non-module-owned build step, so this manual step is no longer needed on a fresh image
+- [ ] 8.6 Run `aipc doctor`; expect three rows OK (with `secrets-sops` noting the age key is absent — expected) — NOTE: `aipc` should now already be on PATH post-switch per 8.5's automation; if it's missing, that itself is the bug to chase
 - [ ] 8.7 On the Mac: `gh workflow run build-image.yml -f promote_stable=true` and confirm the `:stable` tag appears via `gh api`
 
 ## 9. Archive The Change
