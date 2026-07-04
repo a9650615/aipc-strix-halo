@@ -11,12 +11,27 @@
 # perceptible latency win, so it gets "balanced" instead of "performance"
 # and never counts as idle while it's running.
 #
+# Second exception, same day: this hardware's package power alone can hit
+# 60W+ under load, easily exceeding a smaller/travel USB-C PD charger
+# (confirmed in use: <=65W) or a power bank -- the battery then has to
+# supplement the shortfall, so it visibly drains even though AC is
+# connected and "online". Charger wattage isn't reliably readable from
+# sysfs on this platform (ucsi_acpi doesn't expose PDO details here), so
+# rather than guess a number, this watches the one signal that's true
+# regardless of which charger is plugged in: BAT0 actually reporting
+# "Discharging" while AC0 is online means whatever profile is active right
+# now draws more than this charger can supply. That instantly forces
+# "quiet" (the lowest tier, to actually guarantee the drain stops) ahead of
+# every other rule below, including the LLM-inference exception -- a weak
+# enough charger can't be assumed to handle "balanced" either.
+#
 # Instant AC-plug/unplug/resume reactions are handled separately by
 # platform-profile-auto (this script never touches battery-mode behaviour).
 set -eu
 
 PROFILE_PATH=/sys/firmware/acpi/platform_profile
 AC_ONLINE_PATH=/sys/class/power_supply/AC0/online
+BAT_STATUS_PATH=/sys/class/power_supply/BAT0/status
 GPU_BUSY_PATH=/sys/class/drm/card1/device/gpu_busy_percent
 COUNT_FILE=/run/aipc/platform-profile-idle-count
 IDLE_CHECKS_REQUIRED=5
@@ -28,6 +43,12 @@ GPU_BUSY_IDLE_THRESHOLD=10
 [ "$(cat "$AC_ONLINE_PATH")" = "1" ] || exit 0
 
 mkdir -p /run/aipc
+
+if [ -r "$BAT_STATUS_PATH" ] && [ "$(cat "$BAT_STATUS_PATH")" = "Discharging" ]; then
+	echo 0 > "$COUNT_FILE"
+	echo quiet > "$PROFILE_PATH"
+	exit 0
+fi
 
 if pgrep -x llama-server > /dev/null 2>&1; then
 	echo 0 > "$COUNT_FILE"

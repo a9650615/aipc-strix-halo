@@ -27,8 +27,10 @@ argument workarounds needed for this hardware to boot with a stable display.
 - Enables `platform-profile-idle-check.timer`, which runs every 60s and — only while on
   AC — drops to `quiet` after 5 consecutive idle checks (~5 min of low CPU load + low GPU
   busy%), snapping straight back to `performance` on the very next check that sees load.
-  Mac-style "quiet at idle, full burst on demand" even while plugged in. See "Known issue:
-  idle power draw" below.
+  Mac-style "quiet at idle, full burst on demand" even while plugged in. Also instantly
+  forces `quiet` (ahead of every other rule) if the battery is actually discharging while
+  AC is online — i.e. the current draw exceeds what this charger can supply. See "Known
+  issue: idle power draw" and "Known issue: battery drains under a weak charger" below.
 
 ## Dependencies
 
@@ -143,6 +145,40 @@ the idle-check treats it as never-idle, so it can't drop further to `quiet` eith
 Everything else that spikes load (games, compiles) still gets full `performance` as
 before. Hardware-verified: triggering both scripts while an actual inference request was
 in flight (`llama-server` resident) flipped the EC from `performance` to `balanced`.
+
+## Known issue: battery drains under a weak/travel charger despite being "plugged in"
+
+Direct user report 2026-07-04, confirmed in use with a smaller/travel USB-C PD charger or
+power bank (≤65W): this hardware's combined SoC package power alone can hit 60W+ under
+real load (e.g. LLM inference), and total system draw (+ display, SSD, Wi-Fi, USB) easily
+exceeds what a charger that size can supply. When that happens the battery has to
+supplement the shortfall, so it visibly drains even though `AC0/online` reports 1 — this
+is a real power budget ceiling, not a bug in the charge-threshold logic (`platform_profile`
+itself doesn't limit charger *input* current, only the SoC's own draw).
+
+Exact charger wattage isn't reliably readable from sysfs on this platform — `ucsi_acpi`
+doesn't expose the negotiated PDO list here (`/sys/class/typec/port*/usb_power_delivery/`
+is empty), so there's no clean way to compare "charger max" against "current draw" in
+software. Instead, `platform-profile-idle-check` watches the one signal that's true
+regardless of which charger is plugged in: `BAT0/status == "Discharging"` while
+`AC0/online == 1` means whatever profile is currently active draws more than this charger
+can supply, right now. That instantly forces `platform_profile=quiet` — ahead of every
+other rule, including the LLM-inference `balanced` exception, since a charger too weak for
+`performance` can't be assumed to handle `balanced` either. Self-corrects on the next 60s
+check once the charger can keep up again (e.g. after the burst finishes or the load
+lightens).
+
+Hardware-verified: with the wrapper's `BAT_STATUS_PATH` pointed at a fake `"Discharging"`
+file (battery itself was actually charging at the time), the script forced `quiet`; the
+real script confirmed a no-op against real `Charging` status. Real end-to-end reproduction
+(a live drain event under the reported travel charger) was not directly captured — the
+underlying job is charger-agnostic by design, so it isn't expected to need per-charger
+tuning, but flag it if `quiet` still isn't enough headroom for a given charger + workload
+combination.
+
+The actual fix, not a software one: use the higher-wattage charger this hardware ships
+with (or any charger ≥100W) for sustained heavy workloads if avoiding *any* battery draw
+matters — no software profile switch can make a charger supply more watts than it has.
 
 CPU core-parking (offlining unused logical CPUs) was considered and rejected: `cpuidle`
 already uses `acpi_idle` with C1/C2/C3 all enabled and C3 (deepest) is the most-hit state
