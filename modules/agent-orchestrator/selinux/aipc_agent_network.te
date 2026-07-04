@@ -1,0 +1,37 @@
+# aipc_agent_network — SELinux policy for aipc-agent-orchestrator.service
+#
+# A plain systemd unit (Type=simple, no SELinuxContext= override) runs as
+# init_t, which has no `name_connect` to unreserved_port_t by default —
+# hardware-verified 2026-07-05: the supervisor's outbound call to the
+# LiteLLM gateway (127.0.0.1:4000) hung until this was granted, confirmed
+# via `ausearch -m avc` showing `denied { name_connect } ... dest=4000
+# tcontext=system_u:object_r:unreserved_port_t:s0`. Same class of gap as
+# other custom systemd units on this image (see llm-lemonade's
+# configure-lemonade.sh for the sibling execute/map version of this).
+#
+# Generated from the real denial via:
+#   sudo ausearch -m avc -ts recent --raw | grep "dest=4000" | audit2allow -M aipc_agent_network
+# then hand-trimmed: the raw audit2allow output also bundled an unrelated
+# port-443 rule (langchain_litellm's bundled litellm SDK opportunistically
+# fetching a remote model-cost-map from GitHub on init, already gracefully
+# handled with a local fallback per its own warning log — not something to
+# grant broader network access for) and var_lib_t execute/map rules that
+# were an artifact of testing at the live-hotfix path (/var/lib/aipc-agent
+# instead of the read-only /usr) — the real /usr/lib/aipc-agent path gets
+# lib_t automatically, which already has execute/map without a custom rule.
+#
+# unreserved_port_t is broad (all of 1024-65535), not just port 4000 —
+# SELinux has no port-specific type for 4000 without first reclassifying
+# it via `semanage port`, which would be a heavier, more invasive change
+# for one internal gateway port. This is the granularity actually
+# available; revisit if it ever needs tightening.
+module aipc_agent_network 1.0;
+
+require {
+	type init_t;
+	type unreserved_port_t;
+	class tcp_socket name_connect;
+}
+
+#============= init_t ==============
+allow init_t unreserved_port_t:tcp_socket name_connect;
