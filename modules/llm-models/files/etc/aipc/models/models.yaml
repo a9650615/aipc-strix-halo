@@ -34,19 +34,31 @@ models:
   # capability. devstral:24b (Mistral's dedicated agentic-coding model)
   # was also tried and rejected — it either skipped tool calls or refused
   # outright even when explicitly told to use them, in this same harness.
+  #
+  # Moved from Ollama to Lemonade's llamacpp:vulkan backend 2026-07-05 —
+  # hardware-verified: same GGUF weights, but Lemonade's Vulkan backend
+  # measured ~41.6 tok/s vs Ollama's ~30.7 tok/s on this identical model
+  # (+35%), and tool-calling was re-verified structured (streaming
+  # tool_calls delta, finish_reason: "tool_calls") on this backend before
+  # switching — see modules/llm-lemonade/README.md for the full backend
+  # comparison (ROCm was tried first per AMD's own guidance and rejected:
+  # it can't allocate past the 4GB VRAM carve-out into GTT the way Ollama's
+  # build does, even with enable_dgpu_gtt on, and is far slower once forced
+  # to — Vulkan turned out to be the actual best performer on this specific
+  # APU for llama.cpp inference, contrary to the ROCm-first assumption).
   - alias: coder-agentic
-    backend: ollama
-    model_id: gemma4:26b
-    size_gb: 18.0
-    keep_alive: "10m"
+    backend: lemonade
+    model_id: Gemma-4-26B-A4B-it-GGUF
+    size_gb: 16.9
 
-  # 35B MoE reasoning + agentic-coding model, pulled straight from HF via
-  # Ollama's hf.co/ gateway (deepreinforce-ai/Ornith-1.0-35B-GGUF, Q4_K_M).
+  # 35B MoE reasoning + agentic-coding model. Same migration as
+  # coder-agentic above: Lemonade's llamacpp:vulkan backend measured
+  # ~58.6 tok/s vs Ollama's ~38.8 tok/s (+51%) for this exact model,
+  # tool-calling re-verified structured on the new backend.
   - alias: ornith-35b
-    backend: ollama
-    model_id: hf.co/deepreinforce-ai/Ornith-1.0-35B-GGUF:Q4_K_M
+    backend: lemonade
+    model_id: Ornith-1.0-35B-GGUF-Q4_K_M
     size_gb: 19.7
-    keep_alive: "10m"
 
   - alias: main-cloud
     backend: anthropic

@@ -12,5 +12,7 @@ set -eu
 mkdir -p /etc/aipc/env.d/llm-lemonade
 printf '8001\n' > /etc/aipc/env.d/llm-lemonade/port
 
+chmod 0755 /usr/lib/aipc/llm-lemonade/configure-lemonade.sh
+
 systemctl daemon-reload
 systemctl enable lemonade.service

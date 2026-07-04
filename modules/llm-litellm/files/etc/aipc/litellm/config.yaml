@@ -21,22 +21,28 @@ model_list:
   # See models.yaml for why this is gemma4 and not qwen2.5-coder: Ollama's
   # streaming tool-call support is broken for the qwen2 family regardless
   # of model size, hardware-verified via direct /api/chat testing.
+  #
+  # Moved from Ollama to Lemonade (llamacpp:vulkan) 2026-07-05 — see
+  # models.yaml and modules/llm-lemonade/README.md for the benchmark and
+  # backend-choice writeup. Same router (lemond on :8001) as resident-small;
+  # Lemonade forwards by the `model` field to whichever child llama-server
+  # process currently has that model loaded — no keep_alive needed here,
+  # Lemonade's own max_loaded_models=2 setting keeps both this and
+  # ornith-35b resident simultaneously (see llm-lemonade's config).
   - model_name: coder-agentic
     litellm_params:
-      model: ollama_chat/gemma4:26b
-      api_base: http://127.0.0.1:11434
-      keep_alive: "10m"
+      model: openai/Gemma-4-26B-A4B-it-GGUF
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
 
   # Ornith-1.0-35B (deepreinforce-ai/Ornith-1.0-35B-GGUF, Q4_K_M, 19.7GB) —
-  # 35B MoE reasoning + agentic-coding model pulled straight from HF via
-  # Ollama's hf.co/ gateway. Q4_K_M matches the repo convention for all
-  # other large models. Pull with:
-  #   ollama pull hf.co/deepreinforce-ai/Ornith-1.0-35B-GGUF:Q4_K_M
+  # 35B MoE reasoning + agentic-coding model. Moved from Ollama to Lemonade
+  # (llamacpp:vulkan) 2026-07-05, same reasoning as coder-agentic above.
   - model_name: ornith-35b
     litellm_params:
-      model: ollama_chat/hf.co/deepreinforce-ai/Ornith-1.0-35B-GGUF:Q4_K_M
-      api_base: http://127.0.0.1:11434
-      keep_alive: "10m"
+      model: openai/Ornith-1.0-35B-GGUF-Q4_K_M
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
 
   - model_name: main-cloud
     litellm_params:

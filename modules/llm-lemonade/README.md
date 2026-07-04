@@ -1,24 +1,90 @@
 # llm-lemonade
 
 Runs AMD's Lemonade Server — a multi-backend local inference platform, not
-just an NPU-only server. On this machine it currently serves one shipped
-alias, plus a second capability that's proven but not currently wired to
-any registered model:
+just an NPU-only server. As of 2026-07-05 it serves **all three** local
+model aliases:
 
 - **FLM backend (NPU/XDNA)**: `resident-small` — an always-on model that
   has no business permanently occupying iGPU/GTT memory that
   `coder-agentic`/`ornith-35b` also need. The NPU otherwise sits idle.
   Hardware-verified 2026-07-04 with a real chat completion, including
   persistence of the pulled model across a service restart.
+- **llamacpp:vulkan backend**: `coder-agentic` and `ornith-35b` — moved
+  here from Ollama 2026-07-05. See "Backend choice: Vulkan, not ROCm"
+  below for why, and the speed numbers that justified the move.
 - **vLLM backend (ROCm, gfx1151)**: continuous batching + PagedAttention
-  for concurrent-request throughput, as opposed to Ollama's single-stream
-  serving. Hardware-verified 2026-07-04 with a real chat completion
-  against `Qwen3.5-4B-FP16-vLLM` — but **not currently registered as a
-  model alias** (the manifest was trimmed 2026-07-04 to a small
-  deliberate set; `intent-3b` was cut too, along with the qwen2.5 family
-  elsewhere in the manifest). The backend and the fix for its one
-  remaining gap (see "`vLLM backend notes`" below) stay documented here
-  for whenever a vLLM-backed alias is wanted again.
+  for concurrent-request throughput, as opposed to single-stream serving.
+  Hardware-verified 2026-07-04 with a real chat completion against
+  `Qwen3.5-4B-FP16-vLLM` — but **not currently registered as a model
+  alias** (see "`vLLM backend notes`" below for the remaining gap). Stays
+  documented here for whenever a vLLM-backed alias is wanted.
+
+## Backend choice: Vulkan, not ROCm (2026-07-05)
+
+`coder-agentic` (Gemma-4-26B-A4B-it-GGUF) and `ornith-35b`
+(Ornith-1.0-35B-GGUF-Q4_K_M) were migrated from Ollama to Lemonade's
+`llamacpp` backend. AMD's own article ("Ryzen AI and Radeon are ready to
+run LLMs Locally with Lemonade Software") names **ROCm** as the
+recommended backend for this exact chip (Ryzen AI MAX+ 395 / Strix Halo),
+so ROCm was tried first — and rejected, based on real measurements, not
+the doc's recommendation:
+
+- **ROCm's allocator can't cross the 4GB VRAM carve-out into GTT by
+  default.** Loading either model via `--llamacpp rocm` failed:
+  `ggml_backend_cuda_buffer_type_alloc_buffer: allocating ... cudaMalloc
+  failed: out of memory` — trying to fit the model into the fixed 4GB
+  VRAM pool instead of the ~122GB GTT pool `system-unified-memory`
+  provisions (confirmed Ollama was concurrently using ~45GB via GTT with
+  no issue at the same time, so this isn't a hardware ceiling). Fixed by
+  `lemonade config set enable_dgpu_gtt=true` — after which ROCm *does*
+  load successfully.
+- **But ROCm+GTT is much slower than Vulkan on this hardware**, measured
+  directly: gemma4:26b-equivalent generation speed was **9.4 tok/s on
+  ROCm+GTT** vs **38.6-41.6 tok/s on Vulkan** — Vulkan is ~4x faster here.
+  Likely explanation: llama.cpp's ROCm/HIP backend expects true
+  dedicated VRAM and pays a heavy penalty falling back through GTT on an
+  APU, while Vulkan's memory model (via RADV/Mesa) handles the shared
+  unified-memory heap natively.
+- Full head-to-head vs the previous Ollama setup, same weights, Vulkan
+  backend:
+  - `coder-agentic` (Gemma-4-26B-A4B-it-GGUF): **41.6 tok/s** (Lemonade
+    Vulkan) vs **30.7 tok/s** (Ollama) — **+35%**.
+  - `ornith-35b` (Ornith-1.0-35B-GGUF-Q4_K_M): **58.6 tok/s** (Lemonade
+    Vulkan) vs **38.8 tok/s** (Ollama) — **+51%**. (Ollama's numbers were
+    measured while it was concurrently serving both models at once, which
+    if anything favors Ollama in this comparison — contention should only
+    make Ollama's numbers worse, not better.)
+  - Tool-calling re-verified structured on Vulkan for both models
+    (streaming `delta.tool_calls`, `finish_reason: "tool_calls"`) before
+    switching — same class of regression risk flagged in
+    `dev-ai-opencode`'s README for the qwen2.5 family, checked fresh for
+    this new backend rather than assumed safe because "it's still
+    llama.cpp underneath."
+- `llamacpp.backend: "vulkan"` is pinned in `config.json` (see below) so
+  a pulled-but-unloaded model's auto-load-on-first-request picks Vulkan,
+  not whatever `"auto"` would otherwise choose.
+- `vllm:rocm` (the other backend, see below) is a different code path
+  (Python/PyTorch/Triton, not llama.cpp) — this finding is specific to
+  llama.cpp GGUF inference on this APU and says nothing about whether
+  ROCm is still the right call for vLLM.
+
+### Two settings had to change from Lemonade's defaults
+
+`lemonade.service`'s `ExecStartPre` merges these into `config.json` on
+every start (idempotent, skips if the file doesn't exist yet — see the
+unit file for why):
+
+- `max_loaded_models: 2` (default `1`) — the default only allows one
+  `llamacpp`-backend model resident at a time; loading a second one
+  evicts the first (confirmed: loading `ornith-35b` after `coder-agentic`
+  was already loaded silently swapped it out, ~20s reload cost on the
+  next `coder-agentic` request). `resident-small` doesn't count against
+  this limit (different backend/type: `flm`/`npu`). `2` lets both
+  `coder-agentic` and `ornith-35b` stay resident simultaneously, matching
+  what Ollama did before the migration.
+- `enable_dgpu_gtt: true` (default `false`) — see above; without this,
+  ROCm can't load either model at all. Left on even though Vulkan is the
+  active backend, in case ROCm is revisited later.
 
 ## Corrected assumptions (2026-07-04)
 
@@ -90,14 +156,20 @@ running container:
   - `/var/lib/aipc-lemonade/flm` -> `/root/.config/flm`
   - `/var/lib/aipc-lemonade/huggingface` -> `/root/.cache/huggingface`
 - Exposes an OpenAI-compatible HTTP API on `127.0.0.1:8001`.
-- `aipc models sync` pulls `resident-small`'s weights via
+- `aipc models sync` pulls all three aliases' weights via
   `podman exec lemonade /opt/lemonade/lemonade pull <model-id>` (see
   `llm-models`), same pattern as `llm-ollama`.
-- The `vllm:rocm` backend itself is not installed by default — it's a
-  ~2.5GB download (`lemonade backends install vllm:rocm` on the running
-  container), only relevant if a vLLM-backed alias is registered again.
-  The FLM backend (`resident-small`) is bundled and needs no extra install
-  step.
+- The `llamacpp:vulkan` backend itself is not installed by default —
+  `podman exec lemonade /opt/lemonade/lemonade backends install
+  llamacpp:vulkan` (~220MB, one-time). `lemonade load` auto-installs it on
+  first use too, but that means the first real chat request eats the
+  download — `verify.sh` checks the binary is already present so this
+  isn't a surprise in production. The FLM backend (`resident-small`) is
+  bundled and needs no extra install step.
+- The `vllm:rocm` backend itself is not installed by default either —
+  it's a ~2.5GB download (`lemonade backends install vllm:rocm` on the
+  running container), only relevant if a vLLM-backed alias is registered
+  again.
 
 ## Unit placement
 
@@ -112,11 +184,25 @@ under `files/etc/systemd/system/` and placed by the renderer.
 - `llm-models` (registers the aliases that resolve to Lemonade-served
   model ids).
 
+## Interaction with system-memory-oom-guard
+
+That module (currently `.disabled`, pending its own threshold-calibration
+hardware-verified claim) already knows how to relieve pressure on Lemonade
+via `POST /api/v0/unload`. Moving `coder-agentic`/`ornith-35b` here means
+this container can now have up to 3 models resident at once
+(`resident-small` + 2 via `max_loaded_models`) instead of 1 — worth a
+re-check of that module's assumptions before it's ever enabled, not
+addressed as part of this change.
+
 ## Consumers
 
-Not called directly. `llm-litellm` routes NPU-eligible models here by
+Not called directly. `llm-litellm` routes all three local aliases here by
 model name (`openai/<lemonade-model-id>` against
-`http://127.0.0.1:8001/v1`) — currently just `resident-small`.
+`http://127.0.0.1:8001/v1`) — `lemond` (the router on :8001) forwards each
+request to whichever child `llama-server` process currently has that
+model loaded, spawning/swapping as needed. `llm-ollama` currently has no
+aliases pointing to it — it's still installed and enabled, just idle,
+since retiring the module entirely wasn't part of this change.
 
 ## Runtime requirements
 
@@ -154,6 +240,8 @@ registered again later; not a concern right now since none is registered.
   in, which needs its own build/push pipeline; out of scope until a
   vLLM-backed alias is actually wanted again.
 - vLLM's default `--gpu-memory-utilization` (0.92) will fail to start if
-  Ollama already has a large model resident (shares the same unified
-  memory pool) — pass a lower value via `--vllm-args` if this becomes
-  relevant again.
+  something else already has a large model resident (shares the same
+  unified memory pool) — `coder-agentic`/`ornith-35b` moving to this same
+  container's `llamacpp:vulkan` backend (see above) makes this more
+  likely to matter, not less. Pass a lower value via `--vllm-args` if
+  this becomes relevant again.

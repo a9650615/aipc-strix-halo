@@ -19,6 +19,8 @@ RestartSec=5
 LimitMEMLOCK=infinity
 ExecStartPre=-/usr/bin/podman rm -f lemonade
 ExecStartPre=/usr/bin/mkdir -p /var/lib/aipc-lemonade/cache /var/lib/aipc-lemonade/flm /var/lib/aipc-lemonade/huggingface
+# See configure-lemonade.sh for what this does and why.
+ExecStartPre=/usr/lib/aipc/llm-lemonade/configure-lemonade.sh
 ExecStart=/usr/bin/podman run \
     --name lemonade \
     --rm \

@@ -1,1 +1,4 @@
-# Containerized — no host rpm packages.
+# Containerized — only host package needed is jq, used by lemonade.service's
+# ExecStartPre to merge config.json on the bind-mounted host path before the
+# container starts (see that file for why).
+jq
