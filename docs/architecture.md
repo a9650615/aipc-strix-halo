@@ -145,7 +145,7 @@ Side-effects:
 
 ---
 
-## 7. Module Inventory (44 modules across 7 phases)
+## 7. Module Inventory (45 modules across 7 phases)
 
 Module structure (each module follows the same shape):
 
@@ -236,6 +236,7 @@ modules/<name>/
 | `dev-ai-aider` | Aider → LiteLLM config |
 | `dev-ai-goose` | Goose → LiteLLM + MCP config |
 | `dev-ai-claude-code` | Claude Code CLI |
+| `ccs` | CCS — multi-provider Claude Code/Codex/Droid switcher, `aipc` profile → LiteLLM |
 | `dev-ai-mcp-dev-servers` | GitHub / FS / Postgres / Playwright / etc. MCP servers |
 
 ### Phase 7 — Ops
@@ -517,7 +518,7 @@ aipc_setup/
 │   ├── AGENTS.md                  # rules for AI working in this repo
 │   ├── specs/<capability>/        # per-capability specs (populated by archived changes)
 │   └── changes/<id>-<slug>/       # active change proposals
-├── modules/                       # 44 modules (see §7)
+├── modules/                       # 45 modules (see §7)
 ├── targets/
 │   ├── bootc/Containerfile        # primary render
 │   └── ansible/                   # fallback render

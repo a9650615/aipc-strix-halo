@@ -44,7 +44,7 @@ Precedence: **user's explicit signal > task shape > model tier**. A Sonnet asked
 
 ## 1. Read these first
 
-1. `docs/architecture.md` — the long-form source of truth for the project's design (7 phases / 44 modules)
+1. `docs/architecture.md` — the long-form source of truth for the project's design (7 phases / 45 modules)
 2. `openspec/changes/<change-name>/{proposal,design,specs/**,tasks}.md` for the area you are changing
 3. `openspec/specs/<capability>/spec.md` for already-archived requirements
 4. `docs/live-hotfix-workflow.md` — before hand-patching anything on the running machine to
@@ -87,7 +87,7 @@ The `modules/` directory is the heart of the repo. Every module:
 
 If a change makes the bootc and ansible renders diverge, that is a design error. Fix the module to be neutral, not the renderer to special-case.
 
-**Do not invent new module categories without an OpenSpec change.** The 44 modules in `project.md §7` are exhaustive for v1.
+**Do not invent new module categories without an OpenSpec change.** The 45 modules in `project.md §7` are exhaustive for v1.
 
 ---
 

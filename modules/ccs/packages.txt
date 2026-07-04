@@ -1,1 +1,1 @@
-# CCS Module (Claude Code Switch)
+# ccs installed on host via npm — see README

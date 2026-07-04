@@ -43,6 +43,17 @@ what you want. To change what's installed *in the container itself*, edit
 matching this repo's declarative/rebuild-don't-hand-patch philosophy —
 don't reach for `sudo dnf` inside the container by hand.
 
+Same bridge, same consequence for `npm install -g`: hardware-verified
+2026-07-04, `distrobox enter node -- sudo npm install -g <pkg>` now installs
+onto the host's npm prefix, not the container's — `sudo` doesn't
+distinguish package managers, it forwards everything. `dev-ai-opencode` and
+`dev-ai-claude-code`'s documented `sudo npm install -g` commands predate this
+bridge and were verified back when `sudo` was still container-local; run
+them again today and the package lands on the host instead. `ccs`
+(added after this bridge existed) installs directly on the host for exactly
+this reason — see its README for why that's actually the correct place for
+it regardless.
+
 ## Dependencies
 
 - `system-base` (podman runtime).
