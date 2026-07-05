@@ -86,7 +86,7 @@ unit file for why):
   ROCm can't load either model at all. Left on even though Vulkan is the
   active backend, in case ROCm is revisited later.
 
-## Concurrency: `-np 2 -kvu`, not `-np N` alone (2026-07-05)
+## Concurrency: `-np 4 -kvu`, not `-np N` alone (2026-07-05, bumped from `-np 2` same day)
 
 `llama-server` has continuous batching on by default (`-cb`), but that
 alone didn't help here: Lemonade loads models with `-np` (`--parallel`,
@@ -99,10 +99,10 @@ request, including plain `/health` and `/slots` checks, queued behind it
 with no visible feedback.
 
 Fix is `lemonade load <model> --llamacpp vulkan --ctx-size 262144
---llamacpp-args "-np 2 -kvu" --save-options` — two things together, not
+--llamacpp-args "-np 4 -kvu" --save-options` — two things together, not
 either alone:
 
-- `-np 2` gives 2 server slots instead of 1 (real concurrent requests).
+- `-np 4` gives 4 server slots instead of 1 (real concurrent requests).
 - `-kvu` (`--kv-unified`) is required alongside an explicit `-np` —
   llama-server's help says kv-unified "default: enabled if number of
   slots is auto", meaning setting `-np` explicitly without `-kvu` flips
@@ -117,11 +117,14 @@ either alone:
   budget, not divided), and 2 concurrent requests both complete in
   parallel (verified: two simultaneous ornith-35b requests finished in
   6.7s total, not ~2x a single request's time).
-- Went with `-np 2` rather than `-np 4`: more slots means a smaller
-  effective *combined* budget before contention (unified KV is shared,
-  not infinite) — 2 was picked as a reasonable balance for this
-  hardware's actual concurrent-user count (one interactive person),
-  not a hard ceiling. Revisit if real multi-session contention shows up.
+- Started at `-np 2`, bumped to `-np 4` the same day once the user had 2
+  real concurrent agent sessions running and needed more headroom —
+  more slots doesn't multiply memory (kv-unified pool size is fixed by
+  `--ctx-size`, shared dynamically), but does dilute per-request tok/s
+  once slots are simultaneously busy (measured: solo request ~58.6 tok/s,
+  2 concurrent ~10.3-16.8 tok/s each). Revisit downward only if this
+  hardware's real usage pattern turns out to need fewer, faster slots
+  more than more, slower ones.
 - `--save-options` persists this into `recipe_options.json` under
   `/root/.cache/lemonade` (the mounted `cache` volume, so it survives
   container restarts on an already-provisioned machine) — but this is a
@@ -130,6 +133,34 @@ either alone:
   a one-time manual/CLI step, same category as `aipc models sync`.
   Re-run it (per model) if `recipe_options.json` is ever wiped or on a
   fresh machine before relying on this.
+
+## Batch size / flash attention: tested, not adopted (2026-07-05)
+
+User asked whether tuning `-b`/`-ub` (batch/ubatch size) or forcing flash
+attention would meaningfully speed up `coder-agentic`. Tested against a
+fixed ~15k-token prompt on the live `llamacpp:vulkan` backend (baseline:
+implicit defaults `-b 2048 -ub 512`, no `-fa` flag, measured 304 tok/s
+prefill):
+
+- `-b 4096 -ub 1024`: 318 tok/s prefill (+4.7%) — within noise given real
+  concurrent load and the user's own power cap active during testing; not
+  a reliable, reproducible win. Not adopted.
+- `-b 4096 -ub 256 -fa on`: **18.9 tok/s prefill — a ~16x regression**
+  (793s vs baseline's 49s for the identical prompt). Flash attention
+  forced on is apparently badly unsupported on this Vulkan/RADV +
+  gfx1151 combination as of this llama-server build — matches a known
+  upstream report of PP performance loss with certain batch settings on
+  Strix Halo Vulkan (ggml-org/llama.cpp#18725). **Do not set `-fa on`**
+  for either model on this hardware until upstream fixes this; `-fa auto`
+  (the default, i.e. omitting the flag) is what's actually running.
+  Reverted immediately; both models are back on plain `-np 4 -kvu` with
+  no batch/flash-attention overrides.
+
+Conclusion: kv-unified (`-kvu`, already in place) *is* the "shared KV
+cache" this hardware needs — there was no separate missing lever there.
+Batch-size tuning showed no reliable win worth the added config surface,
+and forcing flash attention actively hurts. Not revisited unless a future
+llama.cpp/Mesa update changes this.
 
 ## Corrected assumptions (2026-07-04)
 
