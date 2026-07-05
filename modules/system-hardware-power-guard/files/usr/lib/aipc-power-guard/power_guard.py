@@ -164,8 +164,8 @@ class PowerGuard:
             if _write(f"{c}/scaling_max_freq", mx):
                 okf += 1
         LOG.info("released freq: restored %d/%d cpus", okf, len(self.orig_max_freq))
-        if self.orig_epp:
-            self._apply_epp(self.orig_epp)
+        # EPP intentionally NOT restored — tuned/powerdevil own it; we only
+        # touch EPP during EMERGENCY/RECONNECTING and hand it back on release.
 
     # ---------- state ----------
     def _set_state(self, s: str) -> None:
@@ -238,7 +238,10 @@ class PowerGuard:
             self._persist(bat)
             return
 
-        # online + stable: run the reconnect->expand machine
+        # online + stable: observe before releasing. INIT (boot/restart) also
+        # observes — at start we don't know which adapter is attached (65W vs
+        # 140W), so confirm the margin first. Cost: a ~observe_period_s throttle
+        # after every start. Accepted: a wrong guess here back-feeds the battery.
         if self.state in ("DISCHARGING", "INIT", "EMERGENCY"):
             self._set_state("RECONNECTING")
             self.reconnect_t0 = time.time()
@@ -248,8 +251,11 @@ class PowerGuard:
 
         if self.state == "RECONNECTING":
             if time.time() - self.reconnect_t0 >= self.observe_period_s:
+                # Stop touching EPP once stable: tuned/powerdevil own EPP outside
+                # emergencies. Only scaling_max_freq (hard ceiling, which they do
+                # NOT write) is ours — that's the clamp that actually bounds draw.
+                # Writing EPP here would fight tuned every poll.
                 self._set_state("EXPANDING")
-                self._apply_epp(self.epp_normal)
         elif self.state == "EXPANDING":
             if delta < 0:  # margin shrinking
                 self._set_state("CAUTIONARY")

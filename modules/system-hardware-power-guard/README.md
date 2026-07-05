@@ -17,6 +17,25 @@ it can write the cpufreq/EPP/charge sysfs nodes that need root.
    login. The guard re-applies `charge_threshold_percent` on boot, closing the
    reboot gap.
 
+## Coexistence with tuned / powerdevil (no EPP fight)
+
+`tuned` (active on this image) and KDE `powerdevil` both write amd-pstate EPP.
+This guard does **not** fight them for EPP outside emergencies:
+
+- `scaling_max_freq` (hard frequency ceiling) is the guard's alone — tuned/
+  powerdevil never write it, so it is the clamp that actually bounds draw.
+- EPP is written **only** in EMERGENCY/RECONNECTING (`power`). Once stable
+  (EXPANDING/CAUTIONARY) and on `_release`, the guard stops touching EPP and
+  lets tuned/powerdevil own it. Result: no per-poll EPP oscillation.
+
+## Startup behavior (INIT also observes)
+
+At daemon start (boot or restart) the adapter is unknown (could be 65W or
+140W), so INIT enters RECONNECTING — it clamps to `reconnect_freq_factor` and
+observes for `reconnect_observe_period_s` before expanding. Cost: a brief
+throttle after every start. This is deliberate: a wrong guess here back-feeds
+the battery.
+
 ## Controls (AMD Ryzen AI MAX+ 395, amd-pstate-epp)
 
 - `scaling_max_freq` — hard frequency ceiling (fraction of `cpuinfo_max_freq`)
