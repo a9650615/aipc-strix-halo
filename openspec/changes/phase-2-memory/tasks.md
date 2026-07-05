@@ -1,134 +1,148 @@
 ## 1. Module Scaffolding (5 modules)
 
-- [ ] 1.1 `db-postgres`: create `modules/db-postgres/` with README,
-  files/ for the Postgres 16 quadlet (volume on `/var/lib/aipc-db`),
-  init SQL that creates the `aipc` database and loads `pgvector`,
-  post-install.sh (idempotent extension load), verify.sh (port 5432
-  reachable, extension installed).
-- [ ] 1.2 `db-qdrant`: create `modules/db-qdrant/` with README,
-  files/ for the Qdrant quadlet (volume on `/var/lib/aipc-qdrant`),
-  **named with `.disabled` suffix** so the renderer skips it,
-  verify.sh (skip-when-disabled).
-- [ ] 1.3 `rag-embedder`: create `modules/rag-embedder/` with
-  README, files/ for the HTTP service quadlet hosting bge-m3 + bge
-  reranker on port 8201, mounted on the iGPU via Lemonade,
-  post-install.sh (cache warmup), verify.sh (`/healthz` returns
-  200, `embed-bge` alias resolves through LiteLLM).
-- [ ] 1.4 `rag-ingest`: create `modules/rag-ingest/` with README,
-  files/ for the four watcher services (`aipc-rag-desktop.service`,
-  `aipc-rag-code.service`,
-  `aipc-rag-browser-{firefox,chrome}.service`,
-  `aipc-rag-screen-audio.service`), enable Desktop + code by
-  default, leave browser + screen+audio disabled, verify.sh
-  (Desktop + code active, others disabled-by-default).
-- [ ] 1.5 `memory-mem0`: create `modules/memory-mem0/` with README,
-  files/ for the mem0 service on port 7000 pointing at the active
-  vector backend declared in `/etc/aipc/memory/backend`, verify.sh
-  (`/healthz` returns 200, sample write+read round-trips).
+- [x] 1.1 `db-postgres`: scaffolded 2026-06-30, build-time fixed
+  2026-07-01. README, files/, init SQL (`CREATE EXTENSION
+  IF NOT EXISTS vector`), post-install.sh (idempotent, enable-only),
+  verify.sh (port 5432 + extension check). `.disabled` stays pending
+  hardware verify.
+- [x] 1.2 `db-qdrant`: scaffolded 2026-06-30. README, quadlet,
+  `.disabled`, verify.sh skip-when-disabled (`exit 2`).
+- [x] 1.3 `rag-embedder`: scaffolded 2026-06-30, build-time fixed
+  2026-07-01. README, quadlet (port 8201, iGPU devices), verify.sh
+  (`/healthz` + service-active). **Descoped**: "post-install.sh cache
+  warmup" — can't run at build time (no init, nothing to warm), same
+  build/runtime lesson as the other 4 modules; correctly left
+  enable-only. `embed-bge` alias now wired (2026-07-06, this pass) but
+  unverified — the backing image (`docker.io/aipc/rag-embedder:latest`)
+  has no source in this repo yet (see README).
+- [~] 1.4 `rag-ingest`: scaffolded 2026-06-30 (README, 5 systemd
+  units, consent config skeletons), build-time bug fixed 2026-07-06
+  (`--now` removed, fake `pip install aipc-rag-ingest` dropped — see
+  post-install.sh ponytail note). **Not implemented**: the four
+  watcher binaries the units `ExecStart=` (`aipc-rag-desktop`,
+  `aipc-rag-code`, `aipc-rag-browser`, `aipc-rag-screen-audio`) don't
+  exist anywhere in the repo — see group 5.
+- [x] 1.5 `memory-mem0`: scaffolded 2026-06-30, build-time fixed
+  2026-07-01. README, quadlet (port 7000), verify.sh (`/healthz` +
+  service-active). **Partial**: verify.sh only checks `/healthz`, not
+  "sample write+read round-trip" as originally scoped — round-trip
+  needs a live gateway + running mem0, i.e. hardware-verified only.
 
 ## 2. Postgres + pgvector
 
-- [ ] 2.1 Quadlet runs Postgres 16 (Bazzite-compatible image),
-  binds to `127.0.0.1:5432`, persistent volume on
-  `/var/lib/aipc-db`.
-- [ ] 2.2 Init SQL loads `pgvector` and creates the `aipc`
-  database + role.
-- [ ] 2.3 `/etc/aipc/memory/backend` defaults to `pgvector`.
+- [x] 2.1 Quadlet runs Postgres 16, binds `127.0.0.1:5432`,
+  persistent volume `aipc-postgres-data` on `/var/lib/postgresql/data`.
+- [x] 2.2 Init SQL loads `pgvector`; `aipc-pg-init.service` runtime
+  oneshot creates the `aipc` database (role: trust-auth `postgres`,
+  no separate app role — simpler than spec'd "database + role", flagged
+  not re-litigated here).
+- [x] 2.3 `/etc/aipc/memory/backend` defaults to `pgvector`.
 
 ## 3. Qdrant (Disabled By Default)
 
-- [ ] 3.1 Quadlet declared but `.disabled` so the bootc + ansible
-  renderers skip it.
-- [ ] 3.2 Document the `aipc db migrate qdrant` path in
-  `db-qdrant/README.md`.
+- [x] 3.1 Quadlet declared but `.disabled`; both renderers'
+  `discover()` skip it centrally (`quadlet-render-support`, 2026-07-01).
+- [x] 3.2 `db-qdrant/README.md` documents the `aipc db migrate
+  qdrant` path. Note: the CLI command itself (`aipc db migrate
+  qdrant`) is not implemented — this task only required documenting
+  the path, not building it; tracked as a real future gap, not part
+  of this task's literal scope.
 
 ## 4. bge-m3 + Reranker Service
 
-- [ ] 4.1 Quadlet runs a single HTTP service hosting both models.
-- [ ] 4.2 Embedding endpoint registered behind LiteLLM's existing
-  `embed-bge` alias (Phase 1 already declares it; this change
-  supplies the backing service URL).
-- [ ] 4.3 Reranker endpoint `/rerank` documented in README.
+- [x] 4.1 Quadlet runs a single HTTP service hosting both models
+  (scaffold; real backing image not built yet, see 1.3).
+- [x] 4.2 `embed-bge` alias added to both `models.yaml` and
+  `llm-litellm`'s `config.yaml` (2026-07-06, this pass) — it had
+  actually been *cut* 2026-07-04 as an "unused extra" before
+  rag-embedder needed it; re-added pointing at
+  `http://127.0.0.1:8201/v1`. Unverified (no backing image, no
+  hardware).
+- [x] 4.3 `/rerank` documented in README, alongside the new
+  `/v1/embeddings` OpenAI-compat contract needed for the LiteLLM
+  alias to actually reach `/embed` (2026-07-06 addition — LiteLLM's
+  `openai/` provider always calls `{api_base}/embeddings`).
 
 ## 5. RAG Ingest Watchers
 
-- [ ] 5.1 Desktop watcher: poll `~/Desktop` + `~/Documents`,
-  diff-index modified files, push chunks to the embedder, write
-  vectors to the active backend.
-- [ ] 5.2 Code watcher: read repos declared in
-  `~/.config/aipc/rag/repos.yaml` (default empty), line-window
-  chunking for v1 (Q3 deferred), embed + write.
-- [ ] 5.3 Browser watchers: per-browser unit, polls a snapshot
-  copy of `places.sqlite` (Firefox) or `History` (Chrome). Gated
-  on `/etc/aipc/rag/browser-consent.yaml`.
-- [ ] 5.4 Screen+audio watcher: region-selector + TTL'd captures;
-  OCR via Lemonade ONNX, audio via Phase 3 Paraformer streaming
-  (Q2 — if Phase 3 absent, watcher stays disabled). Gated on
-  `/etc/aipc/rag/screen-audio.yaml`. Pauses when
-  `aipc-voice-mute.target` active.
+- [ ] 5.1-5.4 **Not implemented.** Desktop/code/browser/screen-audio
+  watcher logic (poll, diff-index, chunk, embed, write to pgvector)
+  doesn't exist — only systemd unit skeletons pointing at binaries
+  that were never written (see 1.4). Deferred 2026-07-06: browser
+  history parsing, code chunking, and OCR/audio-transcript are each
+  a "pick a mature library, don't hand-roll" decision — bringing
+  options back as a proposal before implementing, per user direction,
+  rather than improvising in this pass. Screen+audio (5.4) is further
+  blocked on Phase 3 (`voice-stt-paraformer`) not existing yet
+  (proposal's own Q2, still open).
 
 ## 6. mem0 Server + Wiring
 
-- [ ] 6.1 mem0 service quadlet on port 7000, env points at the
+- [x] 6.1 Quadlet on port 7000, `DATABASE_URL` points at the
   Postgres backend.
-- [ ] 6.2 `LITELLM_BASE_URL=http://127.0.0.1:4000` in the mem0
-  service env so its internal LLM calls (summarisation,
-  fact-merge) route through the gateway.
-- [ ] 6.3 mem0 client config example in README for Phase 4 agents.
+- [x] 6.2 `LITELLM_BASE_URL=http://127.0.0.1:4000` set in the
+  quadlet env.
+- [x] 6.3 Client config example (`memory.endpoint` +
+  `AIPC_PRIMARY_USER`) in README.
 
 ## 7. `aipc rag` CLI
 
-- [ ] 7.1 `aipc rag list-sources` — prints the canonical source
-  list with state.
-- [ ] 7.2 `aipc rag status` — per-source last-cycle timestamp + item
-  count + vector count.
-- [ ] 7.3 `aipc rag enable <source>` / `disable <source>` — toggles
-  the systemd unit and persists consent.
-- [ ] 7.4 `aipc rag reindex <source>` — force a full re-index from
-  scratch.
-- [ ] 7.5 `aipc rag purge <source> [--confirm]` — drop watcher
-  vectors; require `--confirm` for irreversible deletes.
+- [ ] 7.1-7.5 **Not implemented.** `reindex`/`purge`/`status`
+  semantics depend on the group-5 schema decision (deferred above) —
+  building the CLI ahead of that would lock in a shape before the
+  storage design is settled.
 
 ## 8. Firstboot Consent Prompts (joint with Phase 7)
 
-- [ ] 8.1 Browser-consent screen contribution: per-browser yes/no,
-  writes `/etc/aipc/rag/browser-consent.yaml`.
-- [ ] 8.2 Screen+audio consent screen contribution: region
-  selector + TTL chooser, writes
-  `/etc/aipc/rag/screen-audio.yaml`.
-- [ ] 8.3 Hand-off: screens are owned in Phase 2 but rendered by
-  the Phase 7 `ops-firstboot` wizard runner.
+- [ ] 8.1-8.3 **Blocked on Phase 7.** `ops-firstboot` (Phase 7) is
+  itself only `.disabled`-scaffolded, no wizard runner exists to
+  contribute a screen to. Consent config *files*
+  (`browser-consent.yaml`, `screen-audio.yaml`) already exist with
+  safe defaults (`consent: false`, `enabled: false`) — only the
+  interactive wizard screens are missing.
 
 ## 9. Doctor Checks
 
-- [ ] 9.1 `aipc doctor` memory-rag section asserts:
-  - Postgres reachable + `pgvector` extension installed.
-  - rag-embedder `/healthz` returns 200.
-  - mem0 `/healthz` returns 200.
-  - Desktop + code watchers active.
-  - Active backend matches `/etc/aipc/memory/backend`.
-- [ ] 9.2 INFO (not FAIL) checks:
-  - Browser watchers status (active when consent recorded).
-  - Screen+audio watcher status (active only when opted in).
-  - Vector-count threshold warning (suggests `aipc db migrate
-    qdrant` if pgvector >1M rows).
+- [~] 9.1 Partially covered — each module's `verify.sh` already
+  gives `aipc doctor` (which just maps `verify.sh` exit codes, see
+  `tools/aipc_lib/doctor.py::run_all`) most of this for free:
+  Postgres+pgvector ✓, rag-embedder `/healthz` ✓, mem0 `/healthz` ✓.
+  Desktop+code watcher checks exist in rag-ingest's verify.sh but
+  will always FAIL until group 5 ships. **Missing**: an explicit
+  "active backend matches `/etc/aipc/memory/backend`" assertion —
+  deferred alongside group 5/8 (needs the schema decision first).
+- [ ] 9.2 Browser/screen-audio INFO-not-FAIL status: done (rag-ingest
+  verify.sh already treats these as informational). Vector-count
+  threshold warning: **not implemented** — needs the group-5 schema
+  (table name) decided first; deferred.
 
 ## 10. Documentation
 
-- [ ] 10.1 Per-module README for each of the 5 modules.
-- [ ] 10.2 `docs/memory-rag.md`: end-to-end diagram + consent gates
-  + migration path.
-- [ ] 10.3 Confirm `docs/architecture.md §7` Phase 2 row matches
-  the 5-module list shipped here (no count change to the §7
-  header total).
+- [x] 10.1 Per-module README exists for all 5 modules (each documents
+  its own known gaps inline rather than pretending to be finished).
+- [ ] 10.2 `docs/memory-rag.md` — **not written**. Deferred until the
+  group-5 design proposal is settled, so the end-to-end diagram
+  describes what's actually built rather than the aspirational
+  original design.
+- [x] 10.3 Confirmed 2026-07-06: `docs/architecture.md §7` Phase 2
+  row lists the same 5 modules, no count change needed. (Unrelated
+  pre-existing wording nit: the `rag-ingest` row's purpose text
+  mentions "email+calendar," which isn't one of this proposal's four
+  sources — not touched, out of scope for this pass.)
 
 ## 11. Local Build Verification
 
-- [ ] 11.1 Run `tools/aipc render bootc`; confirm Containerfile
-  includes the 5 modules (db-qdrant rendered as `.disabled`).
-- [ ] 11.2 Run `tools/aipc render ansible --check`; confirm it
-  lints clean.
-- [ ] 11.3 Run each module's `verify.sh` in a privileged container.
+- [x] 11.1 `render bootc` runs clean (2026-07-06). All 5 modules are
+  currently `.disabled`, so `discover()` correctly excludes all of
+  them from output — nothing to include yet, not a failure.
+- [x] 11.2 `render ansible` runs clean, output parses as valid YAML
+  (2026-07-06). No `--check` flag exists on this CLI; ran the plain
+  render instead.
+- [ ] 11.3 **Not run.** Needs a privileged container (systemd +
+  postgres actually running) to execute `verify.sh` meaningfully —
+  out of reach without hardware/a real container runtime in this
+  session. `sh -n` syntax-checked and `python3 -m py_compile`'d
+  every touched script instead (static, not the same as this task).
 
 ## 12. AI PC Hardware Verification
 
