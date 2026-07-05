@@ -5,10 +5,13 @@ with the Phase 4 agent-mcp-gateway (when available).
 
 ## What it does
 
-- Installs three MCP server npm packages globally:
-  `@anthropic-ai/mcp-filesystem`, `@anthropic-ai/mcp-github`,
-  `@anthropic-ai/mcp-playwright`.
-- Writes a registration manifest at `/etc/aipc/mcp-servers.d/dev-servers.yaml`.
+- Registers three MCP servers, run on demand via `npx -y` (no global
+  install): `@modelcontextprotocol/server-filesystem`,
+  `@modelcontextprotocol/server-github`, `@playwright/mcp` (all confirmed
+  present on the npm registry 2026-07-06; an earlier draft of this README
+  and an earlier `@anthropic-ai/mcp-server-playwright` in servers.json were
+  fictitious package names that would 404 on npx — fixed).
+- Ships the registration manifest at `/etc/aipc/mcp/servers.json`.
 
 ## Status
 
