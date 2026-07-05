@@ -31,21 +31,32 @@ model downloads on first start, and the quadlet orders it
 asserted by `verify.sh` (`systemctl is-active` + `curl /healthz`), which
 is the correct place for it.
 
-> **Quadlet deployment gap (pre-existing, blocks enablement).** The
-> bootc renderer COPYs `files/`, `modprobe.d/`, `env/` but does NOT
-> install `quadlet/`. This module's `post-install.sh` enables
-> `rag-embedder.service` without installing the quadlet file, so the unit is
-> absent at build — `systemctl enable` would fail if `.disabled` were
-> removed today. Same gap affects `db-postgres`, `llm-ollama`,
-> `memory-mem0`, `rag-ingest`. Resolving it (install target +
-> `.service`-vs-`.container` naming) is a cross-cutting decision that
-> needs an OpenSpec change, not a per-module patch.
+> **Quadlet deployment gap: resolved.** `quadlet-render-support`
+> (2026-07-01) made both renderers COPY `quadlet/` into
+> `/etc/containers/systemd/`, so `rag-embedder.service` is present at
+> build time. Enablement is still gated on hardware verification, not
+> this gap.
 
 ## Endpoints
 
-- `http://127.0.0.1:8201/embed`
+- `http://127.0.0.1:8201/embed` — native endpoint (input: `{"texts": [...]}`).
+- `http://127.0.0.1:8201/v1/embeddings` — OpenAI-compatible alias of
+  `/embed` (same model, request/response reshaped to the OpenAI
+  embeddings schema). Required so LiteLLM's `openai/` provider can
+  reach it via the gateway's `embed-bge` alias
+  (`modules/llm-litellm`) — LiteLLM's openai-compatible client always
+  calls `{api_base}/embeddings`, it has no way to target `/embed`
+  directly.
 - `http://127.0.0.1:8201/rerank`
 - `http://127.0.0.1:8201/healthz`
+
+> The actual FastAPI/whatever service behind this quadlet
+> (`docker.io/aipc/rag-embedder:latest`) has no source in this repo yet
+> — it's a placeholder image reference. Building and publishing it is
+> real, separate work (pick a serving framework — TEI, vLLM, or a thin
+> custom FastAPI wrapper over FlagEmbedding — and implement both the
+> native and OpenAI-compatible routes above) and isn't done as part of
+> this pass.
 
 ## Dependencies
 

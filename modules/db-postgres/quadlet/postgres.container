@@ -4,7 +4,7 @@ After=network-online.target
 Requires=network-online.target
 
 [Container]
-Image=docker.io/postgres:16
+Image=docker.io/pgvector/pgvector:pg16
 ContainerName=aipc-postgres
 Volume=aipc-postgres-data:/var/lib/postgresql/data:rw
 Volume=/usr/lib/aipc/init-pgvector.sql:/docker-entrypoint-initdb.d/init-pgvector.sql:ro,Z

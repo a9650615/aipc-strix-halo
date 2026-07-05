@@ -33,15 +33,11 @@ schema via `DATABASE_URL`, and the quadlet already orders it
 Runtime health is asserted by `verify.sh` (`systemctl is-active` +
 `curl /healthz`), which is the correct place for it.
 
-> **Quadlet deployment gap (pre-existing, blocks enablement).** The
-> bootc renderer COPYs `files/`, `modprobe.d/`, `env/` but does NOT
-> install `quadlet/`. This module's `post-install.sh` enables
-> `mem0.service` without installing the quadlet file, so the unit is
-> absent at build — `systemctl enable` would fail if `.disabled` were
-> removed today. Same gap affects `db-postgres`, `llm-ollama`,
-> `rag-embedder`, `rag-ingest`. Resolving it (install target +
-> `.service`-vs-`.container` naming) is a cross-cutting decision that
-> needs an OpenSpec change, not a per-module patch.
+> **Quadlet deployment gap: resolved.** `quadlet-render-support`
+> (2026-07-01) made both renderers COPY `quadlet/` into
+> `/etc/containers/systemd/`, so `mem0.service` is present at build
+> time. Enablement is still gated on hardware verification, not this
+> gap.
 
 ## Endpoint
 

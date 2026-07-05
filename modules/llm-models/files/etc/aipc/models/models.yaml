@@ -5,11 +5,13 @@
 #
 # Trimmed 2026-07-04 to a small, deliberate local set (ornith-35b,
 # coder-agentic, resident-small) — the qwen2.5 family (router-1b, intent-3b,
-# main-70b, coder-strong) and the other extras (coder-thinking, embed-bge,
+# main-70b, coder-strong) and the other extras (coder-thinking,
 # vlm-qwen2vl, fastbatch-4b) were cut: too many resident/on-demand models
 # loaded for no real benefit, and qwen2.5 specifically is dated relative to
 # what's now running. Cloud aliases are untouched — they carry no local
-# weight/RAM cost.
+# weight/RAM cost. embed-bge was cut in the same pass, then reinstated
+# 2026-07-06 for phase-2-memory (see rag-embedder module) — mem0 and the
+# RAG watchers need a real embedding alias behind the gateway.
 models:
   # Small, always-on general-purpose assistant model. gemma4 family:
   # confirmed correct structured tool_calls, and MoE (~4B active of ~9.6GB
@@ -84,3 +86,14 @@ models:
     backend: google
     model_id: gemini-2.5-pro
     size_gb: cloud
+
+  # Phase 2 (memory-rag): bge-m3 + bge-reranker-v2-m3, served by
+  # modules/rag-embedder on 127.0.0.1:8201. backend isn't ollama/lemonade
+  # on purpose — the rag-embedder container manages its own model cache
+  # (see its README), so aipc's own models-sync tooling should leave it
+  # alone (models.py's LOCAL_BACKENDS check already skips any backend
+  # other than ollama/lemonade for pull/sync).
+  - alias: embed-bge
+    backend: rag-embedder
+    model_id: bge-m3
+    size_gb: 3.4

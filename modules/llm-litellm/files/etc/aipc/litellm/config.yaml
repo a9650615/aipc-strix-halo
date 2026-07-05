@@ -3,8 +3,10 @@
 # Trimmed 2026-07-04 to match models.yaml's small deliberate local set
 # (resident-small, coder-agentic, ornith-35b) — router-1b/intent-3b/
 # main-70b/coder-strong (qwen2.5 family, dated) and coder-thinking/
-# embed-bge/vlm-qwen2vl/fastbatch-4b (extras with no clear use) were cut.
-# Cloud aliases are untouched.
+# vlm-qwen2vl/fastbatch-4b (extras with no clear use) were cut.
+# Cloud aliases are untouched. embed-bge reinstated 2026-07-06 for
+# phase-2-memory: mem0 and the RAG watchers need it behind the gateway
+# (see modules/rag-embedder).
 model_list:
   # Small, always-on general-purpose assistant — see models.yaml for why
   # gemma4:e4b (MoE, ~4B active) was picked over a dense alternative like
@@ -95,6 +97,17 @@ model_list:
     litellm_params:
       model: gemini/gemini-2.5-pro
       api_key: os.environ/GEMINI_API_KEY
+
+  # Phase 2 (memory-rag): bge-m3, served by modules/rag-embedder. Local
+  # service, not cloud — timeout/num_retries overridden same as the other
+  # local (Lemonade-backed) entries above, for the same reason.
+  - model_name: embed-bge
+    litellm_params:
+      model: openai/bge-m3
+      api_base: http://127.0.0.1:8201/v1
+      api_key: none
+      timeout: 60
+      num_retries: 0
 
 router_settings:
   timeout: 600

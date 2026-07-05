@@ -47,7 +47,7 @@ All runtime concerns live in systemd units:
 | `quadlet/postgres.container` | `/etc/containers/systemd/postgres.service` | Postgres 16 container quadlet |
 | `files/etc/systemd/system/aipc-pg-init.service` | `/etc/systemd/system/aipc-pg-init.service` | Runtime schema-init oneshot |
 | `files/usr/lib/aipc/pg-init.sh` | `/usr/lib/aipc/pg-init.sh` (0755) | Readiness wait + idempotent schema bootstrap |
-| `files/usr/lib/aipc/init-pgvector.sql` | `/usr/lib/aipc/init-pgvector.sql` | `CREATE EXTENSION IF NOT EXISTS vector` |
+| `files/usr/lib/aipc/init-pgvector.sql` | `/usr/lib/aipc/init-pgvector.sql` | `CREATE EXTENSION IF NOT EXISTS vector` + the `rag_chunks` table (shared by all `rag-ingest` watchers) |
 | `files/etc/aipc/memory/backend` | `/etc/aipc/memory/backend` | Default vector backend selector (`pgvector`) |
 | `env/endpoint` | (consumed by renderer) | Connection URL for downstream modules |
 
