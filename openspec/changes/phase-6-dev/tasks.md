@@ -35,6 +35,18 @@
   (no-op, files-only), verify.sh (both YAML files exist and parse).
   **Shipped** (templates renamed `.yaml`→`.ini` in `4cde9b5` — they are
   distrobox-assemble INI syntax, not YAML).
+  **2026-07-06 catch-up fix**: `post-install.sh` still contained a dead
+  copy-loop from before the `.yaml`→`.ini` rename — it referenced
+  `node.yaml`/`python.yaml` from a `/usr/share/aipc/dev-distrobox-templates`
+  staging dir this module never populates (the renderer's
+  `COPY modules/.../files/ /` step already stages `node.ini`/`python.ini`
+  directly at `/etc/aipc/distrobox/`). The loop's `[ -f ]` guard always
+  failed so it was a silent no-op, not a live bug, but misleading;
+  replaced with a real no-op + comment. Also note: `verify.sh` is still
+  the generic disabled-marker stub — it does not actually check the two
+  `.ini` files exist/parse as the original task text promised. Tracked
+  correctly already under §7 (aipc doctor extensions, not implemented),
+  not re-flagged here as a new gap.
 - [x] 1.4 `dev-ai-continue`: create `modules/dev-ai-continue/` with
   README, post-install.sh (`code --install-extension continue.continue
   --force` for uid 1000), files/ for the Continue config pointing at
@@ -88,6 +100,21 @@
   verify.sh (three binaries present + manifest valid).
   **Deferred**: module scaffolded but `.disabled` — blocked on Phase 4
   `agent-mcp-gateway` (see section 6).
+  **2026-07-06 real bug found+fixed**: `files/etc/aipc/mcp/servers.json`
+  registered playwright as `@anthropic-ai/mcp-server-playwright`, a
+  fictitious npm package (confirmed 404 against the npm registry
+  2026-07-06) — same bug class as the fake-pip-package finding in
+  phase-1/phase-2. Fixed to `@playwright/mcp` (Microsoft's real published
+  package, confirmed on the registry). README's "What it does" also
+  listed three different fictitious names
+  (`@anthropic-ai/mcp-{filesystem,github,playwright}`) that didn't match
+  either the fake or the real servers.json; rewritten to match the actual
+  shipped manifest (`@modelcontextprotocol/server-filesystem`,
+  `@modelcontextprotocol/server-github`, `@playwright/mcp`) and the actual
+  manifest path (`/etc/aipc/mcp/servers.json`, README previously said
+  `/etc/aipc/mcp-servers.d/dev-servers.yaml`). Module stays `.disabled`
+  either way (blocked on Phase 4) — this fix only matters once it's
+  unblocked, but would otherwise have shipped a broken default.
 
 ## 2. Editor AI Wiring
 
@@ -190,20 +217,41 @@
   user-side login checklist (`claude login`, `opencode login`, `gh
   auth login`, `git config --global user.{name,email}`).
   **Not written.**
-- [ ] 8.3 Confirm `docs/architecture.md §7` Phase 6 row matches the
+- [x] 8.3 Confirm `docs/architecture.md §7` Phase 6 row matches the
   10-module list shipped here (no count change to the §7 header
   total).
+  **2026-07-06**: found `dev-ai-opencode` was missing from the Phase 6
+  table entirely (real omission — it was always one of the original 10,
+  task 1.8, just never added to the doc). Added its row. Also fixed
+  stale purpose text: `dev-cli` row still implied lazygit/mise/etc. ship
+  in the image (they're manual installs per README §"Packages requiring
+  manual install"); `dev-editors` row mentioned Neovim/LazyVim which was
+  never actually scoped or shipped; `dev-distrobox-templates` row said
+  "YAML" (renamed to INI in `4cde9b5`, see 1.3); `dev-ai-mcp-dev-servers`
+  row listed "Postgres" (never in this module's scope) and didn't note
+  it's disabled.
+  **needs proposal**: a 12th module, `dev-ai-warp` (Warp terminal), was
+  added 2026-07-03 outside this change's original 10-module scope (see
+  `docs/agent-log.md` 2026-07-03 entry) and is enabled in the image today,
+  but is **not** added to this table — doing so would bump the §7 header
+  total past 45, which is a scope call for 大哥/an OpenSpec change, not a
+  docs backfill. Flagging here instead of unilaterally deciding it.
 
 ## 9. Local Build Verification
 
 - [x] 9.1 Run `tools/aipc render bootc`; confirm Containerfile
   includes all 10 dev-environment modules.
-  **Done** — 9 of 10 render (dev-ai-mcp-dev-servers `.disabled`).
+  **Done** — 10 of the 11 `dev-*` module dirs render (`dev-ai-warp`, added
+  2026-07-03 outside this change's scope, also renders); only
+  `dev-ai-mcp-dev-servers` stays `.disabled`. Re-verified 2026-07-06 after
+  this catch-up pass's fixes: render-verified clean, no regression.
 - [ ] 9.2 Run `tools/aipc render ansible --check`; confirm it lints
   clean.
-  **Partial** — ansible renders + is valid YAML, but yamllint flags 3
-  pre-existing style nits (missing `---`, 2-space task indent) from
-  the renderer's output style, not a regression.
+  **Partial** — ansible renders + is valid YAML (re-confirmed 2026-07-06:
+  `python3 -c "import yaml; yaml.safe_load(...)"` parses clean); yamllint
+  itself is not installed in this sandbox so the "3 pre-existing style
+  nits" claim from the 2026-07-01 pass could not be re-run today — static
+  YAML-validity only, not a full yamllint pass.
 - [ ] 9.3 Run each module's `verify.sh` in a privileged container
   against the built image; all non-optional modules exit 0 (group 6
   MCP register check stays OPTIONAL until Phase 4 lands).
@@ -221,8 +269,9 @@
 - [ ] 10.4 Confirm default shell on first login is fish, default
   terminal opens Ghostty.
 - [ ] 10.5 Run `distrobox assemble create --file
-  /etc/aipc/distrobox/templates/node.yaml` and confirm node container
-  comes up and `claude` + `opencode` resolve.
+  /etc/aipc/distrobox/node.ini` (path/extension corrected 2026-07-06 —
+  templates renamed `.yaml`→`.ini` in `4cde9b5`, see 1.3) and confirm node
+  container comes up and `claude` + `opencode` resolve.
 
 > Section 10 is the user's hardware gate (CLAUDE.md §9) — not achievable
 > from the build host.
@@ -243,3 +292,32 @@
      (~21/47). Open items are descoped (4.2/4.3), blocked-on-Phase-4
      (1.10/6.x), not-yet-implemented (7.x/8.2), or hardware (4.4/9.3/10.x).
      3.4 partial (skel settings.json vs profile.d). -->
+
+<!-- 2026-07-06 claude-sonnet-5 catch-up pass (checked against real
+     module files + docs/agent-log.md 2026-07-01/03/04/05 entries, same
+     method as the phase-1/phase-2 catch-ups done earlier the same day):
+     21/47 done (added 8.3). Two real bugs found+fixed (not just doc
+     drift): (1) dev-ai-mcp-dev-servers/files/etc/aipc/mcp/servers.json
+     registered a fictitious npm package for its playwright MCP server
+     (@anthropic-ai/mcp-server-playwright, 404s against the real npm
+     registry) -- fixed to the real @playwright/mcp; its README also
+     listed three different fictitious package names and a stale manifest
+     path, rewritten to match reality. (2) dev-distrobox-templates/
+     post-install.sh carried dead code from before the .yaml->.ini rename
+     (4cde9b5) that referenced a staging dir this module never populates
+     -- always a silent no-op via its own [ -f ] guard, not a live bug,
+     but misleading; replaced with a true no-op + explanatory comment.
+     docs/architecture.md's Phase 6 table was missing dev-ai-opencode
+     entirely (real omission, restored) and had stale purpose text for
+     dev-cli/dev-editors/dev-distrobox-templates/dev-ai-mcp-dev-servers
+     (fixed). Also fixed a stale node.yaml path reference in 10.5.
+     needs-proposal: dev-ai-warp (added 2026-07-03, out of this change's
+     original 10-module scope, enabled in the image today) is not added
+     to architecture.md's Phase 6 table -- doing so bumps the §7 header
+     module count past 45, a scope call left to 大哥/an OpenSpec change.
+     Verification reached: static (pytest 115/115) + render-verified
+     (bootc Containerfile + ansible playbook both render clean; ansible
+     YAML validity confirmed via python yaml.safe_load, yamllint itself
+     not installed in this sandbox so its "3 pre-existing style nits"
+     claim from 2026-07-01 could not be re-run). No hardware access this
+     session -- sections 4.4/9.3/10.x untouched, correctly still open. -->
