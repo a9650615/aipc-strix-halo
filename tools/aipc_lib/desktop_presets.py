@@ -11,12 +11,19 @@ from typing import Callable
 # that dynamically toggled panel hiding based on per-window fullscreen state.
 # After several iterations it still didn't reliably work (user, 2026-07-04:
 # "還是沒有解決任何問題" -- still hasn't solved anything). Replaced with a
-# static policy: dock dodges overlapping windows (native KWin "dodgewindows"
-# hiding mode), top bar never hides, on every screen. (2026-07-06: initially
-# shipped as "autohide", which macOS-Dock-style always hides regardless of
-# overlap and only reveals on hover -- not what was wanted, "為什麼我沒有遮擋
-# 還是會隱藏" -- switched to dodgewindows, which KWin handles natively with no
-# custom scripting.)
+# static policy: dock is never-hide (same as the top bar), on every screen.
+# (2026-07-06, two iterations: first shipped as "autohide", which
+# macOS-Dock-style always hides regardless of overlap and only reveals on
+# hover -- not what was wanted ("為什麼我沒有遮擋還是會隱藏"). Switched to
+# "dodgewindows" (hide only when a window actually overlaps it) -- but a
+# maximized window's geometry covers the dock's strip by definition, so
+# double-click-to-maximize kept hiding it too, still not wanted. Landed on
+# "none": same as the top bar, it reserves its own strut so ordinary window
+# maximize stops short of it instead of covering it; hardware-verified this
+# leaves the dock visible through maximize. A genuinely fullscreen window
+# (games, video players) still overrides the strut and covers it -- that's
+# the compositor's own exclusive-fullscreen behavior, unrelated to this
+# per-panel `.hiding` setting.)
 # This id is kept only so apply_preset can find and remove a previously
 # installed copy (see uninstall_legacy_kwin_script / disable_legacy_kwin_script_command).
 LEGACY_KWIN_SCRIPT_ID = "fullscreen-hides-panels"
@@ -139,21 +146,34 @@ def ensure_panels_script(screen_count: int, primary_x: int, primary_y: int) -> s
     content the user asked to preserve. To re-clone a screen's widgets from
     scratch, remove its panels by hand first, then re-run.
 
+    2026-07-06 update, direct user request ("dock app 項目同步"): the 07-04
+    spec above turned out too broad in practice -- a second screen's Dock
+    with no pinned launchers just looks broken, not "whatever the user
+    placed". apply_preset now calls sync_dock_launchers() as one narrow,
+    explicit exception: it overwrites only the `launchers` value on every
+    non-primary screen's icontasks widget, read fresh from the primary each
+    apply. Everything else (widget list, other per-widget config) stays
+    covered by the non-destructive rule above.
+
     Hiding policy is the one thing this DOES force on every panel, new or
     existing, every apply (setting `.hiding` never touches widgets so it
     doesn't conflict with the non-destructive rule above). Direct user spec
     2026-07-04, after the fullscreen-detecting KWin script repeatedly failed
     to work ("還是沒有解決任何問題"): "每個螢幕的 dock 都設定自動隱藏, 選單列
-    永遠不隱藏就好了". Initially shipped as "autohide" (always hidden, reveal
-    on hover); 2026-07-06 the user reported that behavior directly ("為什麼
-    自動隱藏現在我沒有遮擋還是會隱藏" -- why does it hide even with nothing in
-    the way): what was actually wanted is "dodgewindows" (visible unless a
-    window overlaps it), a native KWin hiding mode requiring no scripting.
-    Note: the Panel scripting API silently accepts invalid `.hiding` string
-    literals and falls back to "none" instead of raising -- "windowscover"
-    (a natural-sounding guess) is NOT a valid value; "dodgewindows" is.
-    Every screen's Dock (bottom panel) dodges overlapping windows;
-    the top bar never hides.
+    永遠不隱藏就好了". Landed on "none" (same as the top bar) after two wrong
+    guesses, both hardware-verified wrong by direct user report on
+    2026-07-06: "autohide" always hides regardless of overlap and only
+    reveals on hover ("為什麼自動隱藏現在我沒有遮擋還是會隱藏"); "dodgewindows"
+    hides whenever a window overlaps it, but a maximized window's geometry
+    always does, so double-click-to-maximize kept hiding it too. "none"
+    reserves the dock's own strut so ordinary maximize stops short of it --
+    genuinely fullscreen windows (games, video players) still cover it via
+    the compositor's own exclusive-fullscreen path, independent of this
+    setting. Note: the Panel scripting API silently accepts invalid
+    `.hiding` string literals and falls back to "none" instead of raising --
+    "windowscover" and "windowsgobelow" (natural-sounding guesses) are NOT
+    valid values; "autohide", "dodgewindows" and "none" are the confirmed set.
+    Every screen's Dock (bottom panel) and top bar both use "none".
     """
     return f"""\
 var screenCount = {screen_count};
@@ -224,7 +244,7 @@ for (var s = 0; s < screenCount; s++) {{
   if (!haveBottom[s]) {{
     var p = new Panel;
     p.screen = s;
-    applySpec(p, "bottom", bottomSpec, "dodgewindows");
+    applySpec(p, "bottom", bottomSpec, "none");
   }}
   if (!haveTop[s]) {{
     var t = new Panel;
@@ -234,7 +254,7 @@ for (var s = 0; s < screenCount; s++) {{
 }}
 
 for (var i = 0; i < ps.length; i++) {{
-  if (ps[i].location === "bottom") ps[i].hiding = "dodgewindows";
+  if (ps[i].location === "bottom") ps[i].hiding = "none";
   if (ps[i].location === "top") ps[i].hiding = "none";
 }}
 """
@@ -254,6 +274,101 @@ def reconfigure_kwin_command() -> list[str]:
     return ["qdbus", "org.kde.KWin", "/KWin", "reconfigure"]
 
 
+def icontasks_launcher_ids_script(screen_count: int, primary_x: int, primary_y: int) -> str:
+    """Prints "<primaryPanelId>,<primaryAppletId>:<panelId>,<appletId>;...".
+    Finds each screen's Dock (bottom panel) icontasks widget -- the pinned
+    launcher list lives per-widget-instance, so a screen without a
+    launchers= key just shows an empty Dock with no way to pin an app short
+    of doing it by hand on that screen specifically."""
+    return f"""\
+var screenCount = {screen_count};
+var primaryIdx = 0;
+for (var i = 0; i < screenCount; i++) {{
+  var g = screenGeometry(i);
+  if (g.x === {primary_x} && g.y === {primary_y}) {{ primaryIdx = i; break; }}
+}}
+var ps = panels();
+var primaryRef = null, others = [];
+for (var i = 0; i < ps.length; i++) {{
+  if (ps[i].location !== "bottom") continue;
+  var widgets = ps[i].widgets();
+  for (var j = 0; j < widgets.length; j++) {{
+    if (widgets[j].type !== "org.kde.plasma.icontasks") continue;
+    var ref = ps[i].id + "," + widgets[j].id;
+    if (ps[i].screen === primaryIdx) primaryRef = ref;
+    else others.push(ref);
+  }}
+}}
+print((primaryRef || "") + ":" + others.join(";"));
+"""
+
+
+def icontasks_launcher_ids_command(screen_count: int, primary_x: int, primary_y: int) -> list[str]:
+    return [
+        "qdbus",
+        "org.kde.plasmashell",
+        "/PlasmaShell",
+        "org.kde.PlasmaShell.evaluateScript",
+        icontasks_launcher_ids_script(screen_count, primary_x, primary_y),
+    ]
+
+
+def sync_dock_launchers(screen_count: int, primary_x: int, primary_y: int, runner: RunnerT) -> None:
+    """Direct user request 2026-07-06 ("dock app 項目同步"): copy the primary
+    screen's Dock pinned-launcher list onto every other screen's Dock. This
+    is a deliberate, narrow exception to ensure_panels_script's
+    non-destructive rule (it only overwrites this one `launchers` value,
+    read fresh from the primary each apply -- never touches any other
+    per-screen widget config or the widget list itself)."""
+    result = runner(
+        icontasks_launcher_ids_command(screen_count, primary_x, primary_y),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    primary_ref, _, others = result.stdout.strip().partition(":")
+    if not primary_ref or not others:
+        return
+    primary_panel, primary_applet = primary_ref.split(",")
+    launchers = runner(
+        [
+            "kreadconfig6",
+            "--file",
+            "plasma-org.kde.plasma.desktop-appletsrc",
+            "--group",
+            "Containments",
+            "--group",
+            primary_panel,
+            "--group",
+            "Applets",
+            "--group",
+            primary_applet,
+            "--group",
+            "Configuration",
+            "--group",
+            "General",
+            "--key",
+            "launchers",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    if not launchers:
+        return
+    for ref in others.split(";"):
+        panel_id, applet_id = ref.split(",")
+        runner(
+            _kwriteconfig(
+                "plasma-org.kde.plasma.desktop-appletsrc",
+                ["Containments", panel_id, "Applets", applet_id, "Configuration", "General"],
+                "launchers",
+                launchers,
+            ),
+            check=True,
+        )
+
+
 @dataclass
 class Preset:
     name: str
@@ -266,8 +381,8 @@ PRESETS: dict[str, Preset] = {
         description=(
             "macOS-like KDE Plasma desktop: window buttons on the left, "
             "natural-scroll + tap-to-click touchpad, unified panel layout "
-            "cloned across screens, Dock (bottom panel) dodges overlapping "
-            "windows and the top bar never hides, on every screen "
+            "cloned across screens, Dock (bottom panel) and top bar both "
+            "reserve their space and never hide, on every screen "
             "(GZ302EA touchpad id hardcoded)"
         ),
     ),
@@ -291,4 +406,5 @@ def apply_preset(name: str, home: Path, runner: RunnerT = subprocess.run) -> Non
     screen_count = connected_screen_count(runner)
     primary_x, primary_y = primary_screen_position(runner)
     runner(ensure_panels_command(screen_count, primary_x, primary_y), check=True)
+    sync_dock_launchers(screen_count, primary_x, primary_y, runner)
     runner(reconfigure_kwin_command(), check=False)

@@ -85,18 +85,84 @@ def test_ensure_panels_script_is_non_destructive_to_existing_panels() -> None:
 def test_ensure_panels_script_applies_static_hiding_policy() -> None:
     # Direct user spec 2026-07-04, after the fullscreen-detecting KWin script
     # repeatedly failed: "每個螢幕的 dock 都設定自動隱藏, 選單列永遠不隱藏就好
-    # 了". Initially shipped as "autohide"; hardware-verified 2026-07-06 that's
-    # macOS-Dock-style always-hidden-until-hover, not what was wanted -- user
-    # directly reported it ("為什麼自動隱藏現在我沒有遮擋還是會隱藏"). Switched
-    # to "dodgewindows" (visible unless a window overlaps it), the native KWin
-    # mode for that. Applied both to newly-created panels and to every
-    # pre-existing panel (setting .hiding never touches widgets, so it
+    # 了". Landed on "none" (same as the top bar) after two wrong guesses,
+    # both hardware-verified wrong by direct user report on 2026-07-06:
+    # "autohide" always hides regardless of overlap, only reveals on hover
+    # ("為什麼自動隱藏現在我沒有遮擋還是會隱藏"); "dodgewindows" hides whenever a
+    # window overlaps it, but a maximized window always does, so
+    # double-click-to-maximize kept hiding it too ("視窗點兩下最大化但是不隱藏
+    # dock"). "none" reserves the dock's own strut so ordinary maximize stops
+    # short of it -- hardware-verified the dock stays visible through
+    # maximize ("dock 還在"). Applied both to newly-created panels and to
+    # every pre-existing panel (setting .hiding never touches widgets, so it
     # doesn't conflict with the non-destructive rule above).
     script = desktop_presets.ensure_panels_script(2, 0, 0)
-    assert 'applySpec(p, "bottom", bottomSpec, "dodgewindows")' in script
+    assert 'applySpec(p, "bottom", bottomSpec, "none")' in script
     assert 'applySpec(t, "top", topSpec, "none")' in script
-    assert 'if (ps[i].location === "bottom") ps[i].hiding = "dodgewindows";' in script
+    assert 'if (ps[i].location === "bottom") ps[i].hiding = "none";' in script
     assert 'if (ps[i].location === "top") ps[i].hiding = "none";' in script
+
+
+def test_icontasks_launcher_ids_script_targets_bottom_panel_icontasks() -> None:
+    script = desktop_presets.icontasks_launcher_ids_script(2, 331, 1271)
+    assert "screenCount = 2" in script
+    assert "g.x === 331 && g.y === 1271" in script
+    assert 'widgets[j].type !== "org.kde.plasma.icontasks"' in script
+    assert 'ps[i].location !== "bottom"' in script
+
+
+def test_sync_dock_launchers_copies_primary_list_to_other_screens() -> None:
+    # Direct user request 2026-07-06 ("dock app 項目同步"): a screen without
+    # a launchers= key just shows an empty Dock. Hardware-verified the ids
+    # discovery + kreadconfig6 + kwriteconfig6 sequence live before landing
+    # this in the repo.
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "qdbus":
+            return _FakeCompletedProcess(stdout="365,368:473,476;999,111")
+        if cmd[0] == "kreadconfig6":
+            return _FakeCompletedProcess(stdout="applications:systemsettings.desktop,preferred://filemanager")
+        return _FakeCompletedProcess(0)
+
+    desktop_presets.sync_dock_launchers(2, 0, 0, fake_runner)
+
+    write_calls = [c for c in calls if c[0] == "kwriteconfig6"]
+    assert len(write_calls) == 2
+    for panel_id, applet_id in [("473", "476"), ("999", "111")]:
+        assert any(
+            c[-1] == "applications:systemsettings.desktop,preferred://filemanager"
+            and panel_id in c
+            and applet_id in c
+            for c in write_calls
+        )
+
+
+def test_sync_dock_launchers_noop_when_only_one_screen() -> None:
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        return _FakeCompletedProcess(stdout="365,368:")
+
+    desktop_presets.sync_dock_launchers(1, 0, 0, fake_runner)
+
+    assert not any(c[0] in ("kreadconfig6", "kwriteconfig6") for c in calls)
+
+
+def test_sync_dock_launchers_noop_when_primary_has_no_launchers_pinned() -> None:
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "qdbus":
+            return _FakeCompletedProcess(stdout="365,368:473,476")
+        return _FakeCompletedProcess(stdout="")
+
+    desktop_presets.sync_dock_launchers(2, 0, 0, fake_runner)
+
+    assert not any(c[0] == "kwriteconfig6" for c in calls)
 
 
 def test_disable_legacy_kwin_script_command_targets_old_script_id() -> None:
