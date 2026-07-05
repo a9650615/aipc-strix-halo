@@ -18,6 +18,9 @@ Snapper-based BTRFS snapshot management with timeline retention policy.
 
 - BTRFS subvolume layout must be validated on target hardware before enabling.
 - Snapper timeline runs via systemd timer; no `systemctl --now` at build time.
+- No `post-install.sh`: `files/` is COPYed straight to its final path by the
+  renderer, so a build-time re-install from `${AIPC_MODULE_SRC}` (never set
+  anywhere) was redundant and broken. Removed 2026-07-06.
 
 ## Dependencies
 

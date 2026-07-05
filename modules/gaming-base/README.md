@@ -17,6 +17,9 @@ Gamescope session and Steam runtime base for the aipc gaming experience.
 
 - On bazzite-dx, gamescope and steam may already be preinstalled. If `packages.txt` entries are no-ops, that is expected.
 - No host pip/npm installs. All AI overlay work lives in `gaming-ai-overlay` (distrobox-side).
+- No `post-install.sh`: `files/` is COPYed straight to its final path by the
+  renderer, so a build-time re-install from `${AIPC_MODULE_SRC}` (never set
+  anywhere) was redundant and broken. Removed 2026-07-06.
 
 ## Dependencies
 
