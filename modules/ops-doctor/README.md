@@ -20,14 +20,19 @@ service monitoring, GPU/NPU probes, and cross-module status reporting.
 - This module's `verify.sh` currently exits 2 (disabled). When enabled, it will
   run GPU/NPU probe checks and validate service catalog entries.
 - The `doctor.py` extension is tracked as separate implementation work.
+- No `post-install.sh`: the renderer's `COPY modules/{name}/files/ /` already
+  places `services.yaml` at its final path before any post-install step would
+  run — a build-time `install` step re-copying it from a `${AIPC_MODULE_SRC}`
+  staging var was both redundant and broken (that var is never set anywhere
+  in the renderer; removed 2026-07-06).
 
 ## Dependencies
 
 - `llm-ollama` (ollama service)
 - `llm-litellm` (litellm service)
-- `data-postgres` (postgres service)
-- `data-qdrant` (qdrant service)
-- `ai-voice-pipecat` (pipecat service)
+- `db-postgres` (postgres service)
+- `db-qdrant` (qdrant service)
+- `voice-pipecat` (pipecat service)
 - `memory-mem0` (mem0 service)
 
 ## Spec cross-ref

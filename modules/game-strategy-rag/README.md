@@ -17,11 +17,15 @@ per-game strategy sources at runtime.
 
 - The shipped `sources.yaml` is intentionally empty. Users add game-specific URLs/files.
 - Ingest cache lives in `/var/lib/aipc/game-strategy/` (persistent across image rebuilds via /var).
+- `post-install.sh` only creates that cache dir now — it used to also
+  re-install `sources.yaml` from a `${AIPC_MODULE_SRC}` staging var that's
+  never set anywhere in the renderer (the file's already at its final path
+  via `files/` COPY). Removed the broken line 2026-07-06.
 
 ## Dependencies
 
 - `llm-litellm` (embedding and retrieval via LiteLLM gateway)
-- `data-qdrant` (vector storage)
+- `db-qdrant` (vector storage)
 
 ## Spec cross-ref
 

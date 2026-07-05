@@ -10,7 +10,7 @@
   port: 4000
 
 - name: postgres
-  unit: postgresql.service
+  unit: postgres.service
   port: 5432
 
 - name: qdrant

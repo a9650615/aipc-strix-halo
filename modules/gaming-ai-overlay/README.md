@@ -17,11 +17,14 @@ Voice-driven AI overlay for gaming, running inside a Python distrobox.
 
 - No host packages — everything runs distrobox-side to avoid polluting the bootc image.
 - Hotkey `Super+G` toggles the overlay on/off by default.
+- No `post-install.sh`: `files/` is COPYed straight to its final path by the
+  renderer, so a build-time re-install from `${AIPC_MODULE_SRC}` (never set
+  anywhere) was redundant and broken. Removed 2026-07-06.
 
 ## Dependencies
 
 - `gaming-base` (gamescope session)
-- `ai-voice-pipecat` (voice pipeline)
+- `voice-pipecat` (voice pipeline)
 
 ## Spec cross-ref
 
