@@ -14,6 +14,7 @@ from aipc_lib import doctor as doctor_mod
 from aipc_lib import log_append as log_append_mod
 from aipc_lib import models as models_mod
 from aipc_lib import opencode_sync as opencode_sync_mod
+from aipc_lib import rag as rag_mod
 from aipc_lib import secrets
 from aipc_lib import status_dashboard as status_mod
 from aipc_lib import tools_menu as tools_menu_mod
@@ -84,6 +85,14 @@ def doctor() -> None:
     gw = doctor_mod.check_gateway_aliases()
     if gw is not None:
         results.append(gw)
+
+    backend = doctor_mod.check_active_backend()
+    if backend is not None:
+        results.append(backend)
+
+    vectors = doctor_mod.check_vector_count()
+    if vectors is not None:
+        results.append(vectors)
 
     table = Table(title="aipc doctor")
     table.add_column("Module")
@@ -384,6 +393,99 @@ def config_preset_apply(name: str) -> None:
         click.echo(f"Unknown preset: {name!r} (see `aipc config preset list`)", err=True)
         sys.exit(1)
     click.echo(f"Applied preset: {name}")
+
+
+@main.group("rag")
+def rag_cmd() -> None:
+    """Inspect and manage memory-rag's ingest watchers (openspec/changes/phase-2-memory#7)."""
+
+
+@rag_cmd.command("list-sources")
+def rag_list_sources() -> None:
+    """Print the canonical source list with default-enabled state."""
+    table = Table(title="aipc rag sources")
+    table.add_column("source")
+    table.add_column("service")
+    table.add_column("default")
+    for s in rag_mod.SOURCES:
+        table.add_row(s.name, s.service, "enabled" if s.default_enabled else "disabled (consent)")
+    Console().print(table)
+
+
+@rag_cmd.command("status")
+def rag_status() -> None:
+    """Per-source last-cycle timestamp + vector count + service state."""
+    table = Table(title="aipc rag status")
+    table.add_column("source")
+    table.add_column("active")
+    table.add_column("vector_count")
+    table.add_column("last_cycle")
+    for s in rag_mod.SOURCES:
+        st = rag_mod.source_status(s)
+        color = "green" if st["active"] else "yellow"
+        table.add_row(
+            st["source"],
+            f"[{color}]{st['active']}[/{color}]",
+            str(st["vector_count"]),
+            str(st["last_cycle"] or "-"),
+        )
+    Console().print(table)
+
+
+@rag_cmd.command("enable")
+@click.argument("source")
+def rag_enable(source: str) -> None:
+    """Enable a source's watcher and record consent where applicable."""
+    try:
+        s = rag_mod.find_source(source)
+    except KeyError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    rag_mod.enable_source(s)
+    click.echo(f"enabled: {s.name}")
+
+
+@rag_cmd.command("disable")
+@click.argument("source")
+def rag_disable(source: str) -> None:
+    """Disable a source's watcher and withdraw consent where applicable."""
+    try:
+        s = rag_mod.find_source(source)
+    except KeyError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    rag_mod.disable_source(s)
+    click.echo(f"disabled: {s.name}")
+
+
+@rag_cmd.command("reindex")
+@click.argument("source")
+def rag_reindex(source: str) -> None:
+    """Drop a source's vectors + state cache, then restart its watcher from scratch."""
+    try:
+        s = rag_mod.find_source(source)
+    except KeyError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    rag_mod.reindex_source(s)
+    click.echo(f"reindexing: {s.name}")
+
+
+@rag_cmd.command("purge")
+@click.argument("source")
+@click.option("--confirm", is_flag=True, help="Required — this is irreversible.")
+def rag_purge(source: str, confirm: bool) -> None:
+    """Drop a source's vectors + state cache. Does not touch the service/consent."""
+    try:
+        s = rag_mod.find_source(source)
+    except KeyError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    if not confirm:
+        click.echo("Refusing to purge without --confirm (irreversible).", err=True)
+        sys.exit(1)
+    n = rag_mod.purge_source(s)
+    click.echo(f"purged {n} vectors for {s.name}")
 
 
 @main.command("status")

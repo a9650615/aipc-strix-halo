@@ -11,6 +11,9 @@ from aipc_lib.models import DEFAULT_MANIFEST, load_manifest
 from aipc_lib.modules import Module
 
 LITELLM_DEFAULT_ENDPOINT = "http://127.0.0.1:4000"
+DEFAULT_BACKEND_FILE = Path("/etc/aipc/memory/backend")
+VECTOR_COUNT_WARN_THRESHOLD = 1_000_000
+_BACKEND_SERVICES = {"pgvector": "postgres.service", "qdrant": "qdrant.service"}
 
 STATUS_OK = "OK"
 STATUS_OPTIONAL = "OPTIONAL"
@@ -94,3 +97,62 @@ def check_gateway_aliases(
         status=STATUS_OK,
         message=f"{len(entries)} aliases served",
     )
+
+
+def check_active_backend(backend_file: Path = DEFAULT_BACKEND_FILE) -> Result | None:
+    """Confirm whichever vector backend systemd unit is actually running
+    matches `/etc/aipc/memory/backend`'s declared value.
+
+    Returns None if the backend file doesn't exist (memory-rag not
+    installed). Deployed images don't ship the repo's modules/ source tree,
+    so this checks systemd unit state directly rather than module
+    .disabled markers (see phase-2-memory#9.1).
+    """
+    if not backend_file.exists():
+        return None
+
+    declared = backend_file.read_text().strip()
+    service = _BACKEND_SERVICES.get(declared)
+    if service is None:
+        return Result(
+            module="memory-rag-backend",
+            status=STATUS_FAIL,
+            message=f"{backend_file} declares unknown backend {declared!r}",
+        )
+
+    proc = subprocess.run(["systemctl", "is-active", "--quiet", service], check=False)
+    if proc.returncode != 0:
+        return Result(
+            module="memory-rag-backend",
+            status=STATUS_FAIL,
+            message=f"declared backend {declared!r} but {service} is not active",
+        )
+    return Result(module="memory-rag-backend", status=STATUS_OK, message=f"{declared} active")
+
+
+def check_vector_count(
+    dsn: str = "postgresql://postgres@127.0.0.1:5432/aipc",
+    threshold: int = VECTOR_COUNT_WARN_THRESHOLD,
+) -> Result | None:
+    """INFO-level nudge toward `aipc db migrate qdrant` once pgvector's
+    rag_chunks table crosses `threshold` rows (phase-2-memory#9.2).
+
+    Returns None if Postgres isn't reachable (not installed/not running —
+    same "not everything is hardware yet" reasoning as check_gateway_aliases).
+    """
+    try:
+        import psycopg2
+
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM rag_chunks")
+            count = cur.fetchone()[0]
+    except Exception:
+        return None
+
+    if count > threshold:
+        return Result(
+            module="memory-rag-vectors",
+            status=STATUS_WARN,
+            message=f"{count} vectors > {threshold} — consider `aipc db migrate qdrant`",
+        )
+    return Result(module="memory-rag-vectors", status=STATUS_OK, message=f"{count} vectors")
