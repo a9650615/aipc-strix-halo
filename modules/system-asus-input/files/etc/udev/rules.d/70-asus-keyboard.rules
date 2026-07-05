@@ -1,0 +1,5 @@
+# 70-asus-keyboard.rules
+
+# Trigger input subsystem rescan when the ASUS Keyboard or WMI Hotkeys are added
+ACTION=="add", SUBSYSTEM=="input", ATTRS{name}=="ASUSTeK Computer Inc. GZ302EA-Keyboard", RUN+="/usr/bin/udevadm trigger --subsystem-match=input"
+ACTION=="add", SUBSYSTEM=="input", ATTRS{name}=="Asus WMI hotkeys", RUN+="/usr/bin/udevadm trigger --subsystem-match=input"
