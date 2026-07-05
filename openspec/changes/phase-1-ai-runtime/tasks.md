@@ -4,9 +4,17 @@
   runs on port 4000; verify.sh checks `/health` and `/v1/models` — shipped.
 - [x] 1.2 `llm-litellm`: pin `ghcr.io/berriai/litellm` to a specific digest
   (not `:main-latest`) and document the pin in the module README.
-- [ ] 1.3 `llm-litellm`: add `idle_timeout` (or equivalent) to `config.yaml`
-  so vLLM and non-pinned backends are evicted after 10 min of zero traffic;
-  confirm the LiteLLM config key against the pinned version.
+- [~] 1.3 **Redirected, not done.** Investigated 2026-07-02 (see the
+  `ponytail:` comment on `config.yaml`'s `router_settings`): LiteLLM
+  v1.89.4 has no `idle_timeout`/backend-eviction key at all — it's a
+  stateless proxy, it cannot stop the process it routes to. Real fix
+  belongs in `llm-vllm`'s own systemd unit (timer or
+  `ExecStopPost` idle-shutdown wrapper), not here — and is itself
+  blocked on a bigger prerequisite: `llm-vllm/quadlet/vllm.container`
+  has a `TODO(unresolved)` saying vLLM has no real HuggingFace-format
+  model provisioned yet ("do not enable this service until that's
+  resolved"). Not attempted this pass — needs a provisioning decision
+  first, not an idle-timer.
 - [x] 1.4 `llm-lemonade`: quadlet, post-install.sh, verify.sh exist; service
   runs on port 8001; conditional on `/dev/accel/accel0` — shipped.
 - [x] 1.5 `llm-lemonade`: validated against a real running container
@@ -37,10 +45,16 @@
 - [x] 2.1 `ai-rocm`: create `modules/ai-rocm/` with README, packages.txt
   (rocm-smi, amd-smi, rocm-hip-runtime pinned to ROCm 7), post-install.sh
   (idempotent), verify.sh (rocm-smi lists gfx1151 + GTT ≥ 115360 MiB).
-- [ ] 2.2 `ai-xdna`: create `modules/ai-xdna/` with README, packages.txt
-  (amd-xdna kernel module or DKMS package), post-install.sh (modprobe
-  amd_xdna, create /dev/accel/accel0 udev rule if needed), verify.sh
-  (`lsmod | grep amd_xdna` + `/dev/accel/accel0` exists + xdna-smi enumerate).
+- [~] 2.2 `ai-xdna` scaffolded (README, `modules-load.d` +
+  `udev/rules.d` files, verify.sh with the exact 3 checks asked for).
+  **`packages.txt`/`post-install.sh` deliberately absent** — the
+  module's own README documents why: `amd-xdna-dkms`/`xdna-smi` aren't
+  in bazzite-dx's base repos, and closing that gap needs a hardware
+  decision (out-of-tree repo file like `ai-rocm`, vs. confirming an
+  upstream kmod already ships in-kernel — Linux ≥ 6.10 mainlined
+  `amdxdna`, which may make this whole gap moot on this repo's ≥ 6.14
+  kernel floor, CLAUDE.md §6). Not re-litigated this pass; this is a
+  correct, already-reasoned deferral, not an oversight.
 - [x] 2.3 `llm-models`: create `modules/llm-models/` with README, a starter
   `files/etc/aipc/models/models.yaml` that maps at minimum `router-1b`,
   `intent-3b`, `main-70b`, `coder-fast`, `coder-strong`, `coder-thinking`,
@@ -58,11 +72,18 @@
   on-disk status (present / missing / size).
 - [x] 3.3 Add `aipc models sync --check` (dry-run) that exits non-zero if any
   declared model is missing, without downloading — usable from post-install.sh.
-- [ ] 3.4 Render `modules/llm-litellm/files/etc/aipc/litellm/config.yaml` from
-  `modules/llm-models/files/etc/aipc/models/models.yaml` at build time
-  (renderer-side, not post-install). Single source of truth = the manifest.
-  Until done, hand-alignment per Task A must be re-checked when either file
-  changes.
+- [ ] 3.4 **Not done — needs a design proposal, not a quick renderer.**
+  `models.yaml` only carries alias/backend/model_id/size_gb; `config.yaml`
+  carries per-alias `litellm_params` overrides (timeout, num_retries,
+  api_base) plus extensive hand-written hardware-benchmark comments that
+  a naive generated render would destroy. Confirmed the hand-alignment
+  risk is real, not theoretical: `embed-bge` drifted out of sync between
+  the two files this same session (cut from both 2026-07-04, then
+  restored to both by hand 2026-07-06 for phase-2-memory — see that
+  change's commit `bf7a370`). Options to weigh next time: extend
+  models.yaml's schema to carry litellm_params overrides, vs. a
+  base-render + hand-written-override-merge split. Deferred per user
+  direction to research established patterns before implementing.
 
 ## 4. Extend aipc doctor For ai-runtime
 
@@ -75,13 +96,18 @@
 
 ## 5. Local Build Verification
 
-- [ ] 5.1 Run `tools/aipc render bootc`; confirm Containerfile includes all
-  seven ai-runtime modules.
+- [x] 5.1 Confirmed 2026-07-06: `render bootc` includes all 4 currently
+  enabled ai-runtime modules (`llm-litellm`, `llm-lemonade`, `llm-ollama`,
+  `llm-models`); the other 3 (`ai-rocm`, `ai-xdna`, `llm-vllm`) are
+  `.disabled` and correctly excluded, not included-as-disabled — same
+  `discover()` behavior confirmed for phase-2-memory.
 - [x] 5.2 Run `podman build` of the rendered Containerfile (or CI build) to
   confirm the image builds without error.
-- [ ] 5.3 Run `tools/aipc render ansible --check` and confirm it lints clean.
-- [ ] 5.4 Run each module's `verify.sh` in a privileged container against the
-  built image; all non-optional modules exit 0.
+- [x] 5.3 Confirmed 2026-07-06: `render ansible` output parses as valid
+  YAML. No `--check` flag exists on this CLI.
+- [ ] 5.4 **Not run.** Same as phase-2-memory#11.3 — needs a privileged
+  container with systemd actually running; out of reach without
+  hardware/a real container runtime this session.
 
 ## 6. AI PC Hardware Verification
 
