@@ -265,25 +265,96 @@ def test_apply_preset_mac_runs_expected_commands_and_cleans_up_legacy_script(tmp
     assert any(c[:3] == ["systemctl", "--user", "enable"] for c in calls)
 
 
-def test_dock_launcher_sync_unit_files_reference_the_resolved_aipc_path() -> None:
-    units = desktop_presets.dock_launcher_sync_unit_files("/home/birdyo/.local/bin/aipc")
-    assert "aipc-dock-launcher-sync.path" in units
-    assert "aipc-dock-launcher-sync.service" in units
-    assert "PathModified=" in units["aipc-dock-launcher-sync.path"]
-    assert "ExecStart=/home/birdyo/.local/bin/aipc config preset sync-dock-launchers" in units["aipc-dock-launcher-sync.service"]
+def test_panel_widget_sync_unit_files_reference_the_resolved_aipc_path() -> None:
+    units = desktop_presets.panel_widget_sync_unit_files("/home/birdyo/.local/bin/aipc")
+    assert "aipc-panel-widget-sync.path" in units
+    assert "aipc-panel-widget-sync.service" in units
+    assert "PathModified=" in units["aipc-panel-widget-sync.path"]
+    service = units["aipc-panel-widget-sync.service"]
+    assert "ExecStart=/home/birdyo/.local/bin/aipc config preset sync-dock-launchers" in service
+    assert "ExecStart=/home/birdyo/.local/bin/aipc config preset sync-topbar-systemtray" in service
 
 
-def test_install_dock_launcher_sync_units_writes_and_enables(tmp_path: Path) -> None:
+def test_install_panel_widget_sync_units_writes_and_enables(tmp_path: Path) -> None:
     calls = []
 
     def fake_runner(cmd, **kwargs):
         calls.append(cmd)
         return _FakeCompletedProcess(0)
 
-    desktop_presets.install_dock_launcher_sync_units(tmp_path, fake_runner)
+    desktop_presets.install_panel_widget_sync_units(tmp_path, fake_runner)
 
     unit_dir = tmp_path / ".config/systemd/user"
-    assert (unit_dir / "aipc-dock-launcher-sync.path").exists()
-    assert (unit_dir / "aipc-dock-launcher-sync.service").exists()
+    assert (unit_dir / "aipc-panel-widget-sync.path").exists()
+    assert (unit_dir / "aipc-panel-widget-sync.service").exists()
     assert ["systemctl", "--user", "daemon-reload"] in calls
-    assert ["systemctl", "--user", "enable", "--now", "aipc-dock-launcher-sync.path"] in calls
+    assert ["systemctl", "--user", "enable", "--now", "aipc-panel-widget-sync.path"] in calls
+
+
+def test_reconcile_topbar_systemtray_uses_top_location_and_extra_items(tmp_path: Path) -> None:
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "qdbus":
+            assert 'ps[i].location !== "top"' in cmd[-1]
+            assert 'widgets[j].type === "org.kde.plasma.systemtray"' in cmd[-1]
+            return _FakeCompletedProcess(stdout="372,375;481,484")
+        if cmd[0] == "kreadconfig6":
+            assert cmd[-1] == "extraItems"
+            panel_id = cmd[cmd.index("--group") + 3]
+            return _FakeCompletedProcess(stdout={"372": "old", "481": "new"}[panel_id])
+        return _FakeCompletedProcess(0)
+
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"372": "old", "481": "old"}))
+
+    desktop_presets.reconcile_topbar_systemtray(state_path, fake_runner)
+
+    write_calls = [c for c in calls if c[0] == "kwriteconfig6"]
+    assert len(write_calls) == 1
+    assert write_calls[0][-1] == "new"
+    assert write_calls[0][-2] == "extraItems"
+
+
+def test_find_dock_panel_returns_none_when_screen_has_no_dock(tmp_path: Path) -> None:
+    def fake_runner(cmd, **kwargs):
+        return _FakeCompletedProcess(stdout="")
+
+    assert desktop_presets.find_dock_panel(2, fake_runner) is None
+
+
+def test_find_dock_panel_returns_panel_and_applet_ids() -> None:
+    def fake_runner(cmd, **kwargs):
+        return _FakeCompletedProcess(stdout="473,476")
+
+    assert desktop_presets.find_dock_panel(1, fake_runner) == ("473", "476")
+
+
+def test_rebuild_dock_panel_preserves_launchers_and_reports_discover_caveat(tmp_path: Path) -> None:
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "kreadconfig6":
+            return _FakeCompletedProcess(stdout="applications:systemsettings.desktop")
+        if cmd[0] == "qdbus":
+            script = cmd[-1]
+            if "old.remove()" in script:
+                return _FakeCompletedProcess(stdout="900,901")
+            return _FakeCompletedProcess(stdout="473,476")
+        return _FakeCompletedProcess(0)
+
+    warning = desktop_presets.rebuild_dock_panel(1, fake_runner)
+
+    assert warning is not None
+    assert "Discover" in warning
+    write_calls = [c for c in calls if c[0] == "kwriteconfig6"]
+    assert any(c[-1] == "applications:systemsettings.desktop" and "900" in c and "901" in c for c in write_calls)
+
+
+def test_rebuild_dock_panel_returns_none_when_screen_has_no_dock() -> None:
+    def fake_runner(cmd, **kwargs):
+        return _FakeCompletedProcess(stdout="")
+
+    assert desktop_presets.rebuild_dock_panel(3, fake_runner) is None

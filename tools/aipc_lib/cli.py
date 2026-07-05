@@ -475,6 +475,29 @@ def config_preset_sync_dock_launchers() -> None:
     )
 
 
+@config_preset.command("sync-topbar-systemtray", hidden=True)
+def config_preset_sync_topbar_systemtray() -> None:
+    """Internal: reconcile top-bar systemtray icon visibility across screens.
+    Same trigger and mechanism as sync-dock-launchers, not run by hand."""
+    desktop_presets_mod.reconcile_topbar_systemtray(
+        Path.home() / desktop_presets_mod.TOPBAR_SYSTEMTRAY_STATE_RELPATH
+    )
+
+
+@config_preset.command("rebuild-dock")
+@click.argument("screen", type=int)
+def config_preset_rebuild_dock(screen: int) -> None:
+    """Rebuild one screen's Dock from scratch (fixes both stale display and
+    wrong widget order at once -- see rebuild_dock_panel's docstring for why
+    those need a full rebuild and what it costs). SCREEN is Plasma's
+    panel.screen index (0, 1, ...), not a physical output name."""
+    warning = desktop_presets_mod.rebuild_dock_panel(screen)
+    if warning is None:
+        click.echo(f"No Dock found on screen {screen}", err=True)
+        sys.exit(1)
+    click.echo(warning)
+
+
 @main.command("status")
 def status_cmd() -> None:
     """Dashboard: this repo's enabled module services + live loaded models."""
