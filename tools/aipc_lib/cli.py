@@ -464,6 +464,17 @@ def config_preset_apply(name: str) -> None:
     click.echo(f"Applied preset: {name}")
 
 
+@config_preset.command("sync-dock-launchers", hidden=True)
+def config_preset_sync_dock_launchers() -> None:
+    """Internal: reconcile Dock pinned-launcher lists across screens
+    (whichever screen changed propagates to the others). Meant to be
+    triggered by a systemd --user path unit watching
+    plasma-org.kde.plasma.desktop-appletsrc, not run by hand."""
+    desktop_presets_mod.reconcile_dock_launchers(
+        Path.home() / desktop_presets_mod.DOCK_LAUNCHER_STATE_RELPATH
+    )
+
+
 @main.command("status")
 def status_cmd() -> None:
     """Dashboard: this repo's enabled module services + live loaded models."""

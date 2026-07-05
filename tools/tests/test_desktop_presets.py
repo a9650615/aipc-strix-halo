@@ -103,66 +103,87 @@ def test_ensure_panels_script_applies_static_hiding_policy() -> None:
     assert 'if (ps[i].location === "top") ps[i].hiding = "none";' in script
 
 
-def test_icontasks_launcher_ids_script_targets_bottom_panel_icontasks() -> None:
-    script = desktop_presets.icontasks_launcher_ids_script(2, 331, 1271)
-    assert "screenCount = 2" in script
-    assert "g.x === 331 && g.y === 1271" in script
-    assert 'widgets[j].type !== "org.kde.plasma.icontasks"' in script
+def test_all_dock_icontasks_ids_script_targets_bottom_panel_icontasks() -> None:
+    script = desktop_presets.all_dock_icontasks_ids_script()
+    assert 'widgets[j].type === "org.kde.plasma.icontasks"' in script
     assert 'ps[i].location !== "bottom"' in script
 
 
-def test_sync_dock_launchers_copies_primary_list_to_other_screens() -> None:
-    # Direct user request 2026-07-06 ("dock app 項目同步"): a screen without
-    # a launchers= key just shows an empty Dock. Hardware-verified the ids
-    # discovery + kreadconfig6 + kwriteconfig6 sequence live before landing
-    # this in the repo.
+def _fake_runner_for_reconcile(qdbus_stdout, launchers_by_panel):
     calls = []
 
     def fake_runner(cmd, **kwargs):
         calls.append(cmd)
         if cmd[0] == "qdbus":
-            return _FakeCompletedProcess(stdout="365,368:473,476;999,111")
+            return _FakeCompletedProcess(stdout=qdbus_stdout)
         if cmd[0] == "kreadconfig6":
-            return _FakeCompletedProcess(stdout="applications:systemsettings.desktop,preferred://filemanager")
+            panel_id = cmd[cmd.index("--group") + 3]  # ["Containments", panel_id, ...]
+            return _FakeCompletedProcess(stdout=launchers_by_panel[panel_id])
         return _FakeCompletedProcess(0)
 
-    desktop_presets.sync_dock_launchers(2, 0, 0, fake_runner)
-
-    write_calls = [c for c in calls if c[0] == "kwriteconfig6"]
-    assert len(write_calls) == 2
-    for panel_id, applet_id in [("473", "476"), ("999", "111")]:
-        assert any(
-            c[-1] == "applications:systemsettings.desktop,preferred://filemanager"
-            and panel_id in c
-            and applet_id in c
-            for c in write_calls
-        )
+    return calls, fake_runner
 
 
-def test_sync_dock_launchers_noop_when_only_one_screen() -> None:
-    calls = []
+def test_reconcile_dock_launchers_seeds_state_without_writing_on_first_run(tmp_path: Path) -> None:
+    # No prior state -- every panel looks "new", not "changed", so nothing
+    # should be overwritten on the very first run (that would arbitrarily
+    # clobber whichever panel wasn't picked, with no user edit behind it).
+    calls, fake_runner = _fake_runner_for_reconcile(
+        "365,368;473,476", {"365": "a.desktop", "473": "b.desktop"}
+    )
+    state_path = tmp_path / "state.json"
 
-    def fake_runner(cmd, **kwargs):
-        calls.append(cmd)
-        return _FakeCompletedProcess(stdout="365,368:")
-
-    desktop_presets.sync_dock_launchers(1, 0, 0, fake_runner)
-
-    assert not any(c[0] in ("kreadconfig6", "kwriteconfig6") for c in calls)
-
-
-def test_sync_dock_launchers_noop_when_primary_has_no_launchers_pinned() -> None:
-    calls = []
-
-    def fake_runner(cmd, **kwargs):
-        calls.append(cmd)
-        if cmd[0] == "qdbus":
-            return _FakeCompletedProcess(stdout="365,368:473,476")
-        return _FakeCompletedProcess(stdout="")
-
-    desktop_presets.sync_dock_launchers(2, 0, 0, fake_runner)
+    desktop_presets.reconcile_dock_launchers(state_path, fake_runner)
 
     assert not any(c[0] == "kwriteconfig6" for c in calls)
+    assert json.loads(state_path.read_text()) == {"365": "a.desktop", "473": "b.desktop"}
+
+
+def test_reconcile_dock_launchers_propagates_the_changed_panel(tmp_path: Path) -> None:
+    # Direct user request 2026-07-06 ("其中一個 dock 做變更, 就自動 sync 到全部
+    # 的 dock"): symmetric, whichever screen changed wins -- not "primary
+    # always wins". Hardware-verified the ids discovery + kreadconfig6 +
+    # kwriteconfig6 sequence live before landing this in the repo.
+    state_path = tmp_path / "state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"365": "old.desktop", "473": "old.desktop"}))
+
+    calls, fake_runner = _fake_runner_for_reconcile(
+        "365,368;473,476", {"365": "old.desktop", "473": "new.desktop"}
+    )
+
+    desktop_presets.reconcile_dock_launchers(state_path, fake_runner)
+
+    write_calls = [c for c in calls if c[0] == "kwriteconfig6"]
+    assert len(write_calls) == 1
+    assert write_calls[0][-1] == "new.desktop"
+    assert "365" in write_calls[0]
+    assert json.loads(state_path.read_text()) == {"365": "new.desktop", "473": "new.desktop"}
+
+
+def test_reconcile_dock_launchers_noop_when_nothing_changed(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"365": "same.desktop", "473": "same.desktop"}))
+
+    calls, fake_runner = _fake_runner_for_reconcile(
+        "365,368;473,476", {"365": "same.desktop", "473": "same.desktop"}
+    )
+
+    desktop_presets.reconcile_dock_launchers(state_path, fake_runner)
+
+    assert not any(c[0] == "kwriteconfig6" for c in calls)
+
+
+def test_reconcile_dock_launchers_noop_when_only_one_screen(tmp_path: Path) -> None:
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        return _FakeCompletedProcess(stdout="365,368")
+
+    desktop_presets.reconcile_dock_launchers(tmp_path / "state.json", fake_runner)
+
+    assert not any(c[0] in ("kreadconfig6", "kwriteconfig6") for c in calls)
 
 
 def test_disable_legacy_kwin_script_command_targets_old_script_id() -> None:
@@ -241,3 +262,28 @@ def test_apply_preset_mac_runs_expected_commands_and_cleans_up_legacy_script(tmp
     assert any(c[-2:] == [f"{desktop_presets.LEGACY_KWIN_SCRIPT_ID}Enabled", "false"] for c in calls)
     assert any(c[-2:] == ["org.kde.kwin.Scripting.unloadScript", desktop_presets.LEGACY_KWIN_SCRIPT_ID] for c in calls)
     assert not script_dir.exists()
+    assert any(c[:3] == ["systemctl", "--user", "enable"] for c in calls)
+
+
+def test_dock_launcher_sync_unit_files_reference_the_resolved_aipc_path() -> None:
+    units = desktop_presets.dock_launcher_sync_unit_files("/home/birdyo/.local/bin/aipc")
+    assert "aipc-dock-launcher-sync.path" in units
+    assert "aipc-dock-launcher-sync.service" in units
+    assert "PathModified=" in units["aipc-dock-launcher-sync.path"]
+    assert "ExecStart=/home/birdyo/.local/bin/aipc config preset sync-dock-launchers" in units["aipc-dock-launcher-sync.service"]
+
+
+def test_install_dock_launcher_sync_units_writes_and_enables(tmp_path: Path) -> None:
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        return _FakeCompletedProcess(0)
+
+    desktop_presets.install_dock_launcher_sync_units(tmp_path, fake_runner)
+
+    unit_dir = tmp_path / ".config/systemd/user"
+    assert (unit_dir / "aipc-dock-launcher-sync.path").exists()
+    assert (unit_dir / "aipc-dock-launcher-sync.service").exists()
+    assert ["systemctl", "--user", "daemon-reload"] in calls
+    assert ["systemctl", "--user", "enable", "--now", "aipc-dock-launcher-sync.path"] in calls
