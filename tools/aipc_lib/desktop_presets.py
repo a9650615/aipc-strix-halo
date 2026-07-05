@@ -39,20 +39,16 @@ TOUCHPAD_NAME = "ASUSTeK Computer Inc. GZ302EA-Keyboard Touchpad"
 
 RunnerT = Callable[..., subprocess.CompletedProcess]
 
-# Relative to $HOME. Tracks each screen's last-seen synced value so
-# reconcile_widget_config can tell "this screen just changed" apart from
-# "everyone still matches" -- see that function's docstring. Separate files
-# per (location, widget_type, config_key) combination -- they track
-# independent values and must not clobber each other's state.
-DOCK_LAUNCHER_STATE_RELPATH = Path(".local/state/aipc/dock-launcher-sync.json")
-TOPBAR_SYSTEMTRAY_STATE_RELPATH = Path(".local/state/aipc/topbar-systemtray-sync.json")
-
 
 def _kwriteconfig(file: str, groups: list[str], key: str, value: str) -> list[str]:
     cmd = ["kwriteconfig6", "--file", file]
     for g in groups:
         cmd += ["--group", g]
-    cmd += ["--key", key, value]
+    # "--" before value: hardware-verified 2026-07-06 that without it,
+    # kwriteconfig6's own option parser treats a value like "-1" (e.g. a
+    # folder widget's lastScreen=-1) as an unrecognized flag and fails
+    # ("Unknown option '1'.") instead of writing it.
+    cmd += ["--key", key, "--", value]
     return cmd
 
 
@@ -154,15 +150,15 @@ def ensure_panels_script(screen_count: int, primary_x: int, primary_y: int) -> s
     content the user asked to preserve. To re-clone a screen's widgets from
     scratch, remove its panels by hand first, then re-run.
 
-    2026-07-06 update, direct user request ("dock app 項目同步", later refined
-    to "哪一個 change, 就 sync 到全部的 dock"): the 07-04 spec above turned out
-    too broad in practice -- a second screen's Dock with no pinned launchers
-    just looks broken, not "whatever the user placed". apply_preset now
-    calls reconcile_dock_launchers() as one narrow, explicit exception: it
-    overwrites only the `launchers` value, propagating whichever screen's
-    list changed most recently to every other screen. Everything else
-    (widget list, other per-widget config) stays covered by the
-    non-destructive rule above.
+    2026-07-06 update, direct user request ("dock app 項目同步", eventually
+    "本來就應該通用...跟 Mac 一樣的體驗", "完全鏡射"): the 07-04 spec above turned
+    out too narrow in practice -- a second screen's Dock with no pinned
+    launchers just looks broken, and syncing one config key stopped being
+    enough once a whole new widget could be added to one screen and not
+    another. That continuous cross-screen mirroring (widget list, order,
+    every widget's own config) is a *separate* standing concern from this
+    one-shot preset apply -- see aipc_lib.panel_mirror, installed and
+    triggered independently (not called from here).
 
     Hiding policy is the one thing this DOES force on every panel, new or
     existing, every apply (setting `.hiding` never touches widgets so it
@@ -283,49 +279,6 @@ def reconfigure_kwin_command() -> list[str]:
     return ["qdbus", "org.kde.KWin", "/KWin", "reconfigure"]
 
 
-def _find_widgets_script(location: str, widget_type: str) -> str:
-    """Prints "<panelId>,<appletId>;<panelId>,<appletId>;..." for every
-    screen's <location> panel's <widget_type> widget."""
-    return f"""\
-var ps = panels();
-var out = [];
-for (var i = 0; i < ps.length; i++) {{
-  if (ps[i].location !== "{location}") continue;
-  var widgets = ps[i].widgets();
-  for (var j = 0; j < widgets.length; j++) {{
-    if (widgets[j].type === "{widget_type}") {{
-      out.push(ps[i].id + "," + widgets[j].id);
-    }}
-  }}
-}}
-print(out.join(";"));
-"""
-
-
-def _find_widgets_command(location: str, widget_type: str) -> list[str]:
-    return [
-        "qdbus",
-        "org.kde.plasmashell",
-        "/PlasmaShell",
-        "org.kde.PlasmaShell.evaluateScript",
-        _find_widgets_script(location, widget_type),
-    ]
-
-
-def all_dock_icontasks_ids_script() -> str:
-    """Prints "<panelId>,<appletId>;<panelId>,<appletId>;..." for every
-    screen's Dock (bottom panel) icontasks widget -- the pinned launcher
-    list lives per-widget-instance, so a screen without a launchers= key
-    just shows an empty Dock with no way to pin an app short of doing it by
-    hand on that screen specifically. No primary/replica distinction here;
-    that's for reconcile_widget_config to decide from state, not this."""
-    return _find_widgets_script("bottom", "org.kde.plasma.icontasks")
-
-
-def all_dock_icontasks_ids_command() -> list[str]:
-    return _find_widgets_command("bottom", "org.kde.plasma.icontasks")
-
-
 # Default config-group path under an Applet, for widgets whose QML declares
 # a configGroup (icontasks and most others). systemtray is the one common
 # exception -- hardware-verified 2026-07-06: its extraItems/knownItems live
@@ -345,148 +298,6 @@ def _read_config_value(
 
 def _read_launchers(panel_id: str, applet_id: str, runner: RunnerT) -> str:
     return _read_config_value(panel_id, applet_id, "launchers", runner)
-
-
-def reconcile_widget_config(
-    location: str,
-    widget_type: str,
-    config_key: str,
-    state_path: Path,
-    runner: RunnerT = subprocess.run,
-    config_groups: tuple[str, ...] = DEFAULT_CONFIG_GROUPS,
-) -> None:
-    """Direct user request 2026-07-06 ("其中一個 dock 做變更, 就自動 sync 到全部
-    的 dock", later "top bar 也同步"): whichever screen's <location> panel's
-    <widget_type> widget had <config_key> edited since the last run,
-    propagate it to every other screen's same widget. No primary/replica
-    distinction -- genuinely symmetric, last-writer-wins, so it's meant to
-    be triggered by a systemd path unit watching the appletsrc file (kernel
-    inotify, not a hand-rolled polling loop -- see the removed
-    aipc-sync-plasma.service for what that looked like and why it was torn
-    out) as well as being called once from apply_preset. Originally
-    dock-launchers-specific (reconcile_dock_launchers); generalized so the
-    same mechanism covers the top bar's systemtray icon list without a
-    second copy of this logic.
-
-    state_path holds the last-seen value per panel id as JSON, so a run can
-    tell "did panel X change since last time" apart from "everyone still
-    matches, nothing to do" -- without that, every trigger (including the
-    one caused by this function's own writes) would look like a change and
-    loop forever. Each (location, widget_type, config_key) combination needs
-    its own state_path -- they track independent values.
-
-    ponytail: if two screens are edited in the same interval between
-    trigger runs, which one wins is arbitrary (lowest panel id) -- only
-    matters if you edit two screens within the same debounce window, which
-    a path-unit trigger (fires within ~seconds of the write) makes rare.
-    """
-    result = runner(_find_widgets_command(location, widget_type), capture_output=True, text=True, check=True)
-    pairs = [tuple(ref.split(",")) for ref in result.stdout.strip().split(";") if ref]
-    if len(pairs) < 2:
-        return
-
-    current = {
-        panel_id: _read_config_value(panel_id, applet_id, config_key, runner, config_groups)
-        for panel_id, applet_id in pairs
-    }
-
-    previous: dict[str, str] = {}
-    if state_path.exists():
-        previous = json.loads(state_path.read_text())
-
-    changed = sorted(pid for pid, value in current.items() if pid in previous and previous[pid] != value)
-
-    if changed:
-        canonical = current[changed[0]]
-        for panel_id, applet_id in pairs:
-            if current[panel_id] != canonical:
-                runner(
-                    _kwriteconfig(
-                        "plasma-org.kde.plasma.desktop-appletsrc",
-                        ["Containments", panel_id, "Applets", applet_id, *config_groups],
-                        config_key,
-                        canonical,
-                    ),
-                    check=True,
-                )
-        current = {pid: canonical for pid in current}
-
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(current))
-
-
-def reconcile_dock_launchers(state_path: Path, runner: RunnerT = subprocess.run) -> None:
-    reconcile_widget_config("bottom", "org.kde.plasma.icontasks", "launchers", state_path, runner)
-
-
-def reconcile_topbar_systemtray(state_path: Path, runner: RunnerT = subprocess.run) -> None:
-    """Same mechanism as reconcile_dock_launchers, for the top bar's
-    systemtray icon visibility list (`extraItems=`) instead of the Dock's
-    pinned launchers -- toggling which tray icons show is the top-bar
-    equivalent of pinning/unpinning a Dock launcher. Hardware-verified
-    2026-07-06: systemtray stores extraItems directly under [General], not
-    [Configuration][General] like icontasks' launchers -- hence the
-    different config_groups here."""
-    reconcile_widget_config(
-        "top", "org.kde.plasma.systemtray", "extraItems", state_path, runner, config_groups=("General",)
-    )
-
-
-def panel_widget_sync_unit_files(aipc_path: str) -> dict[str, str]:
-    """Unit file contents keyed by filename. PathModified= is kernel inotify,
-    not a hand-rolled polling loop -- see the torn-out aipc-sync-plasma.service
-    (dead code, a sed/awk polling script) for what that looked like and why
-    it was removed. The .service is a oneshot with two ExecStart lines (both
-    run in order on every trigger) -- Dock launchers and top-bar systemtray
-    icons are two independent reconcile_widget_config() calls, not one, but
-    both watch the same appletsrc file so one path unit covers both."""
-    return {
-        "aipc-panel-widget-sync.path": """[Unit]
-Description=Watch KDE panel config for Dock/top-bar widget changes
-
-[Path]
-PathModified=%h/.config/plasma-org.kde.plasma.desktop-appletsrc
-
-[Install]
-WantedBy=default.target
-""",
-        "aipc-panel-widget-sync.service": f"""[Unit]
-Description=Reconcile Dock/top-bar per-screen widget config
-
-[Service]
-Type=oneshot
-ExecStart={aipc_path} config preset sync-dock-launchers
-ExecStart={aipc_path} config preset sync-topbar-systemtray
-""",
-    }
-
-
-def install_panel_widget_sync_units(home: Path, runner: RunnerT = subprocess.run) -> None:
-    """Direct user request 2026-07-06 ("其中一個 dock 做變更, 就自動 sync 到全部
-    的 dock", later "top bar 也同步", "本來就應該通用"): install + enable a
-    systemd --user path unit so reconcile_widget_config runs automatically
-    on every panel-config change, not only when `aipc config preset apply`
-    is run by hand. Resolves the `aipc` binary's actual path at install time
-    via shutil.which rather than hardcoding /usr/local/bin/aipc (the
-    shipped-image path per commit 11a9db9) -- a pipx dev install like this
-    machine's lives at ~/.local/bin/aipc instead, and systemd user services
-    don't inherit that onto PATH by default. Idempotent: re-writing
-    identical unit files and re-running `enable --now` on an already-enabled
-    unit are both no-ops."""
-    aipc_path = shutil.which("aipc") or "aipc"
-    unit_dir = home / ".config/systemd/user"
-    unit_dir.mkdir(parents=True, exist_ok=True)
-
-    # Superseded name (2026-07-06, same day): dock-launchers-only, before
-    # the top-bar systemtray reconcile was added under the same trigger.
-    runner(["systemctl", "--user", "disable", "--now", "aipc-dock-launcher-sync.path"], check=False)
-    for old in ("aipc-dock-launcher-sync.path", "aipc-dock-launcher-sync.service"):
-        (unit_dir / old).unlink(missing_ok=True)
-
-    for name, content in panel_widget_sync_unit_files(aipc_path).items():
-        (unit_dir / name).write_text(content)
-    runner(["systemctl", "--user", "daemon-reload"], check=False)
-    runner(["systemctl", "--user", "enable", "--now", "aipc-panel-widget-sync.path"], check=False)
 
 
 # Canonical Dock widget order, hardware-verified 2026-07-06 against this
@@ -698,7 +509,4 @@ def apply_preset(name: str, home: Path, runner: RunnerT = subprocess.run) -> Non
     screen_count = connected_screen_count(runner)
     primary_x, primary_y = primary_screen_position(runner)
     runner(ensure_panels_command(screen_count, primary_x, primary_y), check=True)
-    reconcile_dock_launchers(home / DOCK_LAUNCHER_STATE_RELPATH, runner)
-    reconcile_topbar_systemtray(home / TOPBAR_SYSTEMTRAY_STATE_RELPATH, runner)
     runner(reconfigure_kwin_command(), check=False)
-    install_panel_widget_sync_units(home, runner)

@@ -16,6 +16,7 @@ from aipc_lib import doctor as doctor_mod
 from aipc_lib import log_append as log_append_mod
 from aipc_lib import models as models_mod
 from aipc_lib import opencode_sync as opencode_sync_mod
+from aipc_lib import panel_mirror as panel_mirror_mod
 from aipc_lib import secrets
 from aipc_lib import status_dashboard as status_mod
 from aipc_lib import tools_menu as tools_menu_mod
@@ -455,33 +456,34 @@ def config_preset_list() -> None:
 @config_preset.command("apply")
 @click.argument("name")
 def config_preset_apply(name: str) -> None:
-    """Apply a desktop preset by name (see `aipc config preset list`)."""
+    """Apply a desktop preset by name (see `aipc config preset list`), and
+    make sure the standing cross-screen panel-mirror service is installed --
+    two different things (one-shot preset vs. background sync service),
+    bundled here purely for convenience since most users want both."""
     try:
         desktop_presets_mod.apply_preset(name, Path.home())
     except KeyError:
         click.echo(f"Unknown preset: {name!r} (see `aipc config preset list`)", err=True)
         sys.exit(1)
+    panel_mirror_mod.install_panel_mirror_units(Path.home())
     click.echo(f"Applied preset: {name}")
 
 
-@config_preset.command("sync-dock-launchers", hidden=True)
-def config_preset_sync_dock_launchers() -> None:
-    """Internal: reconcile Dock pinned-launcher lists across screens
-    (whichever screen changed propagates to the others). Meant to be
-    triggered by a systemd --user path unit watching
-    plasma-org.kde.plasma.desktop-appletsrc, not run by hand."""
-    desktop_presets_mod.reconcile_dock_launchers(
-        Path.home() / desktop_presets_mod.DOCK_LAUNCHER_STATE_RELPATH
-    )
+@config_preset.command("mirror-dock", hidden=True)
+def config_preset_mirror_dock() -> None:
+    """Internal: mirror the Dock's entire structure (widget list, order,
+    every widget's own config) across screens -- whichever screen changed
+    propagates to the others. Meant to be triggered by a systemd --user
+    path unit watching plasma-org.kde.plasma.desktop-appletsrc, not run by
+    hand. Supersedes the narrower reconcile_dock_launchers (single config
+    key on an already-matching widget list)."""
+    panel_mirror_mod.mirror_dock()
 
 
-@config_preset.command("sync-topbar-systemtray", hidden=True)
-def config_preset_sync_topbar_systemtray() -> None:
-    """Internal: reconcile top-bar systemtray icon visibility across screens.
-    Same trigger and mechanism as sync-dock-launchers, not run by hand."""
-    desktop_presets_mod.reconcile_topbar_systemtray(
-        Path.home() / desktop_presets_mod.TOPBAR_SYSTEMTRAY_STATE_RELPATH
-    )
+@config_preset.command("mirror-topbar", hidden=True)
+def config_preset_mirror_topbar() -> None:
+    """Internal: same as mirror-dock, for the top bar. Not run by hand."""
+    panel_mirror_mod.mirror_topbar()
 
 
 @config_preset.command("rebuild-dock")
