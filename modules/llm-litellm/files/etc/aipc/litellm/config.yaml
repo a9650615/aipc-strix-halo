@@ -17,6 +17,10 @@ model_list:
       model: openai/gemma4-it-e4b-FLM
       api_base: http://127.0.0.1:8001/v1
       api_key: none
+      # timeout/num_retries: see coder-agentic below for why local
+      # (Lemonade-backed) models override the global router_settings.
+      timeout: 1800
+      num_retries: 0
 
   # See models.yaml for why this is gemma4 and not qwen2.5-coder: Ollama's
   # streaming tool-call support is broken for the qwen2 family regardless
@@ -34,6 +38,25 @@ model_list:
       model: openai/Gemma-4-26B-A4B-it-GGUF
       api_base: http://127.0.0.1:8001/v1
       api_key: none
+      # Root-caused 2026-07-05 (task: "coder-agentic sessions stop mid-task
+      # unexpectedly"): the global router_settings below (timeout: 600,
+      # num_retries: 2) means that once real concurrent load saturates
+      # Lemonade's 4 slots (hardware-observed: a single ~217k-token prompt
+      # took 26+ min just for prefill under -np 4 -kvu), any request still
+      # in flight past 600s gets retried -- but a slow local completion
+      # isn't a transient failure, it's still working. Retrying dumps a
+      # second (then third) identical copy of the same expensive request
+      # onto the same already-saturated slots, compounding the exact
+      # contention that caused the timeout in the first place. From the
+      # client's side this looks exactly like the reported symptom: the
+      # session silently stops making progress. Per-model override:
+      # num_retries: 0 (never retry a timed-out local completion) and a
+      # much longer timeout (this hardware measured legitimate multi-minute
+      # waits under load -- 4m53s hardware-verified for one /chat round trip
+      # during task #13's verification) so a genuinely slow-but-working
+      # request isn't cut off either.
+      timeout: 1800
+      num_retries: 0
 
   # Ornith-1.0-35B (deepreinforce-ai/Ornith-1.0-35B-GGUF, Q4_K_M, 19.7GB) —
   # 35B MoE reasoning + agentic-coding model. Moved from Ollama to Lemonade
@@ -43,6 +66,10 @@ model_list:
       model: openai/Ornith-1.0-35B-GGUF-Q4_K_M
       api_base: http://127.0.0.1:8001/v1
       api_key: none
+      # timeout/num_retries: see coder-agentic above for why local
+      # (Lemonade-backed) models override the global router_settings.
+      timeout: 1800
+      num_retries: 0
 
   - model_name: main-cloud
     litellm_params:
