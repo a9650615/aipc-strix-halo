@@ -11,7 +11,12 @@ from typing import Callable
 # that dynamically toggled panel hiding based on per-window fullscreen state.
 # After several iterations it still didn't reliably work (user, 2026-07-04:
 # "還是沒有解決任何問題" -- still hasn't solved anything). Replaced with a
-# static policy: dock always autohides, top bar never hides, on every screen.
+# static policy: dock dodges overlapping windows (native KWin "dodgewindows"
+# hiding mode), top bar never hides, on every screen. (2026-07-06: initially
+# shipped as "autohide", which macOS-Dock-style always hides regardless of
+# overlap and only reveals on hover -- not what was wanted, "為什麼我沒有遮擋
+# 還是會隱藏" -- switched to dodgewindows, which KWin handles natively with no
+# custom scripting.)
 # This id is kept only so apply_preset can find and remove a previously
 # installed copy (see uninstall_legacy_kwin_script / disable_legacy_kwin_script_command).
 LEGACY_KWIN_SCRIPT_ID = "fullscreen-hides-panels"
@@ -139,7 +144,15 @@ def ensure_panels_script(screen_count: int, primary_x: int, primary_y: int) -> s
     doesn't conflict with the non-destructive rule above). Direct user spec
     2026-07-04, after the fullscreen-detecting KWin script repeatedly failed
     to work ("還是沒有解決任何問題"): "每個螢幕的 dock 都設定自動隱藏, 選單列
-    永遠不隱藏就好了" -- every screen's Dock (bottom panel) always autohides;
+    永遠不隱藏就好了". Initially shipped as "autohide" (always hidden, reveal
+    on hover); 2026-07-06 the user reported that behavior directly ("為什麼
+    自動隱藏現在我沒有遮擋還是會隱藏" -- why does it hide even with nothing in
+    the way): what was actually wanted is "dodgewindows" (visible unless a
+    window overlaps it), a native KWin hiding mode requiring no scripting.
+    Note: the Panel scripting API silently accepts invalid `.hiding` string
+    literals and falls back to "none" instead of raising -- "windowscover"
+    (a natural-sounding guess) is NOT a valid value; "dodgewindows" is.
+    Every screen's Dock (bottom panel) dodges overlapping windows;
     the top bar never hides.
     """
     return f"""\
@@ -211,7 +224,7 @@ for (var s = 0; s < screenCount; s++) {{
   if (!haveBottom[s]) {{
     var p = new Panel;
     p.screen = s;
-    applySpec(p, "bottom", bottomSpec, "autohide");
+    applySpec(p, "bottom", bottomSpec, "dodgewindows");
   }}
   if (!haveTop[s]) {{
     var t = new Panel;
@@ -221,7 +234,7 @@ for (var s = 0; s < screenCount; s++) {{
 }}
 
 for (var i = 0; i < ps.length; i++) {{
-  if (ps[i].location === "bottom") ps[i].hiding = "autohide";
+  if (ps[i].location === "bottom") ps[i].hiding = "dodgewindows";
   if (ps[i].location === "top") ps[i].hiding = "none";
 }}
 """
@@ -253,8 +266,8 @@ PRESETS: dict[str, Preset] = {
         description=(
             "macOS-like KDE Plasma desktop: window buttons on the left, "
             "natural-scroll + tap-to-click touchpad, unified panel layout "
-            "cloned across screens, Dock (bottom panel) always autohides "
-            "and the top bar never hides, on every screen "
+            "cloned across screens, Dock (bottom panel) dodges overlapping "
+            "windows and the top bar never hides, on every screen "
             "(GZ302EA touchpad id hardcoded)"
         ),
     ),

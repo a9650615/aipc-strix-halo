@@ -85,14 +85,17 @@ def test_ensure_panels_script_is_non_destructive_to_existing_panels() -> None:
 def test_ensure_panels_script_applies_static_hiding_policy() -> None:
     # Direct user spec 2026-07-04, after the fullscreen-detecting KWin script
     # repeatedly failed: "每個螢幕的 dock 都設定自動隱藏, 選單列永遠不隱藏就好
-    # 了" -- every screen's Dock (bottom) always autohides, the top bar never
-    # hides. Applied both to newly-created panels and to every pre-existing
-    # panel (setting .hiding never touches widgets, so it doesn't conflict
-    # with the non-destructive rule above).
+    # 了". Initially shipped as "autohide"; hardware-verified 2026-07-06 that's
+    # macOS-Dock-style always-hidden-until-hover, not what was wanted -- user
+    # directly reported it ("為什麼自動隱藏現在我沒有遮擋還是會隱藏"). Switched
+    # to "dodgewindows" (visible unless a window overlaps it), the native KWin
+    # mode for that. Applied both to newly-created panels and to every
+    # pre-existing panel (setting .hiding never touches widgets, so it
+    # doesn't conflict with the non-destructive rule above).
     script = desktop_presets.ensure_panels_script(2, 0, 0)
-    assert 'applySpec(p, "bottom", bottomSpec, "autohide")' in script
+    assert 'applySpec(p, "bottom", bottomSpec, "dodgewindows")' in script
     assert 'applySpec(t, "top", topSpec, "none")' in script
-    assert 'if (ps[i].location === "bottom") ps[i].hiding = "autohide";' in script
+    assert 'if (ps[i].location === "bottom") ps[i].hiding = "dodgewindows";' in script
     assert 'if (ps[i].location === "top") ps[i].hiding = "none";' in script
 
 
