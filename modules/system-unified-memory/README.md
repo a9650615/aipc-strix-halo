@@ -131,12 +131,29 @@ hardware appears to fail. `71-thunderbolt-no-runtime-pm.rules` forces `power/con
 both the bus devices and the PCI driver's `thunderbolt`-bound functions, so the link never
 drops into that state while the machine is awake.
 
-**This has not yet been confirmed to fully eliminate the blackouts** — applied live and
-verified the setting sticks (`power/control` reads `on`, not re-flipped by the kernel), but an
-intermittent bug needs sustained real use with the external monitor to confirm the fix, not a
-single check. If it recurs, the next data points to gather are: does it correlate with AC/DC
-transitions (this port likely also carries charging), and is there a newer BIOS/Thunderbolt
-firmware than what shipped.
+**Update 2026-07-05, same day: this is very likely NOT the actual root cause.** A deliberate
+physical unplug/replug (a clean hotplug, immune to any runtime-PM state) reproduced the exact
+same failure signature: `*ERROR* dpia_query_hpd_status: for link(7) dpia(2) failed with
+status(1)` immediately followed by `*ERROR* wait_for_completion_timeout timeout!`, then the
+same `DMUB HPD RX IRQ callback` burst on reconnect ~2.5 minutes later. This means the DMUB
+firmware's HPD-status query over the DPIA/USB4 path itself is unreliable/times out — a firmware
+or driver-level issue in the DMUB<->DPIA communication path, not a Linux runtime-PM power state
+this udev rule can influence. The runtime-PM fix is harmless and stays enabled (it's still a
+real, if apparently minor, contributing factor), but do not treat it as the fix for the
+blackouts. No userspace/config-level fix found. Real fixes would need: a newer amdgpu driver
+with better DPIA reliability handling, updated DMUB firmware (linux-firmware), or bypassing
+DPIA entirely via a native DP/HDMI port on this chassis if one exists.
+
+Separately, hardware-verified the same day: this monitor is stuck at ~95Hz for *every*
+resolution the driver lists (even tiny ones like 640x480 that need a fraction of the
+bandwidth), including 4K, despite advertising 48-160Hz VRR range and both `DSC_Sink_Support`
+and `FEC_Sink_Support: yes` in its DPCD. The link itself already runs at full HBR3 x4
+(`link_settings`: `4 0x1e 16`) — DSC compression is what would be needed to fit a higher
+refresh rate in the same bandwidth, but `dsc_clock_en`/`dsc_bits_per_pixel` read `0` and stayed
+`0` after both a debugfs force-write attempt and a full physical replug. This looks like the
+amdgpu DPIA path in this kernel version doesn't negotiate DSC at all (DSC-over-native-DP is
+more mature upstream than DSC-over-DPIA) — same underlying DMUB/DPIA immaturity as the
+blackout issue above, not something fixable from userspace either.
 
 ## Known issue: idle power draw / thermals — AC vs battery power profile
 
