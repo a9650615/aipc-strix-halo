@@ -9,6 +9,7 @@ from aipc_lib.models import DEFAULT_MANIFEST, load_manifest
 
 DEFAULT_LITELLM_BASE = "http://127.0.0.1:4000"
 DEFAULT_OPENCODE_CONFIG = Path.home() / ".config" / "opencode" / "config.json"
+LEMONADE_PORT_FILE = Path("/etc/aipc/env.d/llm-lemonade/port")
 
 # OpenCode's @ai-sdk/openai-compatible provider has no dynamic model-
 # discovery config option (confirmed against opencode.ai/docs/providers/
@@ -51,6 +52,57 @@ def _display_names(model_ids: list[str], manifest_path: Path) -> dict[str, str]:
     return names
 
 
+def _lemonade_base_url() -> str:
+    port = LEMONADE_PORT_FILE.read_text().strip() if LEMONADE_PORT_FILE.exists() else "8001"
+    return f"http://127.0.0.1:{port}"
+
+
+def _lemonade_context_limits(base_url: str) -> dict[str, int]:
+    """Lemonade model_id -> max_context_window, from Lemonade's own
+    /api/v1/models (not LiteLLM's /v1/models, which doesn't carry this).
+    Returns {} if Lemonade is unreachable -- a miss just means "unknown,
+    omit limit" to callers, not a hard failure, since aliases on other
+    backends (cloud, ollama) don't need Lemonade up at all."""
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/v1/models", timeout=5) as resp:
+            data = json.load(resp)
+    except (urllib.error.URLError, OSError, ValueError):
+        return {}
+    return {
+        m["id"]: m["max_context_window"]
+        for m in data.get("data", [])
+        if "max_context_window" in m
+    }
+
+
+def _limits(model_ids: list[str], manifest_path: Path) -> dict[str, dict[str, int]]:
+    """alias -> {"context": N, "output": N} for aliases backed by Lemonade,
+    so OpenCode's own auto-compact (compaction.auto, on by default) has a
+    ceiling to compact against instead of only finding out when the
+    backend 400s with context_length_exceeded (hardware-verified
+    2026-07-05: a 264,989-token ornith-35b request did exactly that).
+    Aliases on other backends are left out, same as today -- no known
+    limit beats a guessed one that's wrong in either direction."""
+    by_alias = {e.alias: e for e in load_manifest(manifest_path)}
+    lemonade_ids = {
+        mid: by_alias[mid].model_id
+        for mid in model_ids
+        if by_alias.get(mid) and by_alias[mid].backend == "lemonade"
+    }
+    if not lemonade_ids:
+        return {}
+    ctx_by_model_id = _lemonade_context_limits(_lemonade_base_url())
+    limits: dict[str, dict[str, int]] = {}
+    for alias, model_id in lemonade_ids.items():
+        ctx = ctx_by_model_id.get(model_id)
+        if ctx is None:
+            continue
+        # Reserve a completion budget out of the same window so a long
+        # generation can't blow the ceiling from the other direction.
+        limits[alias] = {"context": ctx, "output": min(ctx // 4, 16384)}
+    return limits
+
+
 def sync_config(
     config_path: Path = DEFAULT_OPENCODE_CONFIG,
     base_url: str = DEFAULT_LITELLM_BASE,
@@ -73,10 +125,14 @@ def sync_config(
         raise ValueError(f"{base_url}/v1/models returned no chat-eligible models")
 
     names = _display_names(model_ids, manifest_path)
+    limits = _limits(model_ids, manifest_path)
 
     config = json.loads(config_path.read_text()) if config_path.exists() else {}
     provider = config.setdefault("provider", {}).setdefault(provider_id, {})
-    provider["models"] = {mid: {"name": names[mid]} for mid in model_ids}
+    provider["models"] = {
+        mid: {"name": names[mid], **({"limit": limits[mid]} if mid in limits else {})}
+        for mid in model_ids
+    }
 
     current_default = config.get("model", "")
     default_id = current_default.split("/", 1)[-1] if "/" in current_default else current_default
