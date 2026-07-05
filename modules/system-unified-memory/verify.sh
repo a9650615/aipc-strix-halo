@@ -40,3 +40,12 @@ if [ -r /proc/acpi/wakeup ]; then
   ! grep -qE '^GPP[01][[:space:]].*\*enabled' /proc/acpi/wakeup \
     || fail "system-unified-memory: GPP0/GPP1 still enabled as ACPI wake sources (gpp-wake-fix.service didn't run or failed)"
 fi
+
+# Thunderbolt/USB4 runtime PM disabled (see README's "USB4 DP tunneling"
+# section) — any device left on "auto" means the udev rule didn't apply,
+# not that no Thunderbolt hardware exists (this chassis always has the NHI).
+for f in /sys/bus/thunderbolt/devices/*/power/control /sys/bus/pci/drivers/thunderbolt/*/power/control; do
+  [ -r "$f" ] || continue
+  [ "$(cat "$f")" = "on" ] \
+    || fail "system-unified-memory: $f is not 'on' (71-thunderbolt-no-runtime-pm.rules didn't apply)"
+done

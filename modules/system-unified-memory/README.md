@@ -112,6 +112,32 @@ suspending and resuming after `gpp-wake-fix.service` has run; if it still hangs,
 data point to gather is whether it's charging-state-dependent (reported trigger in
 `#2988`) and whether a newer BIOS than `.308` is available.
 
+## Known issue: external monitor blackouts over USB4 DP tunneling
+
+Hardware-verified 2026-07-05: intermittent external-monitor blackouts while connected via this
+chassis's USB4/Thunderbolt port correlate exactly with `journalctl -k` showing bursts of
+`[drm] DPIA AUX failed on 0x0(1), error 7` (DPIA = DisplayPort tunneled over the USB4 link,
+not a native DP/HDMI port) immediately followed by dozens of `DMUB HPD RX IRQ callback`
+entries in the same second — the sink repeatedly signalling an IRQ that the driver interprets
+as needing to re-check the link, which is what shows up as a black screen / brief re-handshake.
+No accompanying USB/PD/power_supply event at the kernel level, and no GPU compute ring
+timeout in the same boot — ruling out both a physical unplug and the unrelated GPU-hang class
+of bug covered by `system-suspend-gpu-guard`.
+
+All Thunderbolt bus devices and the NHI host controller PCI functions were found with runtime
+PM autosuspend (`power/control: auto`) — letting the USB4 link drop to a low-power state
+between transactions. Waking it specifically for a DP AUX transaction is the point where this
+hardware appears to fail. `71-thunderbolt-no-runtime-pm.rules` forces `power/control=on` for
+both the bus devices and the PCI driver's `thunderbolt`-bound functions, so the link never
+drops into that state while the machine is awake.
+
+**This has not yet been confirmed to fully eliminate the blackouts** — applied live and
+verified the setting sticks (`power/control` reads `on`, not re-flipped by the kernel), but an
+intermittent bug needs sustained real use with the external monitor to confirm the fix, not a
+single check. If it recurs, the next data points to gather are: does it correlate with AC/DC
+transitions (this port likely also carries charging), and is there a newer BIOS/Thunderbolt
+firmware than what shipped.
+
 ## Known issue: idle power draw / thermals — AC vs battery power profile
 
 Hardware-verified 2026-07-04: with the default ASUS EC `platform_profile=balanced`, this
