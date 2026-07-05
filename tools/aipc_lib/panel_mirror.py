@@ -56,6 +56,27 @@ from aipc_lib.desktop_presets import RunnerT, _kwriteconfig, connected_screen_co
 # panel settings toolbar -> 建立面板複本 -> drag the clone to the target
 # screen) -- that path alone gets the config-before-create ordering right.
 # This mirror then keeps that result in sync for whatever changes next.
+#
+# Tried and reverted 2026-07-06: writing each new widget's config via its
+# own Applet.currentConfigGroup/writeConfig, in the same evaluateScript call
+# as addWidget() (closer to "own live object" than a separate kwriteconfig6
+# subprocess), on the theory that it might dodge some of the staleness
+# above. Confirmed broken instead: a plain Applet's currentConfigGroup has
+# an *implicit* "Configuration" root that Containment-like widgets
+# (systemtray, and Panel/Containment objects generally) don't -- setting
+# currentConfigGroup = ["Configuration", "General"] for icontasks actually
+# wrote to [...][Configuration][Configuration][General] (doubled), while
+# systemtray's real ["General"] (no "Configuration" wrapper at all, see
+# _capture_applet_config's docstring) got one added it shouldn't have.
+# Reverted to the kwriteconfig6-per-key approach (apply_panel_spec calling
+# _kwriteconfig with the exact captured suffix, no implicit-root guessing)
+# -- proven correct, and the applet.writeConfig route was never confirmed
+# to fix the actual staleness symptom anyway. If revisited: the fix would
+# be stripping a leading "Configuration][" segment from suffix specifically
+# for plain-Applet widgets before setting currentConfigGroup, while leaving
+# Containment-like widgets (systemtray) untouched -- distinguishing the two
+# reliably from this module (no direct "is this a Containment" signal in
+# the capture data today) is the open problem, not attempted here.
 
 APPLETSRC_RELPATH = Path(".config/plasma-org.kde.plasma.desktop-appletsrc")
 DOCK_MIRROR_STATE_RELPATH = Path(".local/state/aipc/dock-mirror.json")
