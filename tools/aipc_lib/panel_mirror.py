@@ -23,22 +23,39 @@ from aipc_lib.desktop_presets import RunnerT, _kwriteconfig, connected_screen_co
 # additions/removals included, which is what "本來就應該通用...跟 Mac 一樣的
 # 體驗" turned out to actually require).
 #
-# Known gap, confirmed 2026-07-06, not fixable from this module: KDE's own
-# panel-editor toolbar has a native "建立面板複本" (Duplicate Panel) button
-# that clones a panel's *live* in-memory widget state -- popup dialog sizes,
-# a systemmonitor widget's selected sensor, anything this module can't see
-# because it only round-trips whatever got persisted to the ini file.
-# Confirmed dead end: Panel scripting objects expose no `.duplicate()` /
-# `.clone()` / `.copy()` (all `typeof` undefined) -- that native action is
-# UI-only internal shell logic, not reachable from evaluateScript, so this
-# background service cannot invoke it. When perfect fidelity matters more
-# than automatic sync (a specific widget's popup size, a sensor pick),
-# recommend the user do it by hand once: enter panel edit mode -> panel
-# settings toolbar -> 建立面板複本 -> drag the clone to the target screen.
-# This mirror will then keep that result in sync for whatever changes next,
-# same residual-staleness caveat as ever (see reconcile note deleted from
-# desktop_presets.py: a freshly-written config value doesn't always
-# live-refresh the widget that owns it until a plasmashell restart).
+# Known gap, confirmed 2026-07-06 by reading KDE's actual source (not just
+# guessing method names), not fixable from this module: the panel-editor
+# toolbar's "建立面板複本" (Clone Panel) button calls
+# PanelView::clonePanelTo() -> ShellCorona::clonePanelTo()
+# (KDE/plasma-workspace shell/panelview.cpp, shell/shellcorona.cpp) --
+# a completely different C++ class from WorkspaceScripting::Panel
+# (shell/scripting/panel.h), which is the ONLY thing `panels()` in
+# evaluateScript ever returns. That scripting wrapper class has no
+# duplicate/clone method at all (confirmed by reading its full header) --
+# it isn't hidden, it's a deliberately narrower API surface than PanelView,
+# and PanelView/ShellCorona are never bridged to the D-Bus scripting
+# interface. There is no way to reach clonePanelTo from evaluateScript.
+#
+# Why the native clone doesn't have this module's staleness problem:
+# ShellCorona::clonePanelTo copies the OLD containment's entire KConfigGroup
+# into the NEW one (KConfigGroup::copyTo, in-process, before creating a
+# single applet), *then* calls createApplet() for each widget -- config
+# exists before the widget's QML ever initializes, so it reads correct
+# values on its first paint. This module (like anything driven through
+# evaluateScript) can only call addWidget() -- which creates the widget
+# with defaults immediately -- and write real config afterward via
+# kwriteconfig6, once the widget already exists. That ordering, not a
+# missing API call, is why some widgets (a systemmonitor's chosen sensor,
+# a popup's remembered size) don't visually reflect this module's write
+# until something forces a full re-init (plasmashell restart). It is a
+# structural limit of the scripting API, confirmed from KDE's own source,
+# not a gap in this implementation.
+#
+# Practical takeaway: when perfect fidelity matters more than automatic
+# sync, do it by hand once via the native button (enter panel edit mode ->
+# panel settings toolbar -> 建立面板複本 -> drag the clone to the target
+# screen) -- that path alone gets the config-before-create ordering right.
+# This mirror then keeps that result in sync for whatever changes next.
 
 APPLETSRC_RELPATH = Path(".config/plasma-org.kde.plasma.desktop-appletsrc")
 DOCK_MIRROR_STATE_RELPATH = Path(".local/state/aipc/dock-mirror.json")
