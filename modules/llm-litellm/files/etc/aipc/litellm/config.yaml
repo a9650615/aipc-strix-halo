@@ -84,6 +84,14 @@ router_settings:
   # comment against the router.py source if the pinned digest is ever bumped.
 
 litellm_settings:
-  drop_params: false
+  # The model behind an alias can change backend (Ollama/vLLM/llama.cpp/
+  # cloud) without every consumer knowing -- hardware-verified 2026-07-05:
+  # Hermes sent reasoning_effort (fine for a reasoning model like ornith-35b)
+  # against coder-agentic when it was pointed at Gemma-4-26B-A4B-it-GGUF,
+  # which doesn't support that param, and got a hard 400 instead of the
+  # gateway just dropping the field. This is the single choke point for
+  # every consumer (CLAUDE.md §7); fixing it here beats teaching every
+  # client which params every possible backend model supports.
+  drop_params: true
   num_retries: 2
   request_timeout: 600
