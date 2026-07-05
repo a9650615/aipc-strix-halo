@@ -410,9 +410,22 @@ def mirror_topbar(home: Path = Path.home(), runner: RunnerT = subprocess.run) ->
 
 
 def panel_mirror_unit_files(aipc_path: str) -> dict[str, str]:
+    """Hardware-verified 2026-07-06: a real, legitimate sync cycle writes
+    the watched file several times in a row (one kwriteconfig6 call per
+    changed key across every rebuilt widget) -- each write re-triggers the
+    .path unit while the .service is still running the *previous*
+    trigger's oneshot. That's normal, correct operation, not a runaway
+    loop, but it still counts against systemd's default rate limit (5
+    starts / 10s) and disabled both units in testing even though every run
+    had actually succeeded. StartLimitBurst/IntervalSec below are generous
+    enough to absorb one real sync cycle's self-triggered re-fires while
+    still catching a genuine infinite-loop regression over a longer
+    window."""
     return {
         "aipc-panel-mirror.path": """[Unit]
 Description=Watch KDE panel config for Dock/top-bar structural changes
+StartLimitIntervalSec=10
+StartLimitBurst=30
 
 [Path]
 PathModified=%h/.config/plasma-org.kde.plasma.desktop-appletsrc
@@ -422,6 +435,8 @@ WantedBy=default.target
 """,
         "aipc-panel-mirror.service": f"""[Unit]
 Description=Mirror Dock/top-bar structure across screens
+StartLimitIntervalSec=10
+StartLimitBurst=30
 
 [Service]
 Type=oneshot
