@@ -86,6 +86,51 @@ unit file for why):
   ROCm can't load either model at all. Left on even though Vulkan is the
   active backend, in case ROCm is revisited later.
 
+## Concurrency: `-np 2 -kvu`, not `-np N` alone (2026-07-05)
+
+`llama-server` has continuous batching on by default (`-cb`), but that
+alone didn't help here: Lemonade loads models with `-np` (`--parallel`,
+server slot count) left at `auto`, which under `--ctx-size 262144`
+(these models' max) resolves to exactly **1 slot** — every request
+serializes behind whichever one got there first. Hardware-verified
+2026-07-05: a single abandoned 36.8k-token request (Claude Code's own
+system prompt, via CCS) occupied that one slot for minutes; every other
+request, including plain `/health` and `/slots` checks, queued behind it
+with no visible feedback.
+
+Fix is `lemonade load <model> --llamacpp vulkan --ctx-size 262144
+--llamacpp-args "-np 2 -kvu" --save-options` — two things together, not
+either alone:
+
+- `-np 2` gives 2 server slots instead of 1 (real concurrent requests).
+- `-kvu` (`--kv-unified`) is required alongside an explicit `-np` —
+  llama-server's help says kv-unified "default: enabled if number of
+  slots is auto", meaning setting `-np` explicitly without `-kvu` flips
+  it off and the KV buffer gets **statically divided** by slot count
+  instead (confirmed: `-np 4` alone reports `n_ctx: 65536` per slot for a
+  262144 total — a quarter each, hard-capped). That first attempt broke
+  real usage: Claude Code's system prompt (36.8k-56k tokens observed)
+  exceeded a 16k-65k per-slot cap and every `coder-agentic`/`ornith-35b`
+  request 400'd with `context_length_exceeded`. `-kvu` makes it one
+  shared pool sized to the full `--ctx-size` instead of a static split —
+  confirmed via `/slots`: both slots report `n_ctx: 262144` (the full
+  budget, not divided), and 2 concurrent requests both complete in
+  parallel (verified: two simultaneous ornith-35b requests finished in
+  6.7s total, not ~2x a single request's time).
+- Went with `-np 2` rather than `-np 4`: more slots means a smaller
+  effective *combined* budget before contention (unified KV is shared,
+  not infinite) — 2 was picked as a reasonable balance for this
+  hardware's actual concurrent-user count (one interactive person),
+  not a hard ceiling. Revisit if real multi-session contention shows up.
+- `--save-options` persists this into `recipe_options.json` under
+  `/root/.cache/lemonade` (the mounted `cache` volume, so it survives
+  container restarts on an already-provisioned machine) — but this is a
+  runtime action requiring the container to already be running, so like
+  the model pulls above it's **not** automated in `post-install.sh`; it's
+  a one-time manual/CLI step, same category as `aipc models sync`.
+  Re-run it (per model) if `recipe_options.json` is ever wiped or on a
+  fresh machine before relying on this.
+
 ## Corrected assumptions (2026-07-04)
 
 Earlier scaffolding of this module (pre-hardware-verification) guessed at
