@@ -5,7 +5,8 @@ Requires=rag-embedder.service postgres.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/aipc-rag-screen-audio
+Environment=PYTHONPATH=/usr/lib/aipc-rag
+ExecStart=/usr/lib/aipc-rag/venv/bin/python3 -m aipc_rag.screen_audio
 Restart=on-failure
 
 [Install]

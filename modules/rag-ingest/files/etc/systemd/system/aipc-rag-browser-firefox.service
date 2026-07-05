@@ -5,7 +5,8 @@ Requires=rag-embedder.service postgres.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/aipc-rag-browser --browser firefox
+Environment=PYTHONPATH=/usr/lib/aipc-rag
+ExecStart=/usr/lib/aipc-rag/venv/bin/python3 -m aipc_rag.browser --browser firefox
 Restart=on-failure
 
 [Install]

@@ -1,9 +1,13 @@
 #!/bin/sh
+# post-install.sh — rag-ingest
+# BUILD-TIME ONLY. No running services during image build.
 set -eu
 
-if command -v pip >/dev/null 2>&1; then
-  pip install --quiet aipc-rag-ingest || true
-fi
+python3 -m venv /usr/lib/aipc-rag/venv
+/usr/lib/aipc-rag/venv/bin/pip install --no-cache-dir -r /usr/lib/aipc-rag/requirements.txt
 
-systemctl enable --now aipc-rag-desktop.service || true
-systemctl enable --now aipc-rag-code.service || true
+mkdir -p /var/lib/aipc-rag/state
+
+systemctl enable aipc-rag-desktop.service
+systemctl enable aipc-rag-code.service
+# browser + screen-audio stay disabled until consent is recorded (D6/D7)
