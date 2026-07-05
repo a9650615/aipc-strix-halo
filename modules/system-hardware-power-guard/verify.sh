@@ -1,31 +1,39 @@
 #!/bin/bash
 # verify.sh for system-hardware-power-guard
+# Static + live-read checks (CLAUDE.md §9). Render-verified, NOT
+# hardware-verified until a real back-feed event is observed on the AI PC.
+# Exit 0 = pass, 2 = intentionally disabled/optional, other non-zero = fail.
+set -euo pipefail
 
-set -e
+MOD="modules/system-hardware-power-guard"
+PY="$MOD/files/usr/lib/aipc-power-guard/power_guard.py"
 
-echo "Starting Power Guard verification test..."
+fail() { echo "power-guard verify FAIL: $*" >&2; exit 1; }
 
-# 1. Setup Mock sysfs environment (using a temporary directory)
-MOCK_DIR=$(mktemp -d)
-BAT_DIR="$MOCK_DIR/BAT0"
-mkdir -p "$BAT_DIR"
-touch "$BAT_DIR/status"
-touch "$BAT_DIR/current_now"
+# 1. Syntax + self-test (reads live sysfs; safe, no writes).
+python3 -c "import ast; ast.parse(open('$PY').read())" || fail "python syntax"
+python3 "$PY" --self-test || fail "self-test (live sysfs read)"
 
-# 2. Set initial state: Charging, No drain (positive current)
-echo "Charging" > "$BAT_DIR/status"
-echo "500000" > "$BAT_DIR/current_now"
+# 2. Config parses.
+python3 -c "import yaml,sys; yaml.safe_load(open('$MOD/files/etc/aipc/power-guard/config.yaml'))" \
+  || fail "config.yaml parse"
 
-echo "Initial State: Status=$(cat $BAT_DIR/status), Current=$(cat $BAT_DIR/current_now)"
+# 3. Service unit has the kill switch + runs on host (not a container).
+grep -q 'ConditionPathExists=!/etc/aipc/power-guard.disabled' \
+  "$MOD/files/etc/systemd/system/power-guard.service" \
+  || fail "missing ConditionPathExists kill switch"
+grep -q 'ExecStart=/usr/bin/python3' \
+  "$MOD/files/etc/systemd/system/power-guard.service" \
+  || fail "must run as host python, not a container"
 
-# 3. Trigger 'Drain' state (negative current)
-echo "-1000000" > "$BAT_DIR/current_now"
-echo "Triggered Drain State: Status=Charging, Current=$(cat $BAT_DIR/current_now)"
+# 4. No leftover quadlet container (host service is the correct shape).
+[ ! -f "$MOD/files/quadlet/power-guard.container" ] \
+  || fail "quadlet container removed — daemon must run on host for sysfs writes"
 
-# Note: Since we can't easily run the actual Python daemon and override
-# global sysfs in this environment without root/sandbox issues,
-# a real verification would use 'unshare' or a container.
-# Here, we just verify the logic components of our Python script can read these files.
+# .disabled marker present → module is render-verified but not yet enabled.
+if [ -f "$MOD/.disabled" ]; then
+  echo "power-guard verify OK (render-verified; module .disabled until hardware-verified)"
+  exit 2
+fi
 
-echo "Verification complete: Mocking successful."
-rm -rf "$MOCK_DIR"
+echo "power-guard verify OK (render-verified + enabled)"

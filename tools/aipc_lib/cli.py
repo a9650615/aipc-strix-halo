@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -33,6 +35,82 @@ _DEFAULT_BASE = "ghcr.io/ublue-os/bazzite-dx:stable"
 @click.group()
 def main() -> None:
     """aipc — render, doctor, and secrets for the AI PC image."""
+
+
+# ponytail: power-guard enable/disable/status — 3 short systemctl/sentinel ops,
+# not worth a sibling module. sudo-prefixed when run as a normal user.
+POWER_GUARD_UNIT = "power-guard.service"
+POWER_GUARD_SENTINEL = "/etc/aipc/power-guard.disabled"
+POWER_GUARD_STATE = "/var/lib/aipc-power-guard/state.json"
+
+
+def _sudo(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    cmd = ["sudo", *args] if os.geteuid() != 0 else list(args)
+    return subprocess.run(cmd, check=check)
+
+
+@main.group("power-guard")
+def power_guard_cmd() -> None:
+    """Battery back-feed guard: clamp CPU on weak AC + persist charge cap."""
+
+
+@power_guard_cmd.command("enable")
+def power_guard_enable() -> None:
+    """Start the guard now and at boot (clears the kill-switch sentinel)."""
+    _sudo(["rm", "-f", POWER_GUARD_SENTINEL], check=False)
+    _sudo(["systemctl", "daemon-reload"], check=False)
+    _sudo(["systemctl", "enable", "--now", POWER_GUARD_UNIT])
+    click.echo("power-guard enabled — active now, autostarts at boot.")
+
+
+@power_guard_cmd.command("disable")
+def power_guard_disable() -> None:
+    """Stop the guard and prevent autostart (sets the kill-switch sentinel)."""
+    # --now sends SIGTERM → daemon's signal handler releases any clamp first.
+    _sudo(["systemctl", "disable", "--now", POWER_GUARD_UNIT], check=False)
+    _sudo(["touch", POWER_GUARD_SENTINEL], check=False)
+    click.echo("power-guard disabled — kill switch set; any clamp released on stop.")
+
+
+@power_guard_cmd.command("status")
+def power_guard_status() -> None:
+    """Show guard state, kill switch, and live sysfs values."""
+    def _read(p: str) -> str:
+        try:
+            return Path(p).read_text().strip()
+        except OSError:
+            return "?"
+
+    svc = subprocess.run(
+        ["systemctl", "is-active", POWER_GUARD_UNIT],
+        capture_output=True, text=True,
+    ).stdout.strip() or "unknown"
+    enabled = subprocess.run(
+        ["systemctl", "is-enabled", POWER_GUARD_UNIT],
+        capture_output=True, text=True,
+    ).stdout.strip() or "unknown"
+    sentinel = os.path.exists(POWER_GUARD_SENTINEL)
+    state: dict = {}
+    try:
+        import json
+        state = json.loads(Path(POWER_GUARD_STATE).read_text())
+    except (OSError, ValueError):
+        pass
+
+    table = Table(title="aipc power-guard")
+    table.add_column("key")
+    table.add_column("value")
+    table.add_row("service active", svc)
+    table.add_row("autostart", enabled)
+    table.add_row("kill switch", "SET (disabled)" if sentinel else "clear")
+    table.add_row("daemon state", str(state.get("state", "?")))
+    table.add_row("dry_run", str(state.get("dry_run", "?")))
+    table.add_row("ac online", str(state.get("ac_online", _read("/sys/class/power_supply/AC0/online"))))
+    table.add_row("bat status", str(state.get("bat_status", _read("/sys/class/power_supply/BAT0/status"))))
+    table.add_row("power_now uW", str(state.get("power_now_uw", _read("/sys/class/power_supply/BAT0/power_now"))))
+    table.add_row("cur freq factor", str(state.get("cur_factor", "?")))
+    table.add_row("charge cap", _read("/sys/class/power_supply/BAT0/charge_control_end_threshold") + "%")
+    Console().print(table)
 
 
 @main.group()
