@@ -22,6 +22,23 @@ from aipc_lib.desktop_presets import RunnerT, _kwriteconfig, connected_screen_co
 # already-matching widget list; this mirrors the whole panel, widget
 # additions/removals included, which is what "本來就應該通用...跟 Mac 一樣的
 # 體驗" turned out to actually require).
+#
+# Known gap, confirmed 2026-07-06, not fixable from this module: KDE's own
+# panel-editor toolbar has a native "建立面板複本" (Duplicate Panel) button
+# that clones a panel's *live* in-memory widget state -- popup dialog sizes,
+# a systemmonitor widget's selected sensor, anything this module can't see
+# because it only round-trips whatever got persisted to the ini file.
+# Confirmed dead end: Panel scripting objects expose no `.duplicate()` /
+# `.clone()` / `.copy()` (all `typeof` undefined) -- that native action is
+# UI-only internal shell logic, not reachable from evaluateScript, so this
+# background service cannot invoke it. When perfect fidelity matters more
+# than automatic sync (a specific widget's popup size, a sensor pick),
+# recommend the user do it by hand once: enter panel edit mode -> panel
+# settings toolbar -> 建立面板複本 -> drag the clone to the target screen.
+# This mirror will then keep that result in sync for whatever changes next,
+# same residual-staleness caveat as ever (see reconcile note deleted from
+# desktop_presets.py: a freshly-written config value doesn't always
+# live-refresh the widget that owns it until a plasmashell restart).
 
 APPLETSRC_RELPATH = Path(".config/plasma-org.kde.plasma.desktop-appletsrc")
 DOCK_MIRROR_STATE_RELPATH = Path(".local/state/aipc/dock-mirror.json")
