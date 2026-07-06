@@ -13,6 +13,7 @@ direct backend URL (Ollama, Lemonade, vLLM, or any cloud provider).
 
 from typing import TypedDict
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_litellm import ChatLiteLLM
 from langgraph.graph import END, StateGraph
 
@@ -24,6 +25,20 @@ LITELLM_BASE_URL = "http://127.0.0.1:4000"
 # 2026-07-04 in a manifest trim — ornith-35b (35B MoE reasoning + agentic
 # coding) is the closest remaining fit for a supervisor role.
 SUPERVISOR_MODEL = "ornith-35b"
+
+# Without a system prompt the model has no idea it's "the aipc assistant"
+# and answers like a disconnected generic chatbot (e.g. "I'm an AI, I can't
+# open apps for you" instead of something aware of its own actual, still-
+# growing toolset) — a real user complaint, not hypothetical. Keep this in
+# sync with daily_assistant.SYSTEM_PROMPT's capability list as tools land.
+SUPERVISOR_SYSTEM_PROMPT = (
+    "You are the aipc assistant, a conversational AI running entirely "
+    "locally on this user's own AMD Strix Halo AI PC (no cloud calls, no "
+    "internet dependency for inference). Answer directly and concisely. "
+    "You currently cannot control the screen, launch applications, or "
+    "browse the web — say so plainly if asked, don't apologize like a "
+    "generic assistant with no context about this machine."
+)
 
 # ponytail: keyword match, not intent classification — good enough to reach
 # the Daily Assistant sub-graph today; replace with real routing once a
@@ -52,7 +67,9 @@ def _chat_model(model: str) -> ChatLiteLLM:
 
 
 def _respond(state: SupervisorState) -> SupervisorState:
-    reply = _chat_model(SUPERVISOR_MODEL).invoke(state["text"])
+    reply = _chat_model(SUPERVISOR_MODEL).invoke(
+        [SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT), HumanMessage(content=state["text"])]
+    )
     return {"text": text_of(reply.content), "session_id": state["session_id"]}
 
 

@@ -39,7 +39,7 @@ None of the three tool backends exist yet:
 
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_litellm import ChatLiteLLM
 from langgraph.graph import END, StateGraph
@@ -50,6 +50,19 @@ from aipc_agent._util import text_of
 
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
 DAILY_ASSISTANT_MODEL = "ornith-35b"
+
+# Keep this list in sync with TOOLS above and graphs.SUPERVISOR_SYSTEM_PROMPT
+# as real backends land — a user hit this directly: without a system prompt
+# the model apologized like a disconnected generic chatbot instead of using
+# its own tools and reporting their real (not_configured) status.
+SYSTEM_PROMPT = (
+    "You are the aipc assistant's Daily Assistant persona, running locally "
+    "on the user's own AI PC. You have tools for calendar, email, and file "
+    "access, but none of their backends are configured yet — when a tool "
+    "returns a not_configured status, tell the user plainly that this "
+    "specific feature isn't set up yet, don't apologize generically. You "
+    "cannot control the screen or launch applications."
+)
 
 
 @tool
@@ -114,7 +127,7 @@ def _chat_model() -> ChatLiteLLM:
 
 
 def _seed(state: DailyAssistantState) -> dict:
-    return {"messages": [HumanMessage(content=state["text"])]}
+    return {"messages": [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=state["text"])]}
 
 
 def _agent(state: DailyAssistantState) -> dict:
