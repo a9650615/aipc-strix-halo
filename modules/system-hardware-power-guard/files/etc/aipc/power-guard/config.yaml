@@ -23,7 +23,7 @@ drain_threshold_uw: -1000000
 # Charge cap persistence. ASUS EC resets charge_control_end_threshold to 100 at
 # boot; KDE only re-applies it after login. Set this so the guard re-applies it
 # on boot, closing the reboot gap. Comment out / set null to skip.
-charge_threshold_percent: 90
+charge_threshold_percent: 85
 
 # Clamp targets — fractions of cpuinfo_max_freq per state.
 emergency_freq_factor: 0.45    # definite back-feed: hard ceiling ~45%
