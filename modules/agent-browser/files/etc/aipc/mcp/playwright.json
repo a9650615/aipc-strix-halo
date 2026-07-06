@@ -1,7 +1,9 @@
 {
-  "name": "playwright",
-  "command": "npx",
-  "args": ["-y", "@playwright/mcp"],
-  "env": {},
-  "consumers": ["agent", "dev"]
+  "name": "playwright-agent",
+  "command": "playwright-mcp",
+  "args": ["--user-data-dir", "/var/lib/aipc-agent/browser-profile"],
+  "transport": "stdio",
+  "enabled": false,
+  "consumers": ["agent"],
+  "profile_path": "/var/lib/aipc-agent/browser-profile"
 }
