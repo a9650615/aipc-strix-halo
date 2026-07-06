@@ -31,7 +31,7 @@ def fake_categories() -> dict[str, list[Tool]]:
 async def test_app_renders_one_row_per_tool(fake_categories: dict) -> None:
     with patch("aipc_lib.tools_tui.CATEGORIES", fake_categories):
         app = ToolsApp()
-        async with app.run_test() as pilot:
+        async with app.run_test():
             rows = app.query(ToolRow)
             assert len(rows) == 2
 
@@ -40,7 +40,7 @@ async def test_app_renders_one_row_per_tool(fake_categories: dict) -> None:
 async def test_already_installed_tool_shows_enabled_remove_button(fake_categories: dict) -> None:
     with patch("aipc_lib.tools_tui.CATEGORIES", fake_categories):
         app = ToolsApp()
-        async with app.run_test() as pilot:
+        async with app.run_test():
             row = next(r for r in app.query(ToolRow) if r.tool.name == "already-there")
             button = row.query_one("Button")
             assert button.disabled is False
@@ -51,7 +51,7 @@ async def test_already_installed_tool_shows_enabled_remove_button(fake_categorie
 async def test_not_installed_tool_has_enabled_install_button(fake_categories: dict) -> None:
     with patch("aipc_lib.tools_tui.CATEGORIES", fake_categories):
         app = ToolsApp()
-        async with app.run_test() as pilot:
+        async with app.run_test():
             row = next(r for r in app.query(ToolRow) if r.tool.name == "not-yet")
             button = row.query_one("Button")
             assert button.disabled is False
