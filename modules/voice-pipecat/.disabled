@@ -1,6 +1,0 @@
-Render-verified + partial hardware-verified only (v0 scope, see README):
-recording (arecord) and the agent-orchestrator /chat leg were exercised for
-real on 2026-07-06. The STT leg (127.0.0.1:9001) has no real service behind
-it yet (voice-stt-sensevoice is still scaffold-only), so the full round trip
-has never run end-to-end. Enable only after voice-stt-sensevoice lands and a
-real recording round-trips through transcribe -> chat -> notify-send.

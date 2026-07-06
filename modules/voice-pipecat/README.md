@@ -1,6 +1,6 @@
 # voice-pipecat
 
-## Current status: v0 push-to-talk, text-out — disabled pending STT hardware verification
+## Current status: v0 push-to-talk, text-out — enabled, full round trip hardware-verified
 
 This is a deliberately reduced scope, not the full Phase 3 design: **no
 TTS, no wake word, no hotkey**. The user's explicit direction was "text
@@ -43,11 +43,11 @@ repo's own ethos. Revisit `pipecat-ai` once the streaming pieces (wake
 word, TTS, barge-in) are actually being built; the pip package stays a
 reasonable choice for that later work.
 
-### Assumed STT interface contract (for reconciliation)
+### STT interface contract
 
-`voice-stt-sensevoice` (port 9001) is being built separately and, as of
-this writing, has no `server.py` yet — only a scaffold. This module
-assumes:
+`voice-stt-sensevoice` (port 9001) landed in parallel and its real
+`POST /transcribe` matches what this module assumed, confirmed by a real
+round trip (see Verification below):
 
 ```
 POST http://127.0.0.1:9001/transcribe
@@ -55,12 +55,6 @@ Request:  raw WAV bytes as the request body, Content-Type: audio/wav
           (16 kHz mono S16_LE — what arecord above produces)
 Response: 200 {"text": "..."}
 ```
-
-Chosen over a `multipart/form-data` file upload for simplicity on both
-ends (no boundary parsing). If the real `voice-stt-sensevoice` server
-ships a different shape (e.g. multipart `UploadFile`, a different sample
-rate, a JSON-wrapped base64 body), reconcile by updating `transcribe()`
-in `aipc-voice-once` — it's the only place that assumption lives.
 
 ### Deferred (not this dispatch)
 
@@ -91,33 +85,34 @@ in `aipc-voice-once` — it's the only place that assumption lives.
   `aipc-voice-once --self-test` (offline: URL defaults, JSON response
   parsing, arg parsing).
 - **Render-verified**: `tools/aipc render bootc` / `render ansible` both
-  succeed; the module is `.disabled`, so it's correctly excluded from
-  both renders (same as before this change) — this only confirms the
-  render pipeline itself doesn't choke on the module's other files.
-- **Partial hardware-verified (2026-07-06)**, on the real AI PC:
-  - `arecord -f S16_LE -r 16000 -c 1 -d 2 ...` recorded real audio from
-    the machine's `HD-Audio Generic ALC294` capture device.
-  - Running `aipc-voice-once --seconds 2` end-to-end: recording
-    succeeded, then failed cleanly at the STT step with
-    `STT service unreachable at http://127.0.0.1:9001/transcribe:
-    Connection refused` (expected — no real STT service exists yet) and
-    a non-zero exit, not a crash.
-  - `chat()` and `show()` were exercised directly (loaded as a module,
-    bypassing the STT step) against the live
-    `aipc-agent-orchestrator.service`: `POST /chat {"text": "reply with
-    exactly: pong"}` returned `{"text": "pong", ...}`; `show("pong")`
-    called `notify-send` (`which notify-send` confirms present; the
-    call exited 0 with a live DBus session/`DISPLAY` on this machine).
-  - **Not** verified: the full round trip through a real STT response,
-    since no real STT service exists yet. Module stays `.disabled` until
-    that's true and a real end-to-end recording is confirmed.
+  succeed and include the module now that `.disabled` is gone.
+- **Hardware-verified 2026-07-06, full round trip, real content — not
+  mocked at any layer**: once `voice-stt-sensevoice` landed with a real
+  server (see that module), stood it up in a container for verification
+  (this dev host doesn't have `python3-devel`/ROCm torch installed
+  directly; see that module's README) and ran the actual
+  `aipc-voice-once` CLI, unmodified, twice:
+  1. `aipc-voice-once --seconds 3` recording real ambient room audio
+     (silence) — the STT service transcribed it to a short garbage
+     string, which still round-tripped correctly through `/chat` and
+     got a coherent reply, proving the plumbing is correct even on
+     nonsense input.
+  2. `espeak-ng` synthesized "what time is it" to a WAV, played it
+     through the real speaker with `paplay` while `aipc-voice-once
+     --seconds 3` recorded from the real mic at the same time (real
+     acoustic loopback, not a file-level shortcut) — SenseVoice
+     transcribed it as `"What time in it."` (correctly close given
+     real speaker->mic acoustic loss), which `/chat` answered
+     correctly and on-topic. `notify-send` fired for both runs.
+  - This is the full v0 scope working end to end: real mic input, real
+    STT, real LLM reply, real text-out. `.disabled` removed.
 
 ## Dependencies
 
 - `llm-litellm` / agent-orchestrator's `/chat` — reused as-is, not
   touched by this change.
-- `voice-stt-sensevoice` — assumed contract above; being built in
-  parallel, not touched by this change.
+- `voice-stt-sensevoice` — real contract confirmed above, not touched by
+  this change (that module runs as its own native systemd service).
 - `alsa-utils` (provides `arecord`), `libnotify` (provides `notify-send`)
   — declared in `packages.txt`, both already present on this dev/build
   machine, verified installed via the image's package set for the target
