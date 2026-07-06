@@ -1,1 +1,8 @@
-# STT runs in container via Lemonade
+# Native systemd + venv (see post-install.sh), not a container.
+# python3-devel: build-time only. funasr's transitive deps (editdistance,
+# crcmod, aliyun-python-sdk-core) ship no cp314 wheel yet (Python 3.14 is too
+# new for several ML-adjacent packages) and compile from source during pip
+# install; that needs Python.h, which the base image doesn't carry by
+# default. gcc/g++ are already present on the bazzite-dx base (confirmed on
+# this host) so only the headers package is added here.
+python3-devel

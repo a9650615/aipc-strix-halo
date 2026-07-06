@@ -1,0 +1,9 @@
+# ROCm build of torch (gfx1151) — not on default PyPI, hence the extra
+# index. funasr itself declares no torch dependency (BYO-torch is upstream's
+# own convention, so the CUDA default on PyPI never fights this pin).
+--extra-index-url https://download.pytorch.org/whl/rocm6.4
+torch==2.9.1+rocm6.4
+torchaudio==2.9.1+rocm6.4
+funasr==1.3.14
+fastapi==0.139.0
+uvicorn==0.50.0
