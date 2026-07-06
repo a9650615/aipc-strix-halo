@@ -4,7 +4,8 @@ LangGraph supervisor (D1). Full design dispatches 4 sub-agents (D2):
 - Researcher (default: `coder-fast`)
 - Coder (default: `coder-strong`)
 - Browser (default: `vlm-qwen2vl`)
-- Daily Assistant (default: `intent-3b`)
+- Daily Assistant (default: `intent-3b` per spec; `ornith-35b` in
+  practice, see below)
 
 ## Current status: basic skeleton + Daily Assistant sub-agent, enabled
 
@@ -20,7 +21,16 @@ Implemented (tasks 1.1, 2.1, 2.2, 2.6, 7.1–7.3):
   Researcher/Coder/Browser (2.3–2.5) exist too and a real decomposition
   step is worth the complexity.
 - `files/usr/lib/aipc-agent/aipc_agent/daily_assistant.py` (task 2.6): the
-  Daily Assistant sub-agent graph, model alias `intent-3b`, three tools
+  Daily Assistant sub-agent graph, model alias `ornith-35b`. Spec default
+  `intent-3b` doesn't exist post-trim; the next candidate, `resident-small`
+  (Lemonade's FastFlowLM NPU backend), was hardware-verified 2026-07-06 to
+  reject any request carrying a `tools` list outright (`[json.exception
+  .type_error.302] type must be string, but is object` from `llama-server`
+  — an NPU-backend limitation, not a request bug: the identical payload
+  against `ornith-35b` returns a proper `tool_calls` response). Since
+  Daily Assistant needs tool calling to do anything, it reuses the
+  supervisor's own `ornith-35b` until a small tool-calling-capable NPU
+  model exists. Three tools
   bound via `ChatLiteLLM.bind_tools()` and dispatched through
   `langgraph.prebuilt.ToolNode`/`tools_condition` (both already ship
   inside the pinned `langgraph==1.2.7` — no new dependency):
@@ -29,23 +39,16 @@ Implemented (tasks 1.1, 2.1, 2.2, 2.6, 7.1–7.3):
     both always return
     `{"status": "not_configured", "tool": "...", "detail": "..."}`
     until one of those backends lands.
-  - `files_read` — **stub with an assumed interface contract**. Task 4.1
-    (`agent-tools-files`) is being built in parallel in a sibling module
-    not present in this working tree. `files_read` tries:
-    ```python
-    from aipc_agent_tools_files import read_file
-    read_file(path: str) -> str   # raises PermissionError if `path` is
-                                   # outside the allowlist at
-                                   # /etc/aipc/agent-tools/files-allowlist.conf
-    ```
-    If the import fails (module not installed) it returns the same
-    `not_configured` shape as calendar/email. If `read_file` raises
-    `PermissionError`, it returns `{"status": "denied", "tool":
-    "files.read", "detail": "..."}`. **Whoever implements
-    `agent-tools-files` (task 4.1) should either match this signature or
-    tell this module's owner so `daily_assistant.py`'s import/call site
-    gets updated to match** — this contract was chosen unilaterally to
-    unblock 2.6, not negotiated with the 4.1 implementer.
+  - `files_read` — **stub**. `agent-tools-files` (task 4.1) landed as a
+    sibling module (`modules/agent-tools-files/`) with a real
+    `read_file(path: str) -> str` (raises `AllowlistViolation`, a
+    `PermissionError` subclass, outside the allowlist) — matches the
+    interface `daily_assistant.py` assumed almost exactly. It isn't wired
+    into agent-orchestrator's venv yet (not in `requirements.txt`/
+    `post-install.sh`), so the `ImportError` fallback still fires and
+    returns the same `not_configured` shape as calendar/email. Wiring the
+    two together (add the dependency, drop the `ImportError` branch) is
+    follow-up work, not done here.
 - `files/usr/lib/aipc-agent/aipc_agent/server.py`: FastAPI `POST /chat`
   accepting `{text, session_id?}`, returning `{text, task_id}` on success
   or `{error: {code, message}}` with a non-200 status on failure.
@@ -66,31 +69,54 @@ Researcher/Coder/Browser sub-agents, permission gate, `agent-runtime`
 sandbox distrobox, MCP registry, LangGraph sqlite checkpointer/resume,
 real calendar/email/files backends.
 
-**Hardware-verified 2026-07-06** (supervisor-only, pre-2.6): with Ollama
-idle, `POST /chat {"text": "say OK"}` against the live service returned
-`HTTP 200 {"text":"OK","task_id":"..."}` — the full `/chat` → supervisor
-→ LiteLLM → Ollama (`ornith-35b`) round trip works end to end on real
-hardware. `.disabled` removed per CLAUDE.md §9.
+**Hardware-verified 2026-07-06** (full round trip, supervisor + Daily
+Assistant): live-hotfixed onto the running service
+(`/var/lib/aipc-agent`, see `docs/live-hotfix-workflow.md`) and iterated
+until real bugs stopped surfacing:
 
-**Daily Assistant (task 2.6) is static/mocked-verified only, no
-hardware access in this session** (CLAUDE.md §9): graph construction,
-keyword routing, tool-stub fail-closed shape, and the `intent-3b` model
-alias reaching `ChatLiteLLM` are all checked with the LLM call mocked
-(`aipc_agent/graphs.py`'s `self_test()`, `python3 -m aipc_agent.graphs
---self-test`). The live `/chat` → supervisor → daily_assistant →
-LiteLLM → `intent-3b` round trip has NOT been exercised against real
-hardware — do that before treating 2.6 as more than render/mock-verified,
-and confirm `intent-3b` is actually registered in
-`modules/llm-litellm`'s current model manifest (the same 2026-07-04 trim
-that cut `main-70b` may have touched this alias too).
+1. `POST /chat {"text": "say OK"}` (plain, supervisor path) → `HTTP 200
+   {"text":"OK",...}` — confirmed `.disabled` could come off per CLAUDE.md
+   §9.
+2. First `/chat` call with a calendar keyword hit `Invalid model name ...
+   intent-3b` — `GET /v1/models` confirmed it's gone (qwen2.5 family cut
+   in the 2026-07-04 trim, same as `main-70b`). Tried `resident-small`
+   next; it 500'd on any request carrying `tools` (NPU/FastFlowLM backend
+   can't do function calling — see above). Settled on `ornith-35b`.
+3. With `ornith-35b`, the tool-call turn still failed:
+   `litellm.BadRequestError: ... unsupported content[].type`. Root cause
+   (confirmed via a standalone `ChatLiteLLM.bind_tools()` repro against
+   the live venv): `ornith-35b` returns `content` as
+   `[{"type": "thinking", ...}]`, not a string; LangGraph keeps that raw
+   `AIMessage` in `messages` state, and resending it verbatim on the next
+   tool-loop turn is what `llama-server` rejects. The existing `_text_of`
+   helper in `graphs.py` only normalized the supervisor's *final* answer,
+   not messages flowing through a tool loop. Fix: extracted the helper to
+   `aipc_agent/_util.py` (`text_of`), and now `daily_assistant.py` applies
+   it to every `AIMessage` before it re-enters state (`_agent`) and to the
+   final answer (`_finish`).
+4. Also recovered two real fixes (`max_tokens=2048` cap on the
+   supervisor's `ChatLiteLLM` call, plus what's now `text_of`'s original
+   form) that existed live on this machine (hardware-verified
+   2026-07-04/05) but were never committed — a prior session's
+   live-hotfix-workflow.md step 5 ("commit the repo file") was skipped;
+   folded back in here so they survive the next `bootc switch`.
+
+Final verification, all green: `python3 -m aipc_agent.graphs --self-test`
+passes against the real venv; `POST /chat {"text": "what is on my
+calendar today"}` → routes to `daily_assistant` → `ornith-35b` calls
+`calendar_lookup` → coherent natural-language reply, `HTTP 200`; same for
+an email-keyword query; plain-text regression (`"reply with exactly:
+pong"` → `{"text": "pong", ...}`) confirms the supervisor path is
+unaffected.
 
 ## Dependencies
 - llm-litellm (all LLM calls route through the gateway)
 - agent-tools-search, agent-browser, agent-code-shell (sub-agent tools —
   not yet wired up)
-- agent-tools-files (task 4.1, in progress in parallel): `daily_assistant.py`
-  assumes `from aipc_agent_tools_files import read_file` — see the
-  `files_read` contract above; reconcile signatures when that module lands.
+- agent-tools-files (task 4.1, landed as `modules/agent-tools-files/` but
+  not yet in this module's `requirements.txt`/`post-install.sh`):
+  `daily_assistant.py`'s `files_read` imports `aipc_agent_tools_files`;
+  wiring it in is follow-up work.
 - agent-tools-calendar (tasks 4.2–4.4, not started): `calendar_lookup`/
   `email_lookup` are stubs until one of its backends exists.
 

@@ -16,6 +16,7 @@ from typing import TypedDict
 from langchain_litellm import ChatLiteLLM
 from langgraph.graph import END, StateGraph
 
+from aipc_agent._util import text_of
 from aipc_agent.daily_assistant import daily_assistant
 
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
@@ -41,12 +42,18 @@ def _chat_model(model: str) -> ChatLiteLLM:
         api_base=LITELLM_BASE_URL,
         custom_llm_provider="openai",
         api_key="aipc-local",
+        # ornith-35b is a reasoning model with no natural stop point for
+        # hidden thinking tokens — hardware-verified 2026-07-05: an
+        # unbounded call took minutes past a plain "reply with exactly:
+        # pong" before this cap was added. 2048 covers reasoning + a real
+        # answer without letting one request run indefinitely.
+        max_tokens=2048,
     )
 
 
 def _respond(state: SupervisorState) -> SupervisorState:
     reply = _chat_model(SUPERVISOR_MODEL).invoke(state["text"])
-    return {"text": reply.content, "session_id": state["session_id"]}
+    return {"text": text_of(reply.content), "session_id": state["session_id"]}
 
 
 _daily_assistant_graph = daily_assistant()
@@ -106,7 +113,7 @@ def self_test() -> None:
 
     with patch.object(ChatLiteLLM, "__init__", fake_init):
         da._chat_model()
-    assert captured["model"] == da.DAILY_ASSISTANT_MODEL == "intent-3b"
+    assert captured["model"] == da.DAILY_ASSISTANT_MODEL == "ornith-35b"
 
     with patch.object(ChatLiteLLM, "invoke", return_value=AIMessage(content="mocked reply")):
         assert graph.invoke({"text": "hello", "session_id": "s1"})["text"] == "mocked reply"
