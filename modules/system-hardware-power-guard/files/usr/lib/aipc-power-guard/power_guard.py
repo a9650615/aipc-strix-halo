@@ -13,9 +13,14 @@ Controls (AMD Ryzen AI MAX+ 395, amd-pstate-epp):
   - scaling_max_freq      : hard ceiling on core frequency (kHz)
   - energy_performance_preference : amd-pstate EPP hint (power .. performance)
 
-Detection (two signals, both read from /sys/class/power_supply):
-  - status == Discharging AND AC0 online == 1   -> definite back-feed
+Detection (read from /sys/class/power_supply):
+  - status in (Discharging, Not charging) AND AC0 online == 1 -> definite back-feed
+    ("Not charging" happens at the charge-cap boundary — EC pauses the
+    charge circuit there, and the gap is fed straight from the battery;
+    a plain Discharging check misses this)
   - power_now < drain_threshold_uw              -> early numeric back-feed
+  - energy_now falling for 2 consecutive polls while AC online -> back-feed
+    catch-all for any future status string this daemon doesn't know about
   - power_now trending down toward 0 while charging -> caution (approaching limit)
 
 KILL SWITCH: touch /etc/aipc/power-guard.disabled to freeze (monitor-only).
@@ -100,6 +105,8 @@ class PowerGuard:
         self.orig_max_freq: dict[str, int] = {}
         self.orig_epp: str | None = None
         self.last_power: int | None = None
+        self.last_energy: int | None = None
+        self.energy_drop_streak = 0
 
     # ---------- sysfs helpers ----------
     def _epp_choices(self) -> list[str]:
@@ -114,6 +121,7 @@ class PowerGuard:
             "status": _read(f"{self.bat_path}/status") or "Unknown",
             "power_now": _read_int(f"{self.bat_path}/power_now"),
             "capacity": _read_int(f"{self.bat_path}/capacity"),
+            "energy_now": _read_int(f"{self.bat_path}/energy_now"),
         }
 
     def _capture_originals(self) -> None:
@@ -215,8 +223,20 @@ class PowerGuard:
         ac = self._ac_online()
         bat = self._bat()
         pnow = bat["power_now"]
-        draining = (bat["status"] == "Discharging" and ac) or \
-                   (pnow is not None and pnow < self.drain_threshold_uw)
+        enow = bat["energy_now"]
+
+        # energy_now trend catch-all: 2 consecutive falls while AC is online
+        # catches any battery-draining status string this daemon doesn't
+        # special-case (e.g. "Not charging" at the charge-cap boundary).
+        if enow is not None and self.last_energy is not None and ac:
+            self.energy_drop_streak = self.energy_drop_streak + 1 if enow < self.last_energy else 0
+        else:
+            self.energy_drop_streak = 0
+        self.last_energy = enow
+
+        draining = (bat["status"] in ("Discharging", "Not charging") and ac) or \
+                   (pnow is not None and pnow < self.drain_threshold_uw) or \
+                   self.energy_drop_streak >= 2
         delta = (pnow - self.last_power) if (pnow is not None and self.last_power is not None) else 0
         self.last_power = pnow
 

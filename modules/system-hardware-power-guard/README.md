@@ -42,10 +42,17 @@ the battery.
 - `energy_performance_preference` — EPP hint (`power … performance`)
 - `charge_control_end_threshold` — charge cap (%)
 
-## Detection (both read from `/sys/class/power_supply`)
+## Detection (read from `/sys/class/power_supply`)
 
-- `status == Discharging` AND `AC0 online == 1` → definite back-feed
+- `status in (Discharging, Not charging)` AND `AC0 online == 1` → definite
+  back-feed. `Not charging` matters: the EC pauses the charge circuit right
+  at the `charge_threshold_percent` boundary, and the gap there is fed
+  straight from the battery — a plain `Discharging` check misses it (this
+  slipped past a full clamp/release cycle live on this AI PC before the
+  check was widened).
 - `power_now < drain_threshold_uw` → early numeric back-feed
+- `energy_now` falling for 2 consecutive polls while AC is online → back-feed
+  catch-all, independent of whatever `status` string the EC reports
 - `power_now` trending down → caution (approaching the limit)
 
 ## Configuration
@@ -67,9 +74,13 @@ correct reactions, then it actually clamps.
 
 ## Verification tier
 
-Render-verified + live-sysfs self-test. **Not hardware-verified** until a real
-back-feed event is observed on the AI PC and the guard reacts correctly — see
-the `.disabled` marker and CLAUDE.md §9.
+**Hardware-verified** (CLAUDE.md §9). A real back-feed event occurred on this
+AI PC on 2026-07-06 (CPU-stress + 36B LLM inference load on a smaller/weaker
+charger): the guard entered EMERGENCY, clamped to `emergency_freq_factor`
+(0.45), held the clamp across repeated EMERGENCY↔RECONNECTING cycles while
+the load persisted, and released back to full frequency once the load ended
+— battery capacity dropped only 1% over the whole episode. The `.disabled`
+build-time marker has been removed accordingly.
 
 ## Note: the "unknown battery"
 

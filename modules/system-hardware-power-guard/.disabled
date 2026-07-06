@@ -1,4 +1,0 @@
-# Module is render-verified but not yet hardware-verified (CLAUDE.md §9).
-# Remove this file only after a real back-feed event has been observed and the
-# guard reacted correctly on the physical AI PC. Until then the unit stays
-# disabled at build time; it can still be started manually for live testing.
