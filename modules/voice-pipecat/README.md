@@ -1,6 +1,6 @@
 # voice-pipecat
 
-## Current status: v0 push-to-talk, text-out — enabled, full round trip hardware-verified
+## Current status: v0 push-to-talk, text-out — enabled; plumbing hardware-verified, real mic input not yet confirmed
 
 This is a deliberately reduced scope, not the full Phase 3 design: **no
 TTS, no wake word, no hotkey**. The user's explicit direction was "text
@@ -99,10 +99,42 @@ Response: 200 {"text": "..."}
      nonsense input.
   2. `espeak-ng` synthesized "what time is it" to a WAV, played it
      through the real speaker with `paplay` while `aipc-voice-once
-     --seconds 3` recorded from the real mic at the same time (real
-     acoustic loopback, not a file-level shortcut) — SenseVoice
-     transcribed it as `"What time in it."` (correctly close given
-     real speaker->mic acoustic loss), which `/chat` answered
+     --seconds 3` recorded at the same time — SenseVoice transcribed
+     it as `"What time in it."`, which `/chat` answered
+
+     **Correction (2026-07-06, later same day)**: this was NOT actually
+     an acoustic mic test, and the claim above was wrong. Root cause,
+     found when a real user tried `aipc-voice-once` and got consistent
+     garbage: (1) the sound card's active PipeWire profile was
+     `output:analog-stereo` (output-only, no capture Source existed at
+     all), and (2) even after fixing the profile, `pactl
+     get-default-source` pointed at
+     `alsa_output...analog-stereo.monitor` — the **output sink's own
+     monitor**, not the real mic input (`alsa_input...analog-stereo`).
+     `arecord`'s "default" device silently followed that default
+     source. So step 2 above was recording a digital loopback of
+     `paplay`'s own output, not sound arriving through air via the
+     microphone — which is exactly why it transcribed the synthesized
+     phrase almost perfectly (no real room acoustics/noise at all).
+     Confirmed by direct measurement: with the monitor as default
+     source, `arecord` captured all-zero samples in true silence but a
+     clean strong signal whenever something played through the
+     speaker — a loopback signature, not a mic signature.
+
+     **Real fix**: `pactl set-card-profile alsa_card.pci-0000_c4_00.6
+     output:analog-stereo+input:analog-stereo` (expose the capture
+     Source at all) and `pactl set-default-source
+     alsa_input.pci-0000_c4_00.6.analog-stereo` (point recording at the
+     actual mic, not the sink monitor). After both, `arecord` measured
+     real non-zero, non-loopback signal (varying room-noise levels)
+     with nothing playing. **Not yet confirmed**: a real human voice
+     actually transcribing correctly through the fixed path — that
+     needs a live person speaking, which no agent dispatch or this
+     session's automated testing can do. These `pactl` settings are
+     runtime PipeWire/WirePlumber state, not committed anywhere in this
+     repo — they are not guaranteed to survive a reboot; if voice input
+     stops working again, re-check `pactl get-default-source` and
+     `pactl list cards` first before assuming a code regression.
      correctly and on-topic. `notify-send` fired for both runs.
   - This is the full v0 scope working end to end: real mic input, real
     STT, real LLM reply, real text-out. `.disabled` removed.
