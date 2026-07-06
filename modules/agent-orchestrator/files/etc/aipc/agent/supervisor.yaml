@@ -1,10 +1,12 @@
 # LangGraph supervisor configuration — D1
-# Not consumed by any code yet — sub-agent dispatch is deferred (tasks
-# 2.3-2.6). The model names below match design.md's D2 decision as
-# originally written; models.yaml/llm-litellm were trimmed 2026-07-04 and
-# no longer have coder-fast/vlm-qwen2vl/intent-3b registered — revisit
-# these bindings against whatever's actually available when sub-agents
-# are implemented, don't assume this file is current.
+# Still not read by any code — task 2.6 (daily_assistant.py) hardcodes its
+# model/tools instead of loading this file; sub-agent dispatch for
+# researcher/coder/browser (2.3-2.5) is still deferred. The model names
+# below match design.md's D2 decision as originally written;
+# models.yaml/llm-litellm were trimmed 2026-07-04 and no longer have
+# coder-fast/vlm-qwen2vl/intent-3b registered — revisit these bindings
+# (and daily_assistant.py's DAILY_ASSISTANT_MODEL) against whatever's
+# actually available before treating this as more than aspirational.
 sub_agents:
   researcher:
     model: coder-fast

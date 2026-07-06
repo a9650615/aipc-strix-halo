@@ -6,9 +6,10 @@ if [ -f "$this_dir/.disabled" ]; then
     exit 2
 fi
 
-# Basic-skeleton scope: only the supervisor graph exists (no sub-agents
-# yet), so this checks that much, not the full spec's "all four sub-agent
-# graphs constructible" scenario.
+# Basic-skeleton scope: supervisor + daily_assistant (task 2.6) exist; this
+# checks both construct (daily_assistant is imported by graphs.py, so
+# supervisor() transitively exercises it), not the full spec's "all four
+# sub-agent graphs constructible" scenario.
 /usr/lib/aipc-agent/venv/bin/python3 -c "from aipc_agent.graphs import supervisor; supervisor()" || {
     echo "agent-orchestrator: supervisor graph failed to construct" >&2
     exit 1
