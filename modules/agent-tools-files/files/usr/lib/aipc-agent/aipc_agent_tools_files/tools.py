@@ -12,6 +12,7 @@ that only resolves inside a later root requires a grant from
 check_gate_grant() fails closed (denies) until it does. See its docstring.
 """
 
+import json
 import socket
 from pathlib import Path
 
@@ -70,19 +71,20 @@ def list_dir(path: str, roots: list[Path] | None = None) -> list[str]:
 def check_gate_grant(action: str, sock_path: str = GATE_SOCKET) -> bool:
     """Ask aipc-agent-gate whether `action` is currently granted.
 
-    ponytail: aipc-agent-gate (phase-4-agent#5.1) is not built yet. Until its
-    UNIX-socket RPC exists, any connection failure (missing socket, refused,
-    timeout) is treated as "no grant" — fail closed, not fail open. Upgrade
-    path: once #5.1 ships with a real request/response wire format, only the
-    body of this function changes; delete() below doesn't need to.
+    Wire protocol (phase-4-agent#5.1, modules/agent-gate/): newline-
+    delimited JSON request/response over the UNIX socket --
+    {"cmd": "check", "action": ...} -> {"allowed": bool, "grant_id": ...}.
+    Any connection failure (missing socket, refused, timeout) or malformed
+    response is treated as "no grant" — fail closed, not fail open.
     """
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(1.0)
             s.connect(sock_path)
-            s.sendall(f"check {action}\n".encode())
-            return s.recv(64).strip() == b"GRANTED"
-    except OSError:
+            s.sendall((json.dumps({"cmd": "check", "action": action}) + "\n").encode())
+            resp = s.recv(4096)
+            return bool(json.loads(resp).get("allowed", False))
+    except (OSError, ValueError):
         return False
 
 

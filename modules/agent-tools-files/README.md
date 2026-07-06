@@ -25,12 +25,15 @@ Implemented (task 4.1):
   `roots[0]` is the "workspace" — `delete` there needs nothing extra.
 - `delete` on a path that only resolves inside a later (non-workspace)
   root calls `check_gate_grant("files.delete")` first.
-  **ponytail: `aipc-agent-gate` (phase-4-agent#5.1) isn't built yet** —
-  `check_gate_grant()` tries the UNIX socket at `/run/aipc-agent-gate.sock`
-  and treats any failure (socket missing, refused, timeout) as "no grant,"
-  so out-of-workspace deletes are refused until the real gate lands. Fail
-  closed, not fail open. Upgrade path: once #5.1 ships its RPC format, only
-  `check_gate_grant()`'s body changes — callers don't.
+  **Updated 2026-07-06**: `aipc-agent-gate` (phase-4-agent#5.1) now exists
+  as `modules/agent-gate/` — `check_gate_grant()` speaks its real wire
+  protocol (newline-delimited JSON `{"cmd": "check", "action": ...}` ->
+  `{"allowed": bool, ...}` over `/run/aipc-agent-gate.sock`), verified live
+  against the running daemon (grant `files.delete` -> check returns
+  `True`; revoke -> check returns `False` again). Any connection failure
+  or malformed response is still treated as "no grant" — fail closed, not
+  fail open. `delete()` itself needed no changes, exactly as the prior
+  upgrade note predicted.
 - Self-test (`python -m` style, matches `system-memory-oom-guard`'s
   `--self-test` convention): `tools.py --self-test` exercises accept /
   path-traversal-reject / symlink-escape-reject / gate-fail-closed-delete
