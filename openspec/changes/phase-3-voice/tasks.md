@@ -1,19 +1,23 @@
 ## 1. Module Scaffolding (6 modules)
 
-- [ ] 1.1 `voice-pipecat`: create `modules/voice-pipecat/` with
-  README, packages.txt (pipecat-ai, sounddevice / portaudio system
-  deps), files/ for pipeline config + GNOME custom keybinding seed +
-  `aipc-voice-mute.target` unit, post-install.sh (enable service,
-  register custom keybinding via gsettings), verify.sh (pipeline
-  loads, /healthz responds, target exists).
+- [ ] 1.1 `voice-pipecat`: **partially done, reduced v0 scope, not
+  fully checked off.** Per explicit user direction (text-out is fine,
+  no TTS yet), a hardware-verified v0 landed instead of this task's
+  full ask: a manually-invoked `aipc-voice-once` CLI (record -> STT ->
+  `/chat` -> `notify-send`), plain stdlib not `pipecat-ai`, no GNOME
+  keybinding registration, no `aipc-voice-mute.target` wiring. See
+  `modules/voice-pipecat/README.md` for the full scope decision and
+  verification. Remaining for this task: `pipecat-ai`/full pipeline
+  graph, keybinding registration, mute-target wiring.
 - [ ] 1.2 `voice-wake`: create `modules/voice-wake/` with README,
   packages.txt (openwakeword, onnxruntime), files/ for the wake
   service systemd unit with `BindsTo=!aipc-voice-mute.target`,
   post-install.sh (no-op until firstboot writes the model),
   verify.sh (unit present, NPU device node accessible).
-- [ ] 1.3 `voice-stt-sensevoice`: create
-  `modules/voice-stt-sensevoice/` with README, files/ for the
-  quadlet running SenseVoice-Small (port 8101), verify.sh
+- [x] 1.3 `voice-stt-sensevoice`: create
+  `modules/voice-stt-sensevoice/` with README, files/ for a native
+  systemd service running SenseVoice-Small (port 9001; no quadlet —
+  the originally-scaffolded container image never existed), verify.sh
   (`/healthz` returns 200).
 - [ ] 1.4 `voice-stt-paraformer`: create
   `modules/voice-stt-paraformer/` with README, files/ for the
@@ -44,9 +48,11 @@
 
 ## 3. STT Services + Router
 
-- [ ] 3.1 SenseVoice quadlet running the model on the iGPU via
-  Lemonade-compatible runtime (or CPU fallback if Lemonade can't
-  host the variant).
+- [x] 3.1 SenseVoice running via native systemd (no quadlet, no
+  Lemonade — see `voice-stt-sensevoice`'s README). CPU fallback per
+  this task's own escape clause: `cuda:0` segfaults on this
+  torch/ROCm/gfx1151 combination (hardware-verified), CPU is fast
+  enough (rtf 0.092) to be the real default, not a stopgap.
 - [ ] 3.2 Paraformer-zh-streaming quadlet, streaming-mode
   configuration.
 - [ ] 3.3 Pipecat router step: `router-1b` classifier prompt that
@@ -63,11 +69,16 @@
 
 ## 5. Pipecat Orchestrator + /chat Client
 
-- [ ] 5.1 `voice-pipecat/files/` ships the path-A pipeline graph
-  (wake → STT → cmd/chat router → /chat → TTS) and a disabled
-  path-B variant (multimodal Qwen2.5-Omni).
-- [ ] 5.2 `/chat` HTTP client config: base URL pulled from Phase 4
-  module env file; timeout + retry per Phase 4 D10.
+- [ ] 5.1 **Not done at full scope.** v0 (`aipc-voice-once`) calls STT
+  and `/chat` directly but has no wake, no TTS, no cmd/chat router, no
+  path-B — see `modules/voice-pipecat/README.md`. `files/etc/aipc/pipecat/pipeline.yaml`
+  (the path-A config) exists from the original scaffold but is not
+  read by v0.
+- [ ] 5.2 **Partially done.** Hardware-verified `/chat` client exists
+  (`chat()` in `aipc-voice-once`) with a configurable URL
+  (`$AIPC_VOICE_CHAT_URL`, defaults to agent-orchestrator's real
+  `env/endpoint`-declared port) and a request timeout, but no retry
+  logic per Phase 4 D10.
 - [ ] 5.3 `cmd` routing wires the Daily Assistant short-command
   endpoint (Phase 4) directly, not through the supervisor.
 - [ ] 5.4 No LangGraph import; assert via grep in `verify.sh`.

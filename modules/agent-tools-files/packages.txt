@@ -1,1 +1,2 @@
-# No host packages
+# No host packages. Pure stdlib (pathlib, socket) — task 4.1 explicitly
+# scopes this module that way; do not add a pip dependency for it.

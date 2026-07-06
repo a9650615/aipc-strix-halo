@@ -4,52 +4,125 @@ LangGraph supervisor (D1). Full design dispatches 4 sub-agents (D2):
 - Researcher (default: `coder-fast`)
 - Coder (default: `coder-strong`)
 - Browser (default: `vlm-qwen2vl`)
-- Daily Assistant (default: `intent-3b`)
+- Daily Assistant (default: `intent-3b` per spec; `ornith-35b` in
+  practice, see below)
 
-## Current status: basic skeleton only, still `.disabled`
+## Current status: basic skeleton + Daily Assistant sub-agent, enabled
 
-Implemented (tasks 1.1, 2.1, 2.2, 7.1–7.3):
-- `files/usr/lib/aipc-agent/aipc_agent/graphs.py`: `supervisor()` — a
-  single-node LangGraph graph that answers directly via the LiteLLM
-  gateway, model alias `ornith-35b` (`main-70b`, the spec's original
-  supervisor default, was cut from the manifest in a 2026-07-04 trim —
-  `ornith-35b`, a 35B reasoning + agentic-coding model, is the closest
-  remaining fit). No sub-agent dispatch yet —
-  `researcher`/`coder`/`browser`/`daily_assistant` don't exist.
+Implemented (tasks 1.1, 2.1, 2.2, 2.6, 7.1–7.3):
+- `files/usr/lib/aipc-agent/aipc_agent/graphs.py`: `supervisor()` answers
+  directly via LiteLLM (model alias `ornith-35b` — `main-70b`, the spec's
+  original supervisor default, was cut from the manifest in a 2026-07-04
+  trim; `ornith-35b`, a 35B reasoning + agentic-coding model, is the
+  closest remaining fit), OR routes to the Daily Assistant sub-graph on an
+  explicit keyword match (`calendar`, `schedule`, `meeting`, `email`,
+  `inbox`, `mail`, plus file/memory words). This is a simple keyword route, not the generic
+  multi-agent router the full spec eventually wants — that waits until
+  Researcher/Coder/Browser (2.3–2.5) exist too and a real decomposition
+  step is worth the complexity.
+- `files/usr/lib/aipc-agent/aipc_agent/daily_assistant.py` (task 2.6): the
+  Daily Assistant sub-agent graph, model alias `ornith-35b`. Spec default
+  `intent-3b` doesn't exist post-trim; the next candidate, `resident-small`
+  (Lemonade's FastFlowLM NPU backend), was hardware-verified 2026-07-06 to
+  reject any request carrying a `tools` list outright (`[json.exception
+  .type_error.302] type must be string, but is object` from `llama-server`
+  — an NPU-backend limitation, not a request bug: the identical payload
+  against `ornith-35b` returns a proper `tool_calls` response). Since
+  Daily Assistant needs tool calling to do anything, it reuses the
+  supervisor's own `ornith-35b` until a small tool-calling-capable NPU
+  model exists. Three tools
+  bound via `ChatLiteLLM.bind_tools()` and dispatched through
+  `langgraph.prebuilt.ToolNode`/`tools_condition` (both already ship
+  inside the pinned `langgraph==1.2.7` — no new dependency):
+  - `calendar_lookup`, `email_lookup` — **stubs**. `agent-tools-calendar`
+    (tasks 4.2 Google / 4.3 Proton / 4.4 Fastmail) doesn't exist yet;
+    both always return
+    `{"status": "not_configured", "tool": "...", "detail": "..."}`
+    until one of those backends lands.
+  - `files_read` — uses `agent-tools-files` (task 4.1) when that sibling
+    module is rendered. `post-install.sh` exposes `/usr/lib/aipc-agent` to
+    the venv, so `from aipc_agent_tools_files import read_file` works
+    without copying code or adding a dependency. If the module is absent,
+    the existing `ImportError` fallback still returns `not_configured`;
+    outside-allowlist reads return `denied`.
+- `files/usr/lib/aipc-agent/aipc_agent/memory.py`: tiny optional mem0 HTTP
+  client. It tries loopback mem0 search/add routes with a 1s timeout,
+  injects remembered facts into both supervisor and Daily Assistant prompts,
+  and fails soft when mem0 is disabled or its route shape changes.
 - `files/usr/lib/aipc-agent/aipc_agent/server.py`: FastAPI `POST /chat`
   accepting `{text, session_id?}`, returning `{text, task_id}` on success
   or `{error: {code, message}}` with a non-200 status on failure.
 - `files/usr/lib/aipc-agent/requirements.txt`: pinned versions
   (`langgraph==1.2.7`, `langchain-litellm==0.6.4`, `fastapi==0.139.0`,
-  `uvicorn==0.50.0`, `aiosqlite==0.22.1` — task 2.1).
+  `uvicorn==0.50.0`, `aiosqlite==0.22.1` — task 2.1). No new pins added
+  for 2.6 — `langchain_core` (tools, messages) ships transitively with
+  `langgraph`/`langchain-litellm`.
 - `post-install.sh` builds a venv at `/usr/lib/aipc-agent/venv`, installs
-  the pinned requirements, enables `aipc-agent-orchestrator.service`.
+  the pinned requirements, exposes `/usr/lib/aipc-agent` via a `.pth` file
+  so sibling stdlib packages such as `aipc_agent_tools_files` are importable,
+  and enables `aipc-agent-orchestrator.service`.
 - `files/etc/systemd/system/aipc-agent-orchestrator.service`: native
   systemd unit (not a container/quadlet — this daemon doesn't need
   sandboxing, only the future Coder sub-agent's code execution does),
   binds `127.0.0.1:4100` per `env/endpoint`.
 
-Not implemented yet (deferred, matches tasks 2.3–2.6 / groups 3/4/5/6):
-sub-agent dispatch, tool suite, permission gate, `agent-runtime` sandbox
-distrobox, MCP registry, LangGraph sqlite checkpointer/resume.
+Not implemented yet (deferred, matches tasks 2.3–2.5, 2.7 / groups 3/4/5/6):
+Researcher/Coder/Browser sub-agents, permission gate, `agent-runtime`
+sandbox distrobox, MCP registry, LangGraph sqlite checkpointer/resume,
+real calendar/email/files backends.
 
-**Verified 2026-07-04**: `ChatLiteLLM(model=..., api_base="http://127.0.0.1:4000",
-custom_llm_provider="openai", api_key="aipc-local")` round-trips a real chat
-completion against the live LiteLLM gateway (tested against `resident-small`).
-The `supervisor` graph and the `/chat` endpoint's happy/error paths are
-verified with the LLM call mocked (state flows through correctly, model
-alias `ornith-35b` is what gets called, error path returns the documented
-`502`/`error.code` shape). Live end-to-end verification of the full
-`/chat` → supervisor → LiteLLM → Ollama round trip on `ornith-35b` itself is
-**not yet done** — Ollama was continuously busy with unrelated large
-background jobs (apparent mem0 session-summarization traffic) every time
-this was attempted; re-run once Ollama has an idle window. Module stays
-`.disabled` until that's done, per CLAUDE.md §9 (only a hardware-verified
-claim moves a module out of `.disabled`).
+**Hardware-verified 2026-07-06** (full round trip, supervisor + Daily
+Assistant): live-hotfixed onto the running service
+(`/var/lib/aipc-agent`, see `docs/live-hotfix-workflow.md`) and iterated
+until real bugs stopped surfacing:
+
+1. `POST /chat {"text": "say OK"}` (plain, supervisor path) → `HTTP 200
+   {"text":"OK",...}` — confirmed `.disabled` could come off per CLAUDE.md
+   §9.
+2. First `/chat` call with a calendar keyword hit `Invalid model name ...
+   intent-3b` — `GET /v1/models` confirmed it's gone (qwen2.5 family cut
+   in the 2026-07-04 trim, same as `main-70b`). Tried `resident-small`
+   next; it 500'd on any request carrying `tools` (NPU/FastFlowLM backend
+   can't do function calling — see above). Settled on `ornith-35b`.
+3. With `ornith-35b`, the tool-call turn still failed:
+   `litellm.BadRequestError: ... unsupported content[].type`. Root cause
+   (confirmed via a standalone `ChatLiteLLM.bind_tools()` repro against
+   the live venv): `ornith-35b` returns `content` as
+   `[{"type": "thinking", ...}]`, not a string; LangGraph keeps that raw
+   `AIMessage` in `messages` state, and resending it verbatim on the next
+   tool-loop turn is what `llama-server` rejects. The existing `_text_of`
+   helper in `graphs.py` only normalized the supervisor's *final* answer,
+   not messages flowing through a tool loop. Fix: extracted the helper to
+   `aipc_agent/_util.py` (`text_of`), and now `daily_assistant.py` applies
+   it to every `AIMessage` before it re-enters state (`_agent`) and to the
+   final answer (`_finish`).
+4. Also recovered two real fixes (`max_tokens=2048` cap on the
+   supervisor's `ChatLiteLLM` call, plus what's now `text_of`'s original
+   form) that existed live on this machine (hardware-verified
+   2026-07-04/05) but were never committed — a prior session's
+   live-hotfix-workflow.md step 5 ("commit the repo file") was skipped;
+   folded back in here so they survive the next `bootc switch`.
+
+Final verification, all green: `python3 -m aipc_agent.graphs --self-test`
+passes against the real venv; `POST /chat {"text": "what is on my
+calendar today"}` → routes to `daily_assistant` → `ornith-35b` calls
+`calendar_lookup` → coherent natural-language reply, `HTTP 200`; same for
+an email-keyword query; plain-text regression (`"reply with exactly:
+pong"` → `{"text": "pong", ...}`) confirms the supervisor path is
+unaffected.
 
 ## Dependencies
 - llm-litellm (all LLM calls route through the gateway)
-- agent-tools-search, agent-browser, agent-code-shell, agent-tools-files, agent-tools-calendar (sub-agent tools — not yet wired up)
+- agent-tools-search, agent-browser, agent-code-shell (sub-agent tools —
+  not yet wired up)
+- agent-tools-files (task 4.1): `daily_assistant.py`'s `files_read` imports
+  `aipc_agent_tools_files`; post-install's `.pth` makes the sibling package
+  visible when it is present, and the tool fails closed when it is absent.
+- memory-mem0 (optional, Phase 2): consumed over HTTP only; disabled or
+  unreachable mem0 never breaks `/chat`.
+- agent-tools-calendar (tasks 4.2–4.4, not started): `calendar_lookup`/
+  `email_lookup` are stubs until one of its backends exists.
 
 ## Spec
-openspec/changes/phase-4-agent — tasks 1.1, 2.1, 2.2, 7.1–7.3 done here; 2.3–2.7 and groups 3–9 remain.
+openspec/changes/phase-4-agent — tasks 1.1, 2.1, 2.2, 2.6, 7.1–7.3 done
+here; 2.3–2.5, 2.7, and groups 3–9 remain.

@@ -44,3 +44,12 @@ fi
 # gpu-hang-watch running (see README "Known issue: resume-from-s2idle amdgpu/SMU hang")
 systemctl is-active --quiet gpu-hang-watch.service \
   || fail "system-unified-memory: gpu-hang-watch.service not active"
+
+# Thunderbolt/USB4 runtime PM disabled (see README's "USB4 DP tunneling"
+# section) — any device left on "auto" means the udev rule didn't apply,
+# not that no Thunderbolt hardware exists (this chassis always has the NHI).
+for f in /sys/bus/thunderbolt/devices/*/power/control /sys/bus/pci/drivers/thunderbolt/*/power/control; do
+  [ -r "$f" ] || continue
+  [ "$(cat "$f")" = "on" ] \
+    || fail "system-unified-memory: $f is not 'on' (71-thunderbolt-no-runtime-pm.rules didn't apply)"
+done

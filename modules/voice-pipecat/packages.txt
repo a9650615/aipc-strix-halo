@@ -1,1 +1,2 @@
-# Pipecat runs in Python distrobox
+alsa-utils
+libnotify

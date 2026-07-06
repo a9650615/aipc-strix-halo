@@ -1,0 +1,19 @@
+[Unit]
+Description=AIPC hardware power guard (battery back-feed protection + charge cap)
+After=network-online.target
+# Kill switch: if /etc/aipc/power-guard.disabled exists, do not start at boot.
+ConditionPathExists=!/etc/aipc/power-guard.disabled
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/lib/aipc-power-guard/power_guard.py
+Environment=POWER_GUARD_CONFIG=/etc/aipc/power-guard/config.yaml
+Environment=POWER_GUARD_LOG=INFO
+# Writes /sys/.../scaling_max_freq, EPP, and charge_control_end_threshold (all root-owned).
+# State file under /var/lib/aipc-power-guard/.
+ReadWritePaths=/var/lib/aipc-power-guard
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

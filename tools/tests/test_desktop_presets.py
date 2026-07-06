@@ -19,16 +19,17 @@ def test_list_presets_includes_mac() -> None:
 
 def test_window_buttons_mac_style_commands_put_buttons_on_left() -> None:
     cmds = desktop_presets.window_buttons_mac_style_commands()
-    assert ["kwriteconfig6", "--file", "kwinrc", "--group", "org.kde.kdecoration2", "--key", "ButtonsOnLeft", "XIA"] in cmds
-    assert ["kwriteconfig6", "--file", "kwinrc", "--group", "org.kde.kdecoration2", "--key", "ButtonsOnRight", ""] in cmds
+    assert ["kwriteconfig6", "--file", "kwinrc", "--group", "org.kde.kdecoration2", "--key", "ButtonsOnLeft", "--", "XIA"] in cmds
+    assert ["kwriteconfig6", "--file", "kwinrc", "--group", "org.kde.kdecoration2", "--key", "ButtonsOnRight", "--", ""] in cmds
 
 
 def test_touchpad_mac_style_commands_target_the_real_device_group() -> None:
     cmds = desktop_presets.touchpad_mac_style_commands()
-    keys = {cmd[-2] for cmd in cmds}
+    keys = {cmd[-3] for cmd in cmds}
     assert keys == {"NaturalScroll", "TapToClick"}
     for cmd in cmds:
         assert desktop_presets.TOUCHPAD_NAME in cmd
+        assert cmd[-2] == "--"
         assert cmd[-1] == "true"
 
 
@@ -85,14 +86,21 @@ def test_ensure_panels_script_is_non_destructive_to_existing_panels() -> None:
 def test_ensure_panels_script_applies_static_hiding_policy() -> None:
     # Direct user spec 2026-07-04, after the fullscreen-detecting KWin script
     # repeatedly failed: "每個螢幕的 dock 都設定自動隱藏, 選單列永遠不隱藏就好
-    # 了" -- every screen's Dock (bottom) always autohides, the top bar never
-    # hides. Applied both to newly-created panels and to every pre-existing
-    # panel (setting .hiding never touches widgets, so it doesn't conflict
-    # with the non-destructive rule above).
+    # 了". Landed on "none" (same as the top bar) after two wrong guesses,
+    # both hardware-verified wrong by direct user report on 2026-07-06:
+    # "autohide" always hides regardless of overlap, only reveals on hover
+    # ("為什麼自動隱藏現在我沒有遮擋還是會隱藏"); "dodgewindows" hides whenever a
+    # window overlaps it, but a maximized window always does, so
+    # double-click-to-maximize kept hiding it too ("視窗點兩下最大化但是不隱藏
+    # dock"). "none" reserves the dock's own strut so ordinary maximize stops
+    # short of it -- hardware-verified the dock stays visible through
+    # maximize ("dock 還在"). Applied both to newly-created panels and to
+    # every pre-existing panel (setting .hiding never touches widgets, so it
+    # doesn't conflict with the non-destructive rule above).
     script = desktop_presets.ensure_panels_script(2, 0, 0)
-    assert 'applySpec(p, "bottom", bottomSpec, "autohide")' in script
+    assert 'applySpec(p, "bottom", bottomSpec, "none")' in script
     assert 'applySpec(t, "top", topSpec, "none")' in script
-    assert 'if (ps[i].location === "bottom") ps[i].hiding = "autohide";' in script
+    assert 'if (ps[i].location === "bottom") ps[i].hiding = "none";' in script
     assert 'if (ps[i].location === "top") ps[i].hiding = "none";' in script
 
 
@@ -172,3 +180,46 @@ def test_apply_preset_mac_runs_expected_commands_and_cleans_up_legacy_script(tmp
     assert any(c[-2:] == [f"{desktop_presets.LEGACY_KWIN_SCRIPT_ID}Enabled", "false"] for c in calls)
     assert any(c[-2:] == ["org.kde.kwin.Scripting.unloadScript", desktop_presets.LEGACY_KWIN_SCRIPT_ID] for c in calls)
     assert not script_dir.exists()
+
+
+def test_find_dock_panel_returns_none_when_screen_has_no_dock(tmp_path: Path) -> None:
+    def fake_runner(cmd, **kwargs):
+        return _FakeCompletedProcess(stdout="")
+
+    assert desktop_presets.find_dock_panel(2, fake_runner) is None
+
+
+def test_find_dock_panel_returns_panel_and_applet_ids() -> None:
+    def fake_runner(cmd, **kwargs):
+        return _FakeCompletedProcess(stdout="473,476")
+
+    assert desktop_presets.find_dock_panel(1, fake_runner) == ("473", "476")
+
+
+def test_rebuild_dock_panel_preserves_launchers_and_reports_discover_caveat(tmp_path: Path) -> None:
+    calls = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "kreadconfig6":
+            return _FakeCompletedProcess(stdout="applications:systemsettings.desktop")
+        if cmd[0] == "qdbus":
+            script = cmd[-1]
+            if "old.remove()" in script:
+                return _FakeCompletedProcess(stdout="900,901")
+            return _FakeCompletedProcess(stdout="473,476")
+        return _FakeCompletedProcess(0)
+
+    warning = desktop_presets.rebuild_dock_panel(1, fake_runner)
+
+    assert warning is not None
+    assert "Discover" in warning
+    write_calls = [c for c in calls if c[0] == "kwriteconfig6"]
+    assert any(c[-1] == "applications:systemsettings.desktop" and "900" in c and "901" in c for c in write_calls)
+
+
+def test_rebuild_dock_panel_returns_none_when_screen_has_no_dock() -> None:
+    def fake_runner(cmd, **kwargs):
+        return _FakeCompletedProcess(stdout="")
+
+    assert desktop_presets.rebuild_dock_panel(3, fake_runner) is None

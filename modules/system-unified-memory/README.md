@@ -176,6 +176,49 @@ prevent or fix the hang, just makes the post-mortem faster.
    opposed to idle-timeout or manual suspend) and whether disabling lid-close-triggers-
    suspend (behavioral change, not a kernel fix) is the only remaining lever.
 
+## Known issue: external monitor blackouts over USB4 DP tunneling
+
+Hardware-verified 2026-07-05: intermittent external-monitor blackouts while connected via this
+chassis's USB4/Thunderbolt port correlate exactly with `journalctl -k` showing bursts of
+`[drm] DPIA AUX failed on 0x0(1), error 7` (DPIA = DisplayPort tunneled over the USB4 link,
+not a native DP/HDMI port) immediately followed by dozens of `DMUB HPD RX IRQ callback`
+entries in the same second — the sink repeatedly signalling an IRQ that the driver interprets
+as needing to re-check the link, which is what shows up as a black screen / brief re-handshake.
+No accompanying USB/PD/power_supply event at the kernel level, and no GPU compute ring
+timeout in the same boot — ruling out both a physical unplug and the unrelated GPU-hang class
+of bug covered by `system-suspend-gpu-guard`.
+
+All Thunderbolt bus devices and the NHI host controller PCI functions were found with runtime
+PM autosuspend (`power/control: auto`) — letting the USB4 link drop to a low-power state
+between transactions. Waking it specifically for a DP AUX transaction is the point where this
+hardware appears to fail. `71-thunderbolt-no-runtime-pm.rules` forces `power/control=on` for
+both the bus devices and the PCI driver's `thunderbolt`-bound functions, so the link never
+drops into that state while the machine is awake.
+
+**Update 2026-07-05, same day: this is very likely NOT the actual root cause.** A deliberate
+physical unplug/replug (a clean hotplug, immune to any runtime-PM state) reproduced the exact
+same failure signature: `*ERROR* dpia_query_hpd_status: for link(7) dpia(2) failed with
+status(1)` immediately followed by `*ERROR* wait_for_completion_timeout timeout!`, then the
+same `DMUB HPD RX IRQ callback` burst on reconnect ~2.5 minutes later. This means the DMUB
+firmware's HPD-status query over the DPIA/USB4 path itself is unreliable/times out — a firmware
+or driver-level issue in the DMUB<->DPIA communication path, not a Linux runtime-PM power state
+this udev rule can influence. The runtime-PM fix is harmless and stays enabled (it's still a
+real, if apparently minor, contributing factor), but do not treat it as the fix for the
+blackouts. No userspace/config-level fix found. Real fixes would need: a newer amdgpu driver
+with better DPIA reliability handling, updated DMUB firmware (linux-firmware), or bypassing
+DPIA entirely via a native DP/HDMI port on this chassis if one exists.
+
+Separately, hardware-verified the same day: this monitor is stuck at ~95Hz for *every*
+resolution the driver lists (even tiny ones like 640x480 that need a fraction of the
+bandwidth), including 4K, despite advertising 48-160Hz VRR range and both `DSC_Sink_Support`
+and `FEC_Sink_Support: yes` in its DPCD. The link itself already runs at full HBR3 x4
+(`link_settings`: `4 0x1e 16`) — DSC compression is what would be needed to fit a higher
+refresh rate in the same bandwidth, but `dsc_clock_en`/`dsc_bits_per_pixel` read `0` and stayed
+`0` after both a debugfs force-write attempt and a full physical replug. This looks like the
+amdgpu DPIA path in this kernel version doesn't negotiate DSC at all (DSC-over-native-DP is
+more mature upstream than DSC-over-DPIA) — same underlying DMUB/DPIA immaturity as the
+blackout issue above, not something fixable from userspace either.
+
 ## Known issue: idle power draw / thermals — AC vs battery power profile
 
 Hardware-verified 2026-07-04: with the default ASUS EC `platform_profile=balanced`, this

@@ -4,10 +4,9 @@
   `aipc_agent/server.py` (FastAPI `/chat`) + `graphs.py` (supervisor)
   exist and are hardware-verified end-to-end (2026-07-05, see
   `docs/agent-log.md`: real `/chat` round trip through LiteLLM to
-  ornith-35b, SELinux `name_connect` fix applied). Only the
-  *supervisor* graph exists though — no sub-agent graphs (2.2-2.6
-  below), matching its own verify.sh's documented "basic-skeleton
-  scope" comment.
+  ornith-35b, SELinux `name_connect` fix applied). Daily Assistant
+  sub-agent (2.6) and memory/file wiring (8.2) have since landed too —
+  see Group 2/4/8 below.
 - [~] 1.2 `agent-code-shell`: distrobox template + packages.txt
   exist. **Missing the actual safety wrapper** — the file that's
   supposed to "always shell through `distrobox enter agent-runtime
@@ -21,18 +20,21 @@
   MCP install step in post-install.sh (currently just a comment saying
   it happens "distrobox-side at runtime" — no script that does it),
   verify.sh doesn't check binary presence.
-- [~] 1.4 `agent-screen-control`: config (`screen-control.yaml`,
-  mode + blacklist) and 2 of 4 spec'd packages (xdotool, ydotool —
-  missing wmctrl and a Wayland screenshot tool) exist. **Missing
-  entirely**: the execution wrapper that actually drives
-  xdotool/ydotool, the Qwen2-VL screenshot bridge script, and any
-  verify.sh check beyond `.disabled`. This is the most
-  security-sensitive module in the repo (input injection +
-  password-manager blacklist) — real implementation deliberately
-  not attempted this pass, see note below.
-- [~] 1.5 `agent-tools-files`: allowlist config exists. Missing the
-  actual read/write/list/delete tool implementations and their
-  allowlist enforcement.
+- [~] 1.4 `agent-screen-control`: real ydotool input wrapper +
+  spectacle/LiteLLM VLM bridge landed 2026-07-06 (`docs/agent-log.md`
+  agent-screen-control-2026-07-06, tasks 4.7/4.8), gated through
+  `aipc-agent-gate`'s real check RPC (hardware-verified) plus a
+  window-class blacklist that fails closed. **Still open**: `kdotool`
+  (window-class detection) is static-only on this dev host, so the
+  blacklist can't be exercised against a real window yet, and actual
+  input injection was deliberately not tested this pass (safety
+  constraint — see agent-log). Module stays `.disabled` pending that.
+- [~] 1.5 `agent-tools-files`: real read/write/list/delete
+  implementation landed 2026-07-06 (task 4.1, `docs/agent-log.md`
+  agent-tools-files-2026-07-06) — every path allowlist-checked before
+  any FS syscall, delete outside the workspace gated through
+  `aipc-agent-gate`. Static+render-verified only, not yet
+  hardware-verified.
 - [~] 1.6 `agent-tools-calendar`: config stub exists (Google/Proton/
   Fastmail backend fields). Missing all three backends' actual logic
   and the `aipc agent oauth google` CLI.
@@ -44,31 +46,33 @@
   — reasonable minimum given task 1.8's own scope (schema
   documentation + empty seed, not a validator).
 
-**Note on 1.2/1.4 (and Groups 2-5 below):** these are the actual
-security-execution core of Phase 4 — sandboxed code execution,
-input-injection screen control, the permission-gate audit/revoke
-system. Auditing/fixing what already exists is one thing; writing the
-part that decides "does this action get to run" is a different kind
-of change (CLAUDE.md §10: security-sensitive default loosening).
-Flagged for an explicit go/no-go from the user rather than
-implemented opportunistically in an audit pass — see session report.
+**Note on 1.2/1.3/1.6/1.7 (and Groups 2/3/6 below):** these are the
+remaining actual security-execution core of Phase 4 — sandboxed code
+execution, browser automation, OAuth-backed calendar access, search.
+Writing the part that decides "does this action get to run" is a
+security-sensitive default (CLAUDE.md §10). Flagged for an explicit
+go/no-go from the user rather than implemented opportunistically in an
+audit pass.
 
-**Groups 2-9 status (2026-07-06 audit):** none of these are implemented
-beyond what group 1 already covers (agent-orchestrator's supervisor graph
-only; every other sub-agent graph, tool, and the entire permission-gate
-system in Group 5 is unbuilt). This is a large, mostly security-sensitive
-build (sandboxed code execution, screen-control input injection + audit
-log, OAuth-backed calendar access) — CLAUDE.md §10 territory, not
-something to implement opportunistically inside an audit pass. Left
-untouched pending an explicit go/no-go + design pass from the user,
-rather than guessed at. Groups 10-12 (build verification, hardware
-verification, archive) are blocked on 2-9 landing first.
+**Groups 2/4/5/7/8 status update (2026-07-06, post-audit):** since the
+2026-07-06 audit above was written, real work landed on a parallel
+branch and has now merged in: Daily Assistant sub-agent (2.6),
+agent-tools-files' real implementation (4.1), agent-screen-control's
+real ydotool/VLM wrapper (4.7/4.8, still `.disabled`), the permission
+gate daemon + CLI (5.1/5.2/5.4/5.5, hardware-verified), and
+memory/file-tool wiring into the orchestrator (8.2). See each group
+below for the updated checkboxes and `docs/agent-log.md` for the
+verification detail. Groups 2.3-2.5 (Researcher/Coder/Browser),
+3 (sandbox), 5.3 (screen CLI wrapper), and 6 (MCP registry) remain
+unbuilt — still CLAUDE.md §10 territory, not implemented
+opportunistically. Groups 10-12 (build verification, hardware
+verification, archive) are blocked on those landing first.
 
 ## 2. Agent Framework (LangGraph)
 
-- [ ] 2.1 Pin `langgraph` and `langchain-litellm` versions in
+- [x] 2.1 Pin `langgraph` and `langchain-litellm` versions in
   `agent-orchestrator/packages.txt` (no floating range).
-- [ ] 2.2 Implement the supervisor graph: accepts `{text, session_id}`
+- [x] 2.2 Implement the supervisor graph: accepts `{text, session_id}`
   input, decomposes into sub-tasks, dispatches sub-agents (serial or
   parallel), merges outputs, returns `{text, task_id}`.
 - [ ] 2.3 Implement Researcher sub-agent graph (default model
@@ -80,7 +84,7 @@ verification, archive) are blocked on 2-9 landing first.
 - [ ] 2.5 Implement Browser sub-agent graph (default model
   `vlm-qwen2vl`, tool: Playwright MCP only; VLM-on-screenshot
   fallback path).
-- [ ] 2.6 Implement Daily Assistant sub-agent graph (default model
+- [x] 2.6 Implement Daily Assistant sub-agent graph (default model
   `intent-3b`, tools: calendar, email, files read).
 - [ ] 2.7 Configure LangGraph sqlite checkpointer at
   `/var/lib/aipc-agent/checkpoints/`; write `aipc agent resume
@@ -100,7 +104,7 @@ verification, archive) are blocked on 2-9 landing first.
 
 ## 4. Tools
 
-- [ ] 4.1 `agent-tools-files`: implement read / write / list /
+- [x] 4.1 `agent-tools-files`: implement read / write / list /
   delete tools; every path passes through the allowlist check
   before any FS syscall; `delete` outside workspace consults the
   permission gate.
@@ -120,35 +124,43 @@ verification, archive) are blocked on 2-9 landing first.
   `TAVILY_API_KEY` from the decrypted env file written by the
   `cloud-llm-fallback` runtime oneshot (`aipc-decrypt-cloud-keys.service`);
   appends the key to `secrets/cloud-llm.yaml` schema.
-- [ ] 4.7 `agent-screen-control` xdotool/ydotool wrapper: every
-  action consults `aipc-agent-gate` for an active screen grant;
-  always-on mode consults the blacklist before VLM input and
-  before input delivery.
-- [ ] 4.8 `agent-screen-control` Qwen2-VL bridge: screenshot via
-  Wayland-native tool → base64 → LiteLLM `vlm-qwen2vl` chat
-  completion → parsed layout.
+- [~] 4.7 `agent-screen-control` xdotool/ydotool wrapper: implemented
+  2026-07-06, gate check hardware-verified live against the real
+  `aipc-agent-gate.service`. `kdotool` window-class detection is
+  static-only on this dev host (blacklist fails closed on every
+  window until a real image build), and actual input injection was
+  deliberately not tested this pass — see `docs/agent-log.md`
+  agent-screen-control-2026-07-06. Module stays `.disabled`.
+- [~] 4.8 `agent-screen-control` Qwen2-VL bridge: wire format
+  (screenshot → base64 → LiteLLM) implemented and hardware-verified
+  against real LiteLLM 2026-07-06, but `vlm-qwen2vl` isn't registered
+  in this repo's LiteLLM manifest (cut in the 2026-07-04 trim) — got
+  the expected HTTP 400, not a working completion. No vision model
+  currently exists in LiteLLM at all.
 - [ ] 4.9 `agent-browser` Playwright MCP: separate browser profile
   for `agent` vs `dev` consumers (profile path declared in the
   registry entry).
 
 ## 5. Permission Gate
 
-- [ ] 5.1 `aipc-agent-gate.service` (systemd unit shipped by
-  `agent-orchestrator` or its own helper file under
-  `agent-screen-control`/`agent-orchestrator`): in-memory grant
-  store with sqlite persistence; UNIX-socket RPC at
-  `/run/aipc-agent-gate.sock`.
-- [ ] 5.2 CLI `aipc agent gate {grant,revoke,status}`: implements
-  `--scope session <duration>` and `--scope task <task-id>`,
-  `--actions <comma-list>`.
+- [x] 5.1 `aipc-agent-gate.service`: shipped as its own module
+  `modules/agent-gate/`, UNIX-socket RPC at
+  `/run/aipc-agent-gate.sock`, in-memory grant store + SQLite
+  persistence. Hardware-verified 2026-07-06 (`docs/agent-log.md`
+  agent-gate-2026-07-06).
+- [x] 5.2 CLI `aipc agent gate {grant,revoke,status}`: implemented
+  (`tools/aipc_lib/gate_client.py`), hardware-verified full round
+  trip (session + task scope).
 - [ ] 5.3 CLI `aipc agent screen {--mode session <duration>,--mode always,--revoke}`:
   thin wrapper over the gate that issues `screen-control` grants
   with the right scope and a pointer at the blacklist.
-- [ ] 5.4 Post-task auto-revoke hook: supervisor signals task done →
-  gate revokes all `--scope task <id>` grants for that id.
-- [ ] 5.5 Audit log: every grant, every authorisation check, every
-  deny appended to `/var/log/aipc-agent-gate.jsonl` (one JSON
-  object per line).
+- [x] 5.4 Post-task auto-revoke hook: bulk task-scope revoke RPC verb
+  implemented and verified; the supervisor-side caller that signals
+  task-done is not wired up yet (out of scope for this dispatch).
+- [x] 5.5 Audit log: append-only JSONL at
+  `/var/log/aipc-agent-gate.jsonl`, hardware-verified — every
+  grant/check/revoke interleaved correctly, audit-log write failures
+  can't take down the RPC path.
 
 ## 6. MCP Registry
 
@@ -166,12 +178,12 @@ verification, archive) are blocked on 2-9 landing first.
 
 ## 7. Voice Integration
 
-- [ ] 7.1 FastAPI app: `POST /chat` route accepting `{text,
+- [x] 7.1 FastAPI app: `POST /chat` route accepting `{text,
   session_id?}` JSON; binds to `127.0.0.1:4100` (port declared in
   `agent-orchestrator/env/endpoint`).
-- [ ] 7.2 Response shape: `{text, task_id}`; errors return
+- [x] 7.2 Response shape: `{text, task_id}`; errors return
   structured `{error: {code, message}}` with non-200 status.
-- [ ] 7.3 Document the Pipecat client config example in
+- [x] 7.3 Document the Pipecat client config example in
   `agent-orchestrator/README.md` (Phase 3 will consume; this is
   reference, not an implementation here).
 - [ ] 7.4 Timeout behavior: default per-request timeout 120 s; long
@@ -182,8 +194,10 @@ verification, archive) are blocked on 2-9 landing first.
 
 - [ ] 8.1 `aipc doctor`: add `agent-runtime` section running each
   module's `verify.sh`.
-- [ ] 8.2 LangGraph import smoke: `python -c "import langgraph"`
-  inside `agent-orchestrator`'s runtime environment exits 0.
+- [x] 8.2 LangGraph import smoke: `python -c "import langgraph"`
+  inside `agent-orchestrator`'s runtime environment exits 0. Also covers
+  `agent-orchestrator` graph self-test in the live venv and fail-closed
+  `/etc/passwd` file-read regression.
 - [ ] 8.3 Distrobox sandbox check: assert
   `/etc/aipc/distrobox/templates/agent-runtime.yaml` exists and
   parses; assert `agent-runtime` container assembleable (dry-run).

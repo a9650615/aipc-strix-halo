@@ -1,0 +1,14 @@
+[Unit]
+Description=aipc voice-stt-sensevoice (SenseVoice-Small STT, short utterances)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/aipc-voice/venv/bin/uvicorn aipc_stt_sensevoice.server:app --host 127.0.0.1 --port 9001
+Environment=PYTHONPATH=/usr/lib/aipc-voice
+Environment=HSA_OVERRIDE_GFX_VERSION=11.5.1
+Environment=MODELSCOPE_CACHE=/var/lib/aipc-voice/models
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

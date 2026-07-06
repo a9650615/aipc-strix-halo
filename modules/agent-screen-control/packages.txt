@@ -1,2 +1,13 @@
-xdotool
+# agent-screen-control — real image build deps (task 4.7/4.8)
+# ydotool: input injection, compositor-agnostic via /dev/uinput. Works on
+# native Wayland where xdotool does not (xdotool only reliably targets
+# XWayland-mapped windows) — see README "Wayland input" note. xdotool
+# dropped: the wrapper only shells out to ydotool.
+# spectacle: KDE's own screenshot CLI (`-b -n -o <file>`), Wayland-native,
+# no separate grim/slurp needed on this KDE Plasma image.
+# kdotool: xdotool-like active-window-class query for KDE Wayland, used by
+# the D4 blacklist check. NOT hardware-verified in this dispatch — see
+# README "kdotool" section for why.
 ydotool
+spectacle
+kdotool

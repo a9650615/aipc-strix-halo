@@ -1,0 +1,13 @@
+[Unit]
+Description=Block suspend while amdgpu compute queue is busy (gfx1151 resume-from-s2idle hang workaround)
+ConditionPathExists=!/etc/aipc/suspend-gpu-guard.disabled
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/aipc-suspend-gpu-guard/guard.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

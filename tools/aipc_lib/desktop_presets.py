@@ -11,7 +11,19 @@ from typing import Callable
 # that dynamically toggled panel hiding based on per-window fullscreen state.
 # After several iterations it still didn't reliably work (user, 2026-07-04:
 # "還是沒有解決任何問題" -- still hasn't solved anything). Replaced with a
-# static policy: dock always autohides, top bar never hides, on every screen.
+# static policy: dock is never-hide (same as the top bar), on every screen.
+# (2026-07-06, two iterations: first shipped as "autohide", which
+# macOS-Dock-style always hides regardless of overlap and only reveals on
+# hover -- not what was wanted ("為什麼我沒有遮擋還是會隱藏"). Switched to
+# "dodgewindows" (hide only when a window actually overlaps it) -- but a
+# maximized window's geometry covers the dock's strip by definition, so
+# double-click-to-maximize kept hiding it too, still not wanted. Landed on
+# "none": same as the top bar, it reserves its own strut so ordinary window
+# maximize stops short of it instead of covering it; hardware-verified this
+# leaves the dock visible through maximize. A genuinely fullscreen window
+# (games, video players) still overrides the strut and covers it -- that's
+# the compositor's own exclusive-fullscreen behavior, unrelated to this
+# per-panel `.hiding` setting.)
 # This id is kept only so apply_preset can find and remove a previously
 # installed copy (see uninstall_legacy_kwin_script / disable_legacy_kwin_script_command).
 LEGACY_KWIN_SCRIPT_ID = "fullscreen-hides-panels"
@@ -32,7 +44,11 @@ def _kwriteconfig(file: str, groups: list[str], key: str, value: str) -> list[st
     cmd = ["kwriteconfig6", "--file", file]
     for g in groups:
         cmd += ["--group", g]
-    cmd += ["--key", key, value]
+    # "--" before value: hardware-verified 2026-07-06 that without it,
+    # kwriteconfig6's own option parser treats a value like "-1" (e.g. a
+    # folder widget's lastScreen=-1) as an unrecognized flag and fails
+    # ("Unknown option '1'.") instead of writing it.
+    cmd += ["--key", key, "--", value]
     return cmd
 
 
@@ -134,13 +150,35 @@ def ensure_panels_script(screen_count: int, primary_x: int, primary_y: int) -> s
     content the user asked to preserve. To re-clone a screen's widgets from
     scratch, remove its panels by hand first, then re-run.
 
+    2026-07-06 update, direct user request ("dock app 項目同步", eventually
+    "本來就應該通用...跟 Mac 一樣的體驗", "完全鏡射"): the 07-04 spec above turned
+    out too narrow in practice -- a second screen's Dock with no pinned
+    launchers just looks broken, and syncing one config key stopped being
+    enough once a whole new widget could be added to one screen and not
+    another. That continuous cross-screen mirroring (widget list, order,
+    every widget's own config) is a *separate* standing concern from this
+    one-shot preset apply -- see aipc_lib.panel_mirror, installed and
+    triggered independently (not called from here).
+
     Hiding policy is the one thing this DOES force on every panel, new or
     existing, every apply (setting `.hiding` never touches widgets so it
     doesn't conflict with the non-destructive rule above). Direct user spec
     2026-07-04, after the fullscreen-detecting KWin script repeatedly failed
     to work ("還是沒有解決任何問題"): "每個螢幕的 dock 都設定自動隱藏, 選單列
-    永遠不隱藏就好了" -- every screen's Dock (bottom panel) always autohides;
-    the top bar never hides.
+    永遠不隱藏就好了". Landed on "none" (same as the top bar) after two wrong
+    guesses, both hardware-verified wrong by direct user report on
+    2026-07-06: "autohide" always hides regardless of overlap and only
+    reveals on hover ("為什麼自動隱藏現在我沒有遮擋還是會隱藏"); "dodgewindows"
+    hides whenever a window overlaps it, but a maximized window's geometry
+    always does, so double-click-to-maximize kept hiding it too. "none"
+    reserves the dock's own strut so ordinary maximize stops short of it --
+    genuinely fullscreen windows (games, video players) still cover it via
+    the compositor's own exclusive-fullscreen path, independent of this
+    setting. Note: the Panel scripting API silently accepts invalid
+    `.hiding` string literals and falls back to "none" instead of raising --
+    "windowscover" and "windowsgobelow" (natural-sounding guesses) are NOT
+    valid values; "autohide", "dodgewindows" and "none" are the confirmed set.
+    Every screen's Dock (bottom panel) and top bar both use "none".
     """
     return f"""\
 var screenCount = {screen_count};
@@ -211,7 +249,7 @@ for (var s = 0; s < screenCount; s++) {{
   if (!haveBottom[s]) {{
     var p = new Panel;
     p.screen = s;
-    applySpec(p, "bottom", bottomSpec, "autohide");
+    applySpec(p, "bottom", bottomSpec, "none");
   }}
   if (!haveTop[s]) {{
     var t = new Panel;
@@ -221,7 +259,7 @@ for (var s = 0; s < screenCount; s++) {{
 }}
 
 for (var i = 0; i < ps.length; i++) {{
-  if (ps[i].location === "bottom") ps[i].hiding = "autohide";
+  if (ps[i].location === "bottom") ps[i].hiding = "none";
   if (ps[i].location === "top") ps[i].hiding = "none";
 }}
 """
@@ -241,6 +279,199 @@ def reconfigure_kwin_command() -> list[str]:
     return ["qdbus", "org.kde.KWin", "/KWin", "reconfigure"]
 
 
+# Default config-group path under an Applet, for widgets whose QML declares
+# a configGroup (icontasks and most others). systemtray is the one common
+# exception -- hardware-verified 2026-07-06: its extraItems/knownItems live
+# directly under [General], one level shallower, no [Configuration] wrapper.
+DEFAULT_CONFIG_GROUPS = ("Configuration", "General")
+
+
+def _read_config_value(
+    panel_id: str, applet_id: str, key: str, runner: RunnerT, config_groups: tuple[str, ...] = DEFAULT_CONFIG_GROUPS
+) -> str:
+    cmd = ["kreadconfig6", "--file", "plasma-org.kde.plasma.desktop-appletsrc"]
+    for g in ("Containments", panel_id, "Applets", applet_id, *config_groups):
+        cmd += ["--group", g]
+    cmd += ["--key", key]
+    return runner(cmd, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _read_launchers(panel_id: str, applet_id: str, runner: RunnerT) -> str:
+    return _read_config_value(panel_id, applet_id, "launchers", runner)
+
+
+# Canonical Dock widget order, hardware-verified 2026-07-06 against this
+# machine's actual dock layout (both screens, before anything drifted).
+# rebuild_dock_panel() always recreates in exactly this order -- there's no
+# per-screen customization point here, matching ensure_panels_script's own
+# stance of a fixed structure rather than something users are expected to
+# reorder per screen.
+DOCK_WIDGET_ORDER = [
+    "org.kde.plasma.kickoff",
+    "org.kde.plasma.pager",
+    "org.kde.plasma.icontasks",
+    "org.kde.plasma.marginsseparator",
+    "org.kde.plasma.folder",
+    "org.kde.plasma.showdesktop",
+    "org.kde.plasma.systemmonitor",
+]
+
+
+def find_dock_script(screen: int) -> str:
+    """Prints "<panelId>,<icontasksAppletId>" for the given screen's Dock,
+    or nothing if that screen has none."""
+    return f"""\
+var ps = panels();
+for (var i = 0; i < ps.length; i++) {{
+  if (ps[i].screen !== {screen} || ps[i].location !== "bottom") continue;
+  var widgets = ps[i].widgets();
+  for (var j = 0; j < widgets.length; j++) {{
+    if (widgets[j].type === "org.kde.plasma.icontasks") {{
+      print(ps[i].id + "," + widgets[j].id);
+    }}
+  }}
+}}
+"""
+
+
+def find_dock_command(screen: int) -> list[str]:
+    return [
+        "qdbus",
+        "org.kde.plasmashell",
+        "/PlasmaShell",
+        "org.kde.PlasmaShell.evaluateScript",
+        find_dock_script(screen),
+    ]
+
+
+def rebuild_dock_script(screen: int) -> str:
+    """Destroy-and-recreate the given screen's Dock in DOCK_WIDGET_ORDER,
+    preserving the panel's own geometry (read from itself just before
+    destroying it). Prints "<newPanelId>,<newIcontasksAppletId>" so the
+    caller can write the preserved launchers value onto the fresh instance.
+
+    Hardware-verified 2026-07-06 this is the only thing that reliably fixes
+    BOTH of reconcile_dock_launchers' known gaps at once: icontasks doesn't
+    live-reload an externally-written `launchers` value (Applet.reloadConfig()
+    hardware-verified NOT to help, unlike simpler config-bound properties),
+    and AppletOrder doesn't take effect live either (same as
+    ensure_panels_script's top-bar-reorder finding) -- so widget-level
+    remove+recreate fixes content but not order, while THIS (panel-level)
+    fixes both, at the cost of a bigger blast radius (every widget on that
+    one panel gets recreated, not just icontasks).
+
+    Known cost, not a bug: a freshly created org.kde.plasma.icontasks seeds
+    itself with Plasma's own default pins (org.kde.discover.desktop showed
+    up as a real example) independent of anything in the `launchers` config
+    key -- writing launchers again afterward does NOT remove it, since it's
+    not coming from that key. One manual unpin clears it and it does not
+    come back unless the panel is rebuilt again. This only runs on explicit
+    request (not from the automatic path-unit trigger) precisely because of
+    this cost -- rebuilding on every reconcile would reintroduce it constantly.
+    """
+    widgets_json = json.dumps(DOCK_WIDGET_ORDER)
+    return f"""\
+var ps = panels();
+var old = null;
+for (var i = 0; i < ps.length; i++) {{
+  if (ps[i].screen === {screen} && ps[i].location === "bottom") old = ps[i];
+}}
+if (!old) {{
+  print("");
+}} else {{
+  var spec = {{
+    alignment: old.alignment, offset: old.offset, lengthMode: old.lengthMode,
+    length: old.length, height: old.height, floating: old.floating, opacity: old.opacity
+  }};
+  old.remove();
+  var p = new Panel;
+  p.screen = {screen};
+  p.location = "bottom";
+  p.alignment = spec.alignment;
+  p.offset = spec.offset;
+  p.lengthMode = spec.lengthMode;
+  if (spec.lengthMode !== "fit" && spec.lengthMode !== "fill" && spec.length > 0) p.length = spec.length;
+  p.height = spec.height;
+  p.floating = spec.floating;
+  p.opacity = spec.opacity;
+  p.hiding = "none";
+  var order = {widgets_json};
+  var icontasksId = -1;
+  for (var i = 0; i < order.length; i++) {{
+    var w = p.addWidget(order[i]);
+    if (order[i] === "org.kde.plasma.icontasks") icontasksId = w.id;
+  }}
+  print(p.id + "," + icontasksId);
+}}
+"""
+
+
+def rebuild_dock_command(screen: int) -> list[str]:
+    return [
+        "qdbus",
+        "org.kde.plasmashell",
+        "/PlasmaShell",
+        "org.kde.PlasmaShell.evaluateScript",
+        rebuild_dock_script(screen),
+    ]
+
+
+def find_dock_panel(screen: int, runner: RunnerT = subprocess.run) -> tuple[str, str] | None:
+    result = runner(find_dock_command(screen), capture_output=True, text=True, check=True)
+    ref = result.stdout.strip()
+    if not ref:
+        return None
+    panel_id, applet_id = ref.split(",")
+    return panel_id, applet_id
+
+
+def rebuild_dock_panel(screen: int, runner: RunnerT = subprocess.run) -> str | None:
+    """Direct user request 2026-07-06 ("重建時直接 filter 掉" / "那把其他螢幕的
+    dock 完全重建不就好了"): rebuild one screen's Dock from scratch in the
+    canonical order, preserving its current pinned-launcher list. Returns a
+    warning string about the Discover-reseed cost (see rebuild_dock_script)
+    if the rebuild happened, or None if that screen had no Dock to rebuild.
+    """
+    found = find_dock_panel(screen, runner)
+    if found is None:
+        return None
+    old_panel_id, old_applet_id = found
+    launchers = _read_launchers(old_panel_id, old_applet_id, runner)
+
+    result = runner(rebuild_dock_command(screen), capture_output=True, text=True, check=True)
+    new_ref = result.stdout.strip()
+    if not new_ref:
+        return None
+    new_panel_id, new_applet_id = new_ref.split(",")
+
+    if launchers:
+        runner(
+            _kwriteconfig(
+                "plasma-org.kde.plasma.desktop-appletsrc",
+                ["Containments", new_panel_id, "Applets", new_applet_id, "Configuration", "General"],
+                "launchers",
+                launchers,
+            ),
+            check=True,
+        )
+    for key in ("minimizeActiveTaskOnClick", "showOnlyCurrentDesktop"):
+        runner(
+            _kwriteconfig(
+                "plasma-org.kde.plasma.desktop-appletsrc",
+                ["Containments", new_panel_id, "Applets", new_applet_id, "Configuration", "General"],
+                key,
+                "false",
+            ),
+            check=True,
+        )
+    return (
+        "Dock rebuilt. If a Discover (or other unexpected) icon shows up, "
+        "that's Plasma's own default seed for a fresh icontasks widget, not "
+        "a config bug -- unpin it by hand once; it won't come back unless "
+        "this screen's Dock is rebuilt again."
+    )
+
+
 @dataclass
 class Preset:
     name: str
@@ -253,8 +484,8 @@ PRESETS: dict[str, Preset] = {
         description=(
             "macOS-like KDE Plasma desktop: window buttons on the left, "
             "natural-scroll + tap-to-click touchpad, unified panel layout "
-            "cloned across screens, Dock (bottom panel) always autohides "
-            "and the top bar never hides, on every screen "
+            "cloned across screens, Dock (bottom panel) and top bar both "
+            "reserve their space and never hide, on every screen "
             "(GZ302EA touchpad id hardcoded)"
         ),
     ),

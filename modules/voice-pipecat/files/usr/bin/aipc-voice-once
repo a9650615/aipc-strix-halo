@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""One-shot push-to-talk voice round trip (v0, text-out, no TTS, no wake word).
+
+Scope cut per explicit user direction (phase-3-voice tasks 1.1, 5.1, 5.2):
+record -> STT -> agent-orchestrator /chat -> desktop notification. No
+CosyVoice/Kokoro TTS, no NPU wake-word classifier, no global hotkey — those
+are separate, deferred pieces (tasks 1.2/2.x/4.x/6.x/7.x). Invoke this
+manually until a hotkey/wake trigger lands.
+
+Plain stdlib, no pipecat-ai: this is a 4-step sequential round trip (record,
+two HTTP POSTs, notify) — pipecat-ai's frame-processor pipeline abstraction
+is built for streaming multi-stage audio graphs (D1's full wake->STT->LLM
+->TTS pipeline), which doesn't exist yet on either end (no wake service, no
+TTS). Force-fitting that framework around two blocking HTTP calls would be
+more code than the problem, not less. Revisit pipecat-ai once the streaming
+pipeline (wake word, TTS, barge-in) is actually being built.
+
+Assumed STT contract (voice-stt-sensevoice, port 9001, not implemented yet
+as of this writing — reconcile against its real README/server.py):
+    POST http://127.0.0.1:9001/transcribe
+    Request:  raw WAV bytes, Content-Type: audio/wav (16 kHz mono S16_LE,
+              matching what record_wav() below produces)
+    Response: 200 {"text": "..."}  on success
+
+agent-orchestrator's /chat contract (port 4100) is real and hardware-verified
+(modules/agent-orchestrator) — {"text": ..., "session_id": ...} in,
+{"text": ..., "task_id": ...} out.
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+
+STT_URL = os.environ.get("AIPC_VOICE_STT_URL", "http://127.0.0.1:9001/transcribe")
+CHAT_URL = os.environ.get("AIPC_VOICE_CHAT_URL", "http://127.0.0.1:4100/chat")
+RECORD_SECONDS = int(os.environ.get("AIPC_VOICE_RECORD_SECONDS", "5"))
+SESSION_ID = os.environ.get("AIPC_VOICE_SESSION_ID", "voice-pipecat-dev")
+
+
+def build_parser():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument(
+        "--seconds", type=int, default=RECORD_SECONDS,
+        help="recording duration in seconds (default: $AIPC_VOICE_RECORD_SECONDS or 5)",
+    )
+    ap.add_argument("--session-id", default=SESSION_ID, help="agent-orchestrator session id")
+    ap.add_argument(
+        "--self-test", action="store_true",
+        help="run offline logic checks only (no mic/network) and exit; used by verify.sh",
+    )
+    return ap
+
+
+def record_wav(path, seconds):
+    """Record `seconds` of audio from the default ALSA input via arecord.
+
+    16 kHz mono S16_LE — a common STT input format, matching the assumed
+    voice-stt-sensevoice contract above.
+    """
+    subprocess.run(
+        ["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", str(seconds), path],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _parse_text_field(raw: bytes) -> str:
+    """Extract `text` from a JSON response body — shared by transcribe() and
+    chat() since both contracts return {"text": "..."}."""
+    return json.loads(raw)["text"]
+
+
+def transcribe(wav_path):
+    with open(wav_path, "rb") as f:
+        data = f.read()
+    req = urllib.request.Request(
+        STT_URL, data=data, method="POST", headers={"Content-Type": "audio/wav"}
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return _parse_text_field(resp.read())
+
+
+def chat(text, session_id):
+    payload = json.dumps({"text": text, "session_id": session_id}).encode()
+    req = urllib.request.Request(
+        CHAT_URL, data=payload, method="POST", headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return _parse_text_field(resp.read())
+
+
+def show(reply):
+    """Display the reply as text — replaces TTS entirely for this v0."""
+    if shutil.which("notify-send"):
+        subprocess.run(["notify-send", "AIPC Assistant", reply], check=False)
+    else:
+        print(f"aipc-voice-once: (notify-send unavailable) reply: {reply}")
+
+
+def _self_test():
+    """Offline checks: no mic, no network. Exercises the parts that don't
+    need live hardware/services so verify.sh has something real to run."""
+    assert STT_URL.startswith("http://127.0.0.1:9001")
+    assert CHAT_URL.startswith("http://127.0.0.1:4100")
+    assert _parse_text_field(b'{"text": "hello"}') == "hello"
+    ns = build_parser().parse_args(["--seconds", "3"])
+    assert ns.seconds == 3
+    print("aipc-voice-once: self-test OK")
+    return 0
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.self_test:
+        return _self_test()
+
+    if not shutil.which("arecord"):
+        print("aipc-voice-once: arecord not found (alsa-utils not installed)", file=sys.stderr)
+        return 1
+
+    fd, wav_path = tempfile.mkstemp(suffix=".wav", prefix="aipc-voice-")
+    os.close(fd)
+    try:
+        print(f"aipc-voice-once: recording {args.seconds}s...")
+        try:
+            record_wav(wav_path, args.seconds)
+        except subprocess.CalledProcessError as exc:
+            print(f"aipc-voice-once: arecord failed: {exc.stderr.decode(errors='replace')}", file=sys.stderr)
+            return 1
+
+        try:
+            text = transcribe(wav_path)
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"aipc-voice-once: STT service unreachable at {STT_URL}: {exc}", file=sys.stderr)
+            return 1
+        print(f"aipc-voice-once: you said: {text}")
+
+        try:
+            reply = chat(text, args.session_id)
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"aipc-voice-once: agent-orchestrator unreachable at {CHAT_URL}: {exc}", file=sys.stderr)
+            return 1
+    finally:
+        os.unlink(wav_path)
+
+    print(f"aipc-voice-once: assistant: {reply}")
+    show(reply)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

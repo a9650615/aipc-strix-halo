@@ -1,1 +1,8 @@
-Phase 4 group 4 — screen control with session-gate + blacklist pending
+Tasks 4.7/4.8 implemented (ydotool wrapper, kdotool blacklist check, VLM
+bridge), all fail-closed against the real aipc-agent-gate. Stays disabled:
+(1) no vision-capable model is registered in LiteLLM (vlm-qwen2vl was cut
+2026-07-04 — task 4.8 cannot do anything but 400 right now), (2) kdotool
+(window-class detection) is declared in packages.txt but was never
+hardware-verified — this dev host's read-only ostree /usr blocks a live
+dnf install. Un-disable once both are resolved on real hardware. See
+README "Verification tiers" for the full breakdown.

@@ -1,0 +1,8 @@
+# Disable runtime PM autosuspend on Thunderbolt/USB4 devices and the host
+# controller. See modules/system-unified-memory/README.md's "USB4 DP
+# tunneling" section: autosuspend lets the USB4 link drop to a low-power
+# state, and waking it for a DP AUX transaction is unreliable on this
+# hardware -- observed as "DPIA AUX failed" kernel errors immediately
+# followed by DMUB HPD IRQ storms and external-monitor blackouts.
+SUBSYSTEM=="thunderbolt", TEST=="power/control", ATTR{power/control}="on"
+SUBSYSTEM=="pci", DRIVER=="thunderbolt", TEST=="power/control", ATTR{power/control}="on"

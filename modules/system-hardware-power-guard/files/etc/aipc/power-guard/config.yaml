@@ -1,0 +1,43 @@
+# AIPC hardware power-guard configuration.
+# Battery back-feed happens when SoC draw exceeds the AC adapter: BAT0 status
+# flips to Discharging while AC0 is online, or power_now goes negative. This
+# guard clamps CPU frequency + EPP to cap draw, then releases adaptively.
+# All values tunable, calibrate on hardware (AI PC). See openspec/changes/power-guard-hardware-limit/.
+
+# OBSERVE-ONLY: log would-act decisions but write nothing to sysfs — safe to
+# run while calibrating against real back-feed. Flip to false once the event
+# log shows the guard reacts correctly, then it will actually clamp.
+dry_run: true
+
+# Polling cadence (seconds) and reconnect observation window. On AC reconnect
+# the guard waits `reconnect_observe_period_s` before expanding limits, to
+# avoid oscillation.
+poll_interval_s: 3
+reconnect_observe_period_s: 30
+
+# Back-feed detection. power_now is in microwatts; negative = battery is
+# discharging. -1W is the early numeric trip; status==Discharging+AC online is
+# the definite trip (checked separately, always acts).
+drain_threshold_uw: -1000000
+
+# Charge cap persistence. ASUS EC resets charge_control_end_threshold to 100 at
+# boot; KDE only re-applies it after login. Set this so the guard re-applies it
+# on boot, closing the reboot gap. Comment out / set null to skip.
+charge_threshold_percent: 85
+
+# Clamp targets — fractions of cpuinfo_max_freq per state.
+emergency_freq_factor: 0.45    # definite back-feed: hard ceiling ~45%
+reconnect_freq_factor: 0.60    # just reconnected: hold 60% during observation
+recover_freq_factor: 0.80      # post-emergency recovery baseline
+expand_step: 0.10              # raise ceiling by 10% per poll while margin grows
+
+# amd-pstate-epp EPP hint per state. Available: default performance
+# balance_performance balance_power power.
+epp_emergency: power
+epp_normal: default
+
+# Paths (defaults match this hardware). Override only if sysfs topology differs.
+# ac_online_path: /sys/class/power_supply/AC0/online
+# bat_path: /sys/class/power_supply/BAT0
+# disable_sentinel: /etc/aipc/power-guard.disabled
+# state_file: /var/lib/aipc-power-guard/state.json

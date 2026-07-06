@@ -28,3 +28,7 @@
 - name: oom-guard
   unit: oom-guard.service
   port: nil
+
+- name: suspend-gpu-guard
+  unit: suspend-gpu-guard.service
+  port: nil
