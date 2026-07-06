@@ -72,7 +72,7 @@
 - [ ] 2.5 Implement Browser sub-agent graph (default model
   `vlm-qwen2vl`, tool: Playwright MCP only; VLM-on-screenshot
   fallback path).
-- [ ] 2.6 Implement Daily Assistant sub-agent graph (default model
+- [x] 2.6 Implement Daily Assistant sub-agent graph (default model
   `intent-3b`, tools: calendar, email, files read).
 - [ ] 2.7 Configure LangGraph sqlite checkpointer at
   `/var/lib/aipc-agent/checkpoints/`; write `aipc agent resume
@@ -92,7 +92,7 @@
 
 ## 4. Tools
 
-- [ ] 4.1 `agent-tools-files`: implement read / write / list /
+- [x] 4.1 `agent-tools-files`: implement read / write / list /
   delete tools; every path passes through the allowlist check
   before any FS syscall; `delete` outside workspace consults the
   permission gate.
