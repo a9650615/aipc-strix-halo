@@ -1,60 +1,68 @@
 ## 1. Module Scaffolding (8 modules)
 
-- [ ] 1.1 `agent-orchestrator`: create `modules/agent-orchestrator/`
-  with README, packages.txt (python3 deps via pipx/distrobox:
-  langgraph, langchain-litellm, fastapi, uvicorn, aiosqlite),
-  files/ for the systemd unit `aipc-agent-orchestrator.service`,
-  post-install.sh (install package, enable service), verify.sh
-  (service active + `GET /chat` returns non-5xx + supervisor graph
-  imports).
-- [ ] 1.2 `agent-code-shell`: create `modules/agent-code-shell/`
-  with README, packages.txt (open-interpreter into the
-  `agent-runtime` distrobox via post-install.sh), files/ (helper
-  wrapper that always shells through `distrobox enter
-  agent-runtime --`), verify.sh (wrapper exists, refuses to run
-  outside distrobox).
-- [ ] 1.3 `agent-browser`: create `modules/agent-browser/`
-  with README, post-install.sh (install Playwright MCP per its
-  vendor-recommended path), files/ (registry entry appended to
-  `/etc/aipc/mcp/servers.json` declaring playwright with
-  `consumers: ["agent", "dev"]`), verify.sh (Playwright MCP binary
-  present + registry entry parseable).
-- [ ] 1.4 `agent-screen-control`: create `modules/agent-screen-control/`
-  with README, packages.txt (xdotool, ydotool, wmctrl,
-  grim/slurp/wayshot equivalent for Wayland screenshot), files/
-  (`/etc/aipc/agent-gate/screen-blacklist.conf` default content,
-  Qwen2-VL bridge script that posts screenshots to LiteLLM
-  `vlm-qwen2vl`), post-install.sh, verify.sh (binaries on PATH +
-  blacklist file present + bridge script importable).
-- [ ] 1.5 `agent-tools-files`: create `modules/agent-tools-files/`
-  with README, files/ (allowlist config at
-  `/etc/aipc/agent-tools/files-allowlist.conf` defaulting to
-  `~/aipc-workspace/`), packages.txt (any python deps),
-  verify.sh (allowlist file present + read/write tools reject
-  paths outside the allowlist).
-- [ ] 1.6 `agent-tools-calendar`: create `modules/agent-tools-calendar/`
-  with README, packages.txt (google-api-python-client, caldav,
-  imap-tools), files/ (backend config at
-  `/etc/aipc/agent-tools/calendar.yaml` with Google + Proton +
-  Fastmail backend stubs; Proton Bridge install hint), post-install.sh
-  (no secret-bake — user runs `aipc agent oauth google` /
-  configures Proton Bridge / Fastmail app password at firstboot),
-  verify.sh (config parseable; INFO if no backend configured).
-- [ ] 1.7 `agent-tools-search`: create `modules/agent-tools-search/`
-  with README, files/ (SearXNG quadlet
-  `/etc/containers/systemd/aipc-searxng.container`, SearXNG
-  settings.yaml seeded, search tool wrapper exposing
-  `search.searxng` always and `search.tavily` when
-  `TAVILY_API_KEY` is set), env/endpoint (declares the SearXNG
-  loopback port), post-install.sh (enable quadlet), verify.sh
-  (SearXNG quadlet active + `search.tavily` advertised only when
-  key present).
-- [ ] 1.8 `agent-mcp-gateway`: create `modules/agent-mcp-gateway/`
-  with README (declares JSON schema for
-  `/etc/aipc/mcp/servers.json`), files/ (seed empty registry with
-  schema version stamp), post-install.sh (no daemon installed —
-  files-only), verify.sh (registry file parseable + schema-valid;
-  fails if any consumer module registered a malformed entry).
+- [x] 1.1 `agent-orchestrator`: real, not just scaffolded —
+  `aipc_agent/server.py` (FastAPI `/chat`) + `graphs.py` (supervisor)
+  exist and are hardware-verified end-to-end (2026-07-05, see
+  `docs/agent-log.md`: real `/chat` round trip through LiteLLM to
+  ornith-35b, SELinux `name_connect` fix applied). Only the
+  *supervisor* graph exists though — no sub-agent graphs (2.2-2.6
+  below), matching its own verify.sh's documented "basic-skeleton
+  scope" comment.
+- [~] 1.2 `agent-code-shell`: distrobox template + packages.txt
+  exist. **Missing the actual safety wrapper** — the file that's
+  supposed to "always shell through `distrobox enter agent-runtime
+  --`, refuse to run outside the sandbox" doesn't exist; verify.sh
+  only checks `.disabled`. This is the security-relevant part of the
+  task and wasn't done. Not attempted this pass — see note below.
+- [~] 1.3 `agent-browser`: registry entry exists (fixed 2026-07-06:
+  referenced a fictitious npm package `@anthropic-ai/mcp-server-playwright`
+  — 404s — same bug class Phase 6 hit in `dev-ai-mcp-dev-servers`;
+  corrected to the real `@playwright/mcp`). Missing: actual Playwright
+  MCP install step in post-install.sh (currently just a comment saying
+  it happens "distrobox-side at runtime" — no script that does it),
+  verify.sh doesn't check binary presence.
+- [~] 1.4 `agent-screen-control`: config (`screen-control.yaml`,
+  mode + blacklist) and 2 of 4 spec'd packages (xdotool, ydotool —
+  missing wmctrl and a Wayland screenshot tool) exist. **Missing
+  entirely**: the execution wrapper that actually drives
+  xdotool/ydotool, the Qwen2-VL screenshot bridge script, and any
+  verify.sh check beyond `.disabled`. This is the most
+  security-sensitive module in the repo (input injection +
+  password-manager blacklist) — real implementation deliberately
+  not attempted this pass, see note below.
+- [~] 1.5 `agent-tools-files`: allowlist config exists. Missing the
+  actual read/write/list/delete tool implementations and their
+  allowlist enforcement.
+- [~] 1.6 `agent-tools-calendar`: config stub exists (Google/Proton/
+  Fastmail backend fields). Missing all three backends' actual logic
+  and the `aipc agent oauth google` CLI.
+- [~] 1.7 `agent-tools-search`: SearXNG quadlet + settings.yml are
+  real and match the spec well. Missing: the tool wrapper that
+  queries `127.0.0.1:8888` and parses JSON, and the Tavily opt-in path.
+- [x] 1.8 `agent-mcp-gateway`: files-only, no daemon (matches spec).
+  verify.sh validates `/etc/aipc/mcp/servers.json` is parseable JSON
+  — reasonable minimum given task 1.8's own scope (schema
+  documentation + empty seed, not a validator).
+
+**Note on 1.2/1.4 (and Groups 2-5 below):** these are the actual
+security-execution core of Phase 4 — sandboxed code execution,
+input-injection screen control, the permission-gate audit/revoke
+system. Auditing/fixing what already exists is one thing; writing the
+part that decides "does this action get to run" is a different kind
+of change (CLAUDE.md §10: security-sensitive default loosening).
+Flagged for an explicit go/no-go from the user rather than
+implemented opportunistically in an audit pass — see session report.
+
+**Groups 2-9 status (2026-07-06 audit):** none of these are implemented
+beyond what group 1 already covers (agent-orchestrator's supervisor graph
+only; every other sub-agent graph, tool, and the entire permission-gate
+system in Group 5 is unbuilt). This is a large, mostly security-sensitive
+build (sandboxed code execution, screen-control input injection + audit
+log, OAuth-backed calendar access) — CLAUDE.md §10 territory, not
+something to implement opportunistically inside an audit pass. Left
+untouched pending an explicit go/no-go + design pass from the user,
+rather than guessed at. Groups 10-12 (build verification, hardware
+verification, archive) are blocked on 2-9 landing first.
 
 ## 2. Agent Framework (LangGraph)
 
