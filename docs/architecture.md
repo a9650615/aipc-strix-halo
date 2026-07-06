@@ -145,7 +145,7 @@ Side-effects:
 
 ---
 
-## 7. Module Inventory (45 modules across 7 phases)
+## 7. Module Inventory (46 modules across 7 phases)
 
 Module structure (each module follows the same shape):
 
@@ -215,6 +215,7 @@ modules/<name>/
 | `agent-tools-calendar` | Calendar + Email (CalDAV / IMAP) tools |
 | `agent-tools-search` | SearXNG self-host + search tool |
 | `agent-mcp-gateway` | MCP server registry + gateway daemon |
+| `agent-gate` | Permission gate: grant/revoke/check/audit for risky actions (UNIX-socket RPC, `aipc-agent-gate.service`) |
 
 ### Phase 5 — Gaming
 
@@ -518,7 +519,7 @@ aipc_setup/
 │   ├── AGENTS.md                  # rules for AI working in this repo
 │   ├── specs/<capability>/        # per-capability specs (populated by archived changes)
 │   └── changes/<id>-<slug>/       # active change proposals
-├── modules/                       # 45 modules (see §7)
+├── modules/                       # 46 modules (see §7)
 ├── targets/
 │   ├── bootc/Containerfile        # primary render
 │   └── ansible/                   # fallback render
