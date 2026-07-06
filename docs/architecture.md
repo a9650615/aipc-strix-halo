@@ -228,16 +228,17 @@ modules/<name>/
 
 | Module | Purpose |
 |---|---|
-| `dev-cli` | gh, lazygit, git-delta, fzf, ripgrep, jq, yq, httpie, mise, etc. |
-| `dev-editors` | VSCode + Zed + Neovim (LazyVim) + fonts + themes |
-| `dev-distrobox-templates` | Node, Python, general distrobox YAML |
+| `dev-cli` | fish/gh/zoxide/bat/eza + fonts (build-time); starship/lazygit/ghostty/mise/atuin documented as manual installs |
+| `dev-editors` | Zed (primary) + VSCode (secondary), runtime Flatpak installs + fonts |
+| `dev-distrobox-templates` | Node, Python distrobox-assemble templates (INI syntax) |
 | `dev-ai-continue` | Continue.dev → LiteLLM config |
 | `dev-ai-cline` | Cline (VSCode) → LiteLLM config |
 | `dev-ai-aider` | Aider → LiteLLM config |
 | `dev-ai-goose` | Goose → LiteLLM + MCP config |
 | `dev-ai-claude-code` | Claude Code CLI |
+| `dev-ai-opencode` | OpenCode CLI → LiteLLM config |
 | `ccs` | CCS — multi-provider Claude Code/Codex/Droid switcher, `aipc` profile → LiteLLM |
-| `dev-ai-mcp-dev-servers` | GitHub / FS / Postgres / Playwright / etc. MCP servers |
+| `dev-ai-mcp-dev-servers` | GitHub / FS / Playwright MCP servers (disabled, blocked on phase-4-agent) |
 
 ### Phase 7 — Ops
 

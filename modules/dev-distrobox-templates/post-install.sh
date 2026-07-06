@@ -1,12 +1,10 @@
 #!/bin/sh
 set -eu
 
-tpl_dir=/etc/aipc/distrobox
-src_dir=/usr/share/aipc/dev-distrobox-templates
-
-mkdir -p "${tpl_dir}"
-for tpl in node.yaml python.yaml; do
-  if [ -f "${src_dir}/${tpl}" ]; then
-    cp "${src_dir}/${tpl}" "${tpl_dir}/${tpl}"
-  fi
-done
+# No-op: the renderer's `COPY modules/dev-distrobox-templates/files/ /` step
+# already stages node.ini/python.ini directly at /etc/aipc/distrobox/ before
+# this script runs. An earlier version of this script tried to re-copy them
+# from a /usr/share/aipc/dev-distrobox-templates staging dir that this
+# module never populates, using the pre-rename .yaml names (see 4cde9b5) --
+# that loop's [ -f ] guard always failed, so it silently did nothing.
+# Removed as dead code.
