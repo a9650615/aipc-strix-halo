@@ -16,7 +16,7 @@ Implemented (tasks 1.1, 2.1, 2.2, 2.6, 7.1–7.3):
   trim; `ornith-35b`, a 35B reasoning + agentic-coding model, is the
   closest remaining fit), OR routes to the Daily Assistant sub-graph on an
   explicit keyword match (`calendar`, `schedule`, `meeting`, `email`,
-  `inbox`, `mail`). This is a simple keyword route, not the generic
+  `inbox`, `mail`, plus file/memory words). This is a simple keyword route, not the generic
   multi-agent router the full spec eventually wants — that waits until
   Researcher/Coder/Browser (2.3–2.5) exist too and a real decomposition
   step is worth the complexity.
@@ -39,16 +39,16 @@ Implemented (tasks 1.1, 2.1, 2.2, 2.6, 7.1–7.3):
     both always return
     `{"status": "not_configured", "tool": "...", "detail": "..."}`
     until one of those backends lands.
-  - `files_read` — **stub**. `agent-tools-files` (task 4.1) landed as a
-    sibling module (`modules/agent-tools-files/`) with a real
-    `read_file(path: str) -> str` (raises `AllowlistViolation`, a
-    `PermissionError` subclass, outside the allowlist) — matches the
-    interface `daily_assistant.py` assumed almost exactly. It isn't wired
-    into agent-orchestrator's venv yet (not in `requirements.txt`/
-    `post-install.sh`), so the `ImportError` fallback still fires and
-    returns the same `not_configured` shape as calendar/email. Wiring the
-    two together (add the dependency, drop the `ImportError` branch) is
-    follow-up work, not done here.
+  - `files_read` — uses `agent-tools-files` (task 4.1) when that sibling
+    module is rendered. `post-install.sh` exposes `/usr/lib/aipc-agent` to
+    the venv, so `from aipc_agent_tools_files import read_file` works
+    without copying code or adding a dependency. If the module is absent,
+    the existing `ImportError` fallback still returns `not_configured`;
+    outside-allowlist reads return `denied`.
+- `files/usr/lib/aipc-agent/aipc_agent/memory.py`: tiny optional mem0 HTTP
+  client. It tries loopback mem0 search/add routes with a 1s timeout,
+  injects remembered facts into both supervisor and Daily Assistant prompts,
+  and fails soft when mem0 is disabled or its route shape changes.
 - `files/usr/lib/aipc-agent/aipc_agent/server.py`: FastAPI `POST /chat`
   accepting `{text, session_id?}`, returning `{text, task_id}` on success
   or `{error: {code, message}}` with a non-200 status on failure.
@@ -58,7 +58,9 @@ Implemented (tasks 1.1, 2.1, 2.2, 2.6, 7.1–7.3):
   for 2.6 — `langchain_core` (tools, messages) ships transitively with
   `langgraph`/`langchain-litellm`.
 - `post-install.sh` builds a venv at `/usr/lib/aipc-agent/venv`, installs
-  the pinned requirements, enables `aipc-agent-orchestrator.service`.
+  the pinned requirements, exposes `/usr/lib/aipc-agent` via a `.pth` file
+  so sibling stdlib packages such as `aipc_agent_tools_files` are importable,
+  and enables `aipc-agent-orchestrator.service`.
 - `files/etc/systemd/system/aipc-agent-orchestrator.service`: native
   systemd unit (not a container/quadlet — this daemon doesn't need
   sandboxing, only the future Coder sub-agent's code execution does),
@@ -113,10 +115,11 @@ unaffected.
 - llm-litellm (all LLM calls route through the gateway)
 - agent-tools-search, agent-browser, agent-code-shell (sub-agent tools —
   not yet wired up)
-- agent-tools-files (task 4.1, landed as `modules/agent-tools-files/` but
-  not yet in this module's `requirements.txt`/`post-install.sh`):
-  `daily_assistant.py`'s `files_read` imports `aipc_agent_tools_files`;
-  wiring it in is follow-up work.
+- agent-tools-files (task 4.1): `daily_assistant.py`'s `files_read` imports
+  `aipc_agent_tools_files`; post-install's `.pth` makes the sibling package
+  visible when it is present, and the tool fails closed when it is absent.
+- memory-mem0 (optional, Phase 2): consumed over HTTP only; disabled or
+  unreachable mem0 never breaks `/chat`.
 - agent-tools-calendar (tasks 4.2–4.4, not started): `calendar_lookup`/
   `email_lookup` are stubs until one of its backends exists.
 

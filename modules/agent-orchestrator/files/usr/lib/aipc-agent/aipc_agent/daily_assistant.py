@@ -20,14 +20,13 @@ tools bound to it. Wired into `graphs.supervisor()` as an explicit keyword
 routed dispatch target — not a generic multi-agent router (that's future
 scope once Researcher/Coder/Browser exist too).
 
-None of the three tool backends exist yet:
+Tool backend state:
 - calendar / email: agent-tools-calendar (tasks 4.2-4.4) is unimplemented.
   Stubbed to fail closed with a structured "not_configured" response.
 - files.read: agent-tools-files (task 4.1) landed as a sibling module
-  (modules/agent-tools-files/) but isn't installed into this venv yet —
-  the import below still fails until it's wired into agent-orchestrator's
-  requirements/post-install. Assumed interface (matches the real module,
-  confirmed by inspection):
+  (modules/agent-tools-files/). post-install exposes /usr/lib/aipc-agent to
+  this venv so the import works when both modules are rendered. Assumed
+  interface (matches the real module, confirmed by inspection):
 
       from aipc_agent_tools_files import read_file
       def read_file(path: str) -> str: ...  # raises PermissionError if
@@ -35,6 +34,7 @@ None of the three tool backends exist yet:
                                               # allowlist
 
   Falls back to the same "not_configured" stub if the import fails.
+- memory: optional mem0 HTTP client; missing/unreachable memory fails soft.
 """
 
 from typing import Annotated, TypedDict
@@ -46,6 +46,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from aipc_agent import memory
 from aipc_agent._util import text_of
 
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
@@ -58,7 +59,8 @@ DAILY_ASSISTANT_MODEL = "ornith-35b"
 SYSTEM_PROMPT = (
     "You are the aipc assistant's Daily Assistant persona, running locally "
     "on the user's own AI PC. You have tools for calendar, email, and file "
-    "access, but none of their backends are configured yet — when a tool "
+    "access, plus best-effort local memory when mem0 is available, but most "
+    "tool backends are still incomplete — when a tool "
     "returns a not_configured status, tell the user plainly that this "
     "specific feature isn't set up yet, don't apologize generically. You "
     "cannot control the screen or launch applications."
@@ -126,8 +128,15 @@ def _chat_model() -> ChatLiteLLM:
     ).bind_tools(TOOLS)
 
 
+def _memory_messages(state: DailyAssistantState) -> list[SystemMessage]:
+    remembered = memory.recall(state["text"], state["session_id"])
+    if not remembered:
+        return []
+    return [SystemMessage(content=f"Relevant remembered facts:\n{remembered}")]
+
+
 def _seed(state: DailyAssistantState) -> dict:
-    return {"messages": [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=state["text"])]}
+    return {"messages": [SystemMessage(content=SYSTEM_PROMPT), *_memory_messages(state), HumanMessage(content=state["text"])]}
 
 
 def _agent(state: DailyAssistantState) -> dict:
@@ -142,7 +151,9 @@ def _agent(state: DailyAssistantState) -> dict:
 
 
 def _finish(state: DailyAssistantState) -> dict:
-    return {"text": text_of(state["messages"][-1].content), "session_id": state["session_id"]}
+    text = text_of(state["messages"][-1].content)
+    memory.remember(f"User: {state['text']}\nAssistant: {text}", state["session_id"])
+    return {"text": text, "session_id": state["session_id"]}
 
 
 def daily_assistant():

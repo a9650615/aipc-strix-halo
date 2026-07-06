@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_litellm import ChatLiteLLM
 from langgraph.graph import END, StateGraph
 
+from aipc_agent import memory
 from aipc_agent._util import text_of
 from aipc_agent.daily_assistant import daily_assistant
 
@@ -35,6 +36,7 @@ SUPERVISOR_SYSTEM_PROMPT = (
     "You are the aipc assistant, a conversational AI running entirely "
     "locally on this user's own AMD Strix Halo AI PC (no cloud calls, no "
     "internet dependency for inference). Answer directly and concisely. "
+    "Relevant remembered facts may be included when local memory is available. "
     "You currently cannot control the screen, launch applications, or "
     "browse the web — say so plainly if asked, don't apologize like a "
     "generic assistant with no context about this machine."
@@ -43,7 +45,10 @@ SUPERVISOR_SYSTEM_PROMPT = (
 # ponytail: keyword match, not intent classification — good enough to reach
 # the Daily Assistant sub-graph today; replace with real routing once a
 # second sub-agent (2.3-2.5) makes a keyword list unworkable.
-_DAILY_ASSISTANT_KEYWORDS = ("calendar", "schedule", "meeting", "email", "inbox", "mail")
+_DAILY_ASSISTANT_KEYWORDS = (
+    "calendar", "schedule", "meeting", "email", "inbox", "mail",
+    "file", "read", "remember", "memory", "recall",
+)
 
 
 class SupervisorState(TypedDict):
@@ -66,11 +71,19 @@ def _chat_model(model: str) -> ChatLiteLLM:
     )
 
 
+def _memory_messages(state: SupervisorState) -> list[SystemMessage]:
+    remembered = memory.recall(state["text"], state["session_id"])
+    if not remembered:
+        return []
+    return [SystemMessage(content=f"Relevant remembered facts:\n{remembered}")]
+
+
 def _respond(state: SupervisorState) -> SupervisorState:
-    reply = _chat_model(SUPERVISOR_MODEL).invoke(
-        [SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT), HumanMessage(content=state["text"])]
-    )
-    return {"text": text_of(reply.content), "session_id": state["session_id"]}
+    messages = [SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT), *_memory_messages(state), HumanMessage(content=state["text"])]
+    reply = _chat_model(SUPERVISOR_MODEL).invoke(messages)
+    text = text_of(reply.content)
+    memory.remember(f"User: {state['text']}\nAssistant: {text}", state["session_id"])
+    return {"text": text, "session_id": state["session_id"]}
 
 
 _daily_assistant_graph = daily_assistant()
@@ -119,7 +132,9 @@ def self_test() -> None:
 
     assert da.calendar_lookup.invoke({"query": "x"})["status"] == "not_configured"
     assert da.email_lookup.invoke({"query": "x"})["status"] == "not_configured"
-    assert da.files_read.invoke({"path": "/etc/passwd"})["status"] == "not_configured"
+    denied = da.files_read.invoke({"path": "/etc/passwd"})
+    assert denied["status"] in {"not_configured", "denied"}
+    assert "root:" not in str(denied)
 
     captured = {}
     real_init = ChatLiteLLM.__init__
@@ -132,10 +147,14 @@ def self_test() -> None:
         da._chat_model()
     assert captured["model"] == da.DAILY_ASSISTANT_MODEL == "ornith-35b"
 
-    with patch.object(ChatLiteLLM, "invoke", return_value=AIMessage(content="mocked reply")):
+    with patch.object(memory, "recall", return_value="likes concise replies") as recall, \
+         patch.object(memory, "remember") as remember, \
+         patch.object(ChatLiteLLM, "invoke", return_value=AIMessage(content="mocked reply")):
         assert graph.invoke({"text": "hello", "session_id": "s1"})["text"] == "mocked reply"
         result = da_graph.invoke({"text": "book a meeting", "session_id": "s2", "messages": []})
         assert result["text"] == "mocked reply"
+        assert recall.call_count == 2
+        assert remember.call_count == 2
 
     print("self_test: OK")
 

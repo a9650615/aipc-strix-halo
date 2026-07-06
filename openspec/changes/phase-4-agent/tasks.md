@@ -174,8 +174,10 @@
 
 - [ ] 8.1 `aipc doctor`: add `agent-runtime` section running each
   module's `verify.sh`.
-- [ ] 8.2 LangGraph import smoke: `python -c "import langgraph"`
-  inside `agent-orchestrator`'s runtime environment exits 0.
+- [x] 8.2 LangGraph import smoke: `python -c "import langgraph"`
+  inside `agent-orchestrator`'s runtime environment exits 0. Also covers
+  `agent-orchestrator` graph self-test in the live venv and fail-closed
+  `/etc/passwd` file-read regression.
 - [ ] 8.3 Distrobox sandbox check: assert
   `/etc/aipc/distrobox/templates/agent-runtime.yaml` exists and
   parses; assert `agent-runtime` container assembleable (dry-run).
