@@ -31,6 +31,11 @@ argument workarounds needed for this hardware to boot with a stable display.
   forces `quiet` (ahead of every other rule) if the battery is actually discharging while
   AC is online — i.e. the current draw exceeds what this charger can supply. See "Known
   issue: idle power draw" and "Known issue: battery drains under a weak charger" below.
+- Enables `gpu-hang-watch.service`, a 5s-poll journal watcher that captures a diagnostic
+  snapshot (kernel + full journal, amdgpu devcoredump if present, power/GPU state) to
+  `/var/log/aipc/gpu-hang/<timestamp>/` the moment the resume-from-s2idle hang signature
+  appears — before the desktop goes fully unresponsive. See "Known issue:
+  resume-from-s2idle amdgpu/SMU hang" below.
 
 ## Dependencies
 
@@ -149,8 +154,16 @@ functional regression risk for anything relying on shader preemption. Direct use
 exists today (deep/S3 sleep isn't available on this hardware — `/sys/power/mem_sleep` only
 lists `[s2idle]` — so switching sleep modes isn't on the table either).
 
+`gpu-hang-watch.service` (5s journal poll, see "What it does" above) captures a diagnostic
+snapshot to `/var/log/aipc/gpu-hang/<timestamp>/` (kernel + full journal, amdgpu devcoredump
+if still present, power/GPU state, one JSON line per event in `events.jsonl`) the moment the
+hang signature appears — so the next occurrence doesn't need a live session manually
+grepping journalctl by wall-clock time the way this entry's own investigation did. Doesn't
+prevent or fix the hang, just makes the post-mortem faster.
+
 **Re-check when revisiting this module:**
-1. Did `amdgpu.cwsr_enable=0` actually reduce/eliminate recurrences after real use? Record
+1. Check `/var/log/aipc/gpu-hang/events.jsonl` for new entries — did
+   `amdgpu.cwsr_enable=0` actually reduce/eliminate recurrences after real use? Record
    the outcome here either way — this entry should not stay "attempted, unconfirmed"
    forever.
 2. Has `ROCm/ROCm#5590`/`#5724`/`#6165` (or their eventual duplicates) closed with a real

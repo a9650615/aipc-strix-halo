@@ -1,0 +1,11 @@
+[Unit]
+Description=Capture diagnostics on the resume-from-s2idle amdgpu/SMU hang signature
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/aipc/gpu-hang-watch
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

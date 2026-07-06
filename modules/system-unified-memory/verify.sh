@@ -40,3 +40,7 @@ if [ -r /proc/acpi/wakeup ]; then
   ! grep -qE '^GPP[01][[:space:]].*\*enabled' /proc/acpi/wakeup \
     || fail "system-unified-memory: GPP0/GPP1 still enabled as ACPI wake sources (gpp-wake-fix.service didn't run or failed)"
 fi
+
+# gpu-hang-watch running (see README "Known issue: resume-from-s2idle amdgpu/SMU hang")
+systemctl is-active --quiet gpu-hang-watch.service \
+  || fail "system-unified-memory: gpu-hang-watch.service not active"

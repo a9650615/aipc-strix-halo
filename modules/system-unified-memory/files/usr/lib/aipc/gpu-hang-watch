@@ -1,0 +1,64 @@
+#!/bin/sh
+# gpu-hang-watch — detect the resume-from-s2idle amdgpu/SMU hang signature
+# (see README "Known issue: resume-from-s2idle amdgpu/SMU hang") early and
+# capture a diagnostic snapshot before the machine goes fully unresponsive
+# and needs a hard power-off. Runs no differently whether cwsr_enable=0
+# actually fixes the hang or not -- this is a safety net for "next time",
+# not a fix.
+set -eu
+
+POLL_INTERVAL=5
+COOLDOWN_SECONDS=600
+STATE_DIR=/var/log/aipc/gpu-hang
+SIGNATURE='SMU: No response|ring gfx_[0-9.]+ timeout|MES failed to respond|GPU reset begin'
+
+mkdir -p "$STATE_DIR"
+
+cooldown_active() {
+  [ -e "$STATE_DIR/.last-capture" ] || return 1
+  last=$(stat -c %Y "$STATE_DIR/.last-capture" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  [ $((now - last)) -lt "$COOLDOWN_SECONDS" ]
+}
+
+capture() {
+  ts=$(date -u +%Y%m%dT%H%M%SZ)
+  dir="$STATE_DIR/$ts"
+  mkdir -p "$dir"
+
+  journalctl -k -b0 --since "-5 minutes" --no-pager > "$dir/journal-kernel.txt" 2>&1 || true
+  journalctl -b0 --since "-5 minutes" --no-pager > "$dir/journal-full.txt" 2>&1 || true
+
+  for f in /sys/class/drm/card*/device/devcoredump/data; do
+    [ -r "$f" ] || continue
+    cp "$f" "$dir/devcoredump.bin" 2>/dev/null && gzip -f "$dir/devcoredump.bin" || true
+  done
+
+  {
+    echo "captured_at=$ts"
+    echo "ac_online=$(cat /sys/class/power_supply/AC0/online 2>/dev/null || echo unknown)"
+    for gf in /sys/class/drm/card*/device/gpu_busy_percent; do
+      [ -r "$gf" ] && echo "gpu_busy_percent[$gf]=$(cat "$gf" 2>/dev/null)"
+    done
+    uptime 2>/dev/null || true
+    systemd-inhibit --list 2>/dev/null || true
+  } > "$dir/state.txt"
+
+  printf '{"ts": "%s", "classification": "resume-s2idle-mes-smu", "capture_dir": "%s"}\n' \
+    "$ts" "$dir" >> "$STATE_DIR/events.jsonl"
+
+  touch "$STATE_DIR/.last-capture"
+  echo "gpu-hang-watch: captured diagnostics to $dir" >&2
+}
+
+echo "gpu-hang-watch: watching journal for resume-from-s2idle hang signature" >&2
+
+while true; do
+  if ! cooldown_active; then
+    if journalctl -k -o cat --since "-${POLL_INTERVAL} seconds" --no-pager 2>/dev/null \
+        | grep -qE "$SIGNATURE"; then
+      capture
+    fi
+  fi
+  sleep "$POLL_INTERVAL"
+done
