@@ -1,6 +1,6 @@
 ## 1. Module Scaffolding (8 modules)
 
-- [ ] 1.1 `agent-orchestrator`: create `modules/agent-orchestrator/`
+- [x] 1.1 `agent-orchestrator`: create `modules/agent-orchestrator/`
   with README, packages.txt (python3 deps via pipx/distrobox:
   langgraph, langchain-litellm, fastapi, uvicorn, aiosqlite),
   files/ for the systemd unit `aipc-agent-orchestrator.service`,
@@ -58,9 +58,9 @@
 
 ## 2. Agent Framework (LangGraph)
 
-- [ ] 2.1 Pin `langgraph` and `langchain-litellm` versions in
+- [x] 2.1 Pin `langgraph` and `langchain-litellm` versions in
   `agent-orchestrator/packages.txt` (no floating range).
-- [ ] 2.2 Implement the supervisor graph: accepts `{text, session_id}`
+- [x] 2.2 Implement the supervisor graph: accepts `{text, session_id}`
   input, decomposes into sub-tasks, dispatches sub-agents (serial or
   parallel), merges outputs, returns `{text, task_id}`.
 - [ ] 2.3 Implement Researcher sub-agent graph (default model
@@ -158,12 +158,12 @@
 
 ## 7. Voice Integration
 
-- [ ] 7.1 FastAPI app: `POST /chat` route accepting `{text,
+- [x] 7.1 FastAPI app: `POST /chat` route accepting `{text,
   session_id?}` JSON; binds to `127.0.0.1:4100` (port declared in
   `agent-orchestrator/env/endpoint`).
-- [ ] 7.2 Response shape: `{text, task_id}`; errors return
+- [x] 7.2 Response shape: `{text, task_id}`; errors return
   structured `{error: {code, message}}` with non-200 status.
-- [ ] 7.3 Document the Pipecat client config example in
+- [x] 7.3 Document the Pipecat client config example in
   `agent-orchestrator/README.md` (Phase 3 will consume; this is
   reference, not an implementation here).
 - [ ] 7.4 Timeout behavior: default per-request timeout 120 s; long

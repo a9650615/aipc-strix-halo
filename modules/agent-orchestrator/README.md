@@ -6,7 +6,7 @@ LangGraph supervisor (D1). Full design dispatches 4 sub-agents (D2):
 - Browser (default: `vlm-qwen2vl`)
 - Daily Assistant (default: `intent-3b`)
 
-## Current status: basic skeleton only, still `.disabled`
+## Current status: basic skeleton, enabled
 
 Implemented (tasks 1.1, 2.1, 2.2, 7.1–7.3):
 - `files/usr/lib/aipc-agent/aipc_agent/graphs.py`: `supervisor()` — a
@@ -33,19 +33,11 @@ Not implemented yet (deferred, matches tasks 2.3–2.6 / groups 3/4/5/6):
 sub-agent dispatch, tool suite, permission gate, `agent-runtime` sandbox
 distrobox, MCP registry, LangGraph sqlite checkpointer/resume.
 
-**Verified 2026-07-04**: `ChatLiteLLM(model=..., api_base="http://127.0.0.1:4000",
-custom_llm_provider="openai", api_key="aipc-local")` round-trips a real chat
-completion against the live LiteLLM gateway (tested against `resident-small`).
-The `supervisor` graph and the `/chat` endpoint's happy/error paths are
-verified with the LLM call mocked (state flows through correctly, model
-alias `ornith-35b` is what gets called, error path returns the documented
-`502`/`error.code` shape). Live end-to-end verification of the full
-`/chat` → supervisor → LiteLLM → Ollama round trip on `ornith-35b` itself is
-**not yet done** — Ollama was continuously busy with unrelated large
-background jobs (apparent mem0 session-summarization traffic) every time
-this was attempted; re-run once Ollama has an idle window. Module stays
-`.disabled` until that's done, per CLAUDE.md §9 (only a hardware-verified
-claim moves a module out of `.disabled`).
+**Hardware-verified 2026-07-06**: with Ollama idle, `POST /chat
+{"text": "say OK"}` against the live service returned `HTTP 200`
+`{"text":"OK","task_id":"..."}` — the full `/chat` → supervisor →
+LiteLLM → Ollama (`ornith-35b`) round trip works end to end on real
+hardware. `.disabled` removed per CLAUDE.md §9.
 
 ## Dependencies
 - llm-litellm (all LLM calls route through the gateway)
