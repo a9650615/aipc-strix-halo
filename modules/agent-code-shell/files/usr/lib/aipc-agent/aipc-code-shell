@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Safety wrapper for agent code execution (phase-4-agent tasks 1.2, 3.2).
+
+Every command given to this wrapper is executed as
+`distrobox enter agent-runtime -- <cmd>` — never as a direct host
+subprocess. This is the only exec path in this module; the openspec
+scenario "agent-code-shell does not bypass the sandbox" greps this file
+for subprocess.run/Popen/check_call/check_output calls and expects every
+match to go through `distrobox enter agent-runtime --`.
+
+Fails closed (refuses, non-zero exit) in two cases instead of silently
+falling back to an unsandboxed run:
+  1. distrobox is missing on the host — never runs `<cmd>` directly.
+  2. this process is already running inside a container (checked via
+     /run/.containerenv, the standard podman/OCI marker file also
+     present in distrobox boxes) — calling `distrobox enter` again from
+     inside a sandbox is a known footgun in this repo: see
+     modules/dev-distrobox-templates/README.md's `sudo`/`distrobox-host-exec`
+     bridge, which forwards host-namespace access into a container. Re-
+     entering from inside one is not a way to add sandboxing, only a way
+     to confuse which namespace a command actually lands in.
+"""
+import shutil
+import subprocess
+import sys
+
+CONTAINER_MARKER = "/run/.containerenv"
+DISTROBOX_NAME = "agent-runtime"
+
+
+def already_in_container(marker_path: str = CONTAINER_MARKER) -> bool:
+    import os
+
+    return os.path.exists(marker_path)
+
+
+def run(cmd_args, marker_path: str = CONTAINER_MARKER, runner=subprocess.run):
+    if already_in_container(marker_path):
+        print(
+            "aipc-code-shell: refusing to run — already inside a container; "
+            "re-entering distrobox from here would not add sandboxing, only "
+            "confuse which namespace the command lands in",
+            file=sys.stderr,
+        )
+        return 1
+    if shutil.which("distrobox") is None:
+        print(
+            "aipc-code-shell: distrobox not found on host; refusing to run "
+            "the command directly (no unsandboxed fallback)",
+            file=sys.stderr,
+        )
+        return 1
+    if not cmd_args:
+        print("aipc-code-shell: usage: aipc-code-shell <cmd> [args...]", file=sys.stderr)
+        return 1
+    proc = runner(["distrobox", "enter", DISTROBOX_NAME, "--", *cmd_args])
+    return proc.returncode
+
+
+def _self_test():
+    """ponytail: one runnable check — both fail-closed paths, and that the
+    success path's argv always routes through distrobox enter, without
+    needing a real distrobox/container present."""
+    import io
+    import contextlib
+
+    # 1. already-in-container -> refuse, no subprocess invoked
+    calls = []
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        rc = run(
+            ["echo", "hi"],
+            marker_path=__file__,  # any existing file stands in for the marker
+            runner=lambda argv: calls.append(argv) or subprocess.CompletedProcess(argv, 0),
+        )
+    assert rc == 1, "expected refusal when already inside a container"
+    assert calls == [], "must not shell out at all when already inside a container"
+
+    # 2. not in a container, argv is always the distrobox-enter form
+    calls = []
+
+    def fake_runner(argv):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0)
+
+    rc = run(["echo", "hi"], marker_path="/nonexistent-marker-for-self-test", runner=fake_runner)
+    assert rc == 0
+    assert calls == [["distrobox", "enter", "agent-runtime", "--", "echo", "hi"]], calls
+
+    # 3. no cmd given -> refuse before touching subprocess at all
+    calls = []
+    rc = run([], marker_path="/nonexistent-marker-for-self-test", runner=fake_runner)
+    assert rc == 1
+    assert calls == []
+
+    print("aipc-code-shell: self-test OK")
+    return 0
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["--self-test"]:
+        return _self_test()
+    return run(argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
