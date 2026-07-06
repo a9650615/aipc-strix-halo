@@ -21,8 +21,13 @@ routed dispatch target — not a generic multi-agent router (that's future
 scope once Researcher/Coder/Browser exist too).
 
 Tool backend state:
-- calendar / email: agent-tools-calendar (tasks 4.2-4.4) is unimplemented.
-  Stubbed to fail closed with a structured "not_configured" response.
+- calendar / email: agent-tools-calendar (tasks 4.2-4.4) landed as a sibling
+  module (modules/agent-tools-calendar/) exposing lookup_events/lookup_email.
+  Falls back to "not_configured" if the import fails (module not rendered).
+- search: agent-tools-search (tasks 4.5-4.6) landed as a sibling module
+  exposing search_searxng/search_tavily; Tavily only lights up once a real
+  key resolves at runtime (see that module's README for the outstanding
+  decrypt-cloud-keys.sh gap).
 - files.read: agent-tools-files (task 4.1) landed as a sibling module
   (modules/agent-tools-files/). post-install exposes /usr/lib/aipc-agent to
   this venv so the import works when both modules are rendered. Assumed
@@ -70,25 +75,61 @@ SYSTEM_PROMPT = (
 @tool
 def calendar_lookup(query: str) -> dict:
     """Look up calendar events matching `query`."""
-    # ponytail: stub — agent-tools-calendar (phase-4-agent#4.2/4.3/4.4:
-    # Google/Proton/Fastmail backends) doesn't exist yet. Replace this body
-    # once one of those lands.
-    return {
-        "status": "not_configured",
-        "tool": "calendar",
-        "detail": "no calendar backend configured yet (phase-4-agent#4.2-4.4)",
-    }
+    try:
+        from aipc_agent_tools_calendar import lookup_events  # phase-4-agent#4.2-4.4
+    except ImportError:
+        return {
+            "status": "not_configured",
+            "tool": "calendar",
+            "detail": "agent-tools-calendar not installed yet (phase-4-agent#4.2-4.4)",
+        }
+    return lookup_events(query)
 
 
 @tool
 def email_lookup(query: str) -> dict:
     """Search email matching `query`."""
-    # ponytail: stub — same as calendar_lookup, no email backend yet.
-    return {
-        "status": "not_configured",
-        "tool": "email",
-        "detail": "no email backend configured yet (phase-4-agent#4.2-4.4)",
-    }
+    try:
+        from aipc_agent_tools_calendar import lookup_email  # phase-4-agent#4.2-4.4
+    except ImportError:
+        return {
+            "status": "not_configured",
+            "tool": "email",
+            "detail": "agent-tools-calendar not installed yet (phase-4-agent#4.2-4.4)",
+        }
+    return lookup_email(query)
+
+
+@tool
+def search(query: str, limit: int = 5) -> dict:
+    """Search the web via self-hosted SearXNG, falling back to nothing if
+    unreachable. Advertise search_tavily separately only when configured
+    (aipc_agent_tools_search.available_tools() tells you which)."""
+    try:
+        from aipc_agent_tools_search import search_searxng  # phase-4-agent#4.5
+    except ImportError:
+        return {
+            "status": "not_configured",
+            "tool": "search",
+            "detail": "agent-tools-search not installed yet (phase-4-agent#4.5)",
+        }
+    return search_searxng(query, limit=limit)
+
+
+@tool
+def search_tavily(query: str, limit: int = 5) -> dict:
+    """Paid-tier web search via Tavily. Only useful when TAVILY_API_KEY is
+    configured -- returns {"status": "not_configured"} otherwise, so check
+    aipc_agent_tools_search.available_tools() before relying on this."""
+    try:
+        from aipc_agent_tools_search import search_tavily as _search_tavily  # phase-4-agent#4.6
+    except ImportError:
+        return {
+            "status": "not_configured",
+            "tool": "search_tavily",
+            "detail": "agent-tools-search not installed yet (phase-4-agent#4.6)",
+        }
+    return _search_tavily(query, limit=limit)
 
 
 @tool
@@ -110,7 +151,7 @@ def files_read(path: str) -> dict:
         return {"status": "denied", "tool": "files.read", "detail": str(exc)}
 
 
-TOOLS = [calendar_lookup, email_lookup, files_read]
+TOOLS = [calendar_lookup, email_lookup, files_read, search, search_tavily]
 
 
 class DailyAssistantState(TypedDict):

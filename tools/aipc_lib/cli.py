@@ -20,6 +20,7 @@ from aipc_lib import models as models_mod
 from aipc_lib import opencode_sync as opencode_sync_mod
 from aipc_lib import panel_mirror as panel_mirror_mod
 from aipc_lib import rag as rag_mod
+from aipc_lib import screen_client
 from aipc_lib import secrets
 from aipc_lib import status_dashboard as status_mod
 from aipc_lib import tools_menu as tools_menu_mod
@@ -194,6 +195,74 @@ def agent_gate_status() -> None:
             str(g.get("granted_at")),
         )
     Console().print(table)
+
+
+@agent_cmd.group("oauth")
+def agent_oauth_cmd() -> None:
+    """Provision OAuth-backed tool credentials (phase-4-agent#4.2)."""
+
+
+@agent_oauth_cmd.command("google")
+@click.option(
+    "--client-secret",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to the Google OAuth client_secret.json (downloaded from Google Cloud Console).",
+)
+@click.option(
+    "--token-path",
+    default="/var/lib/aipc-agent/oauth/google.json",
+    show_default=True,
+    help="Where to store the resulting token (0600, user-owned, never baked).",
+)
+def agent_oauth_google(client_secret: str, token_path: str) -> None:
+    """Run the interactive Google Calendar OAuth consent flow.
+
+    Opens a local browser for consent, then stores the refresh token at
+    --token-path. See modules/agent-tools-calendar/README.md.
+    """
+    sys.path.insert(0, "/usr/lib/aipc-agent")
+    try:
+        from aipc_agent_tools_calendar import run_google_oauth_flow
+    except ImportError:
+        click.echo(
+            "aipc_agent_tools_calendar not installed — is the "
+            "agent-tools-calendar module rendered on this image?",
+            err=True,
+        )
+        sys.exit(1)
+    result = run_google_oauth_flow(client_secret, token_path=token_path)
+    click.echo(json.dumps(result))
+    if result.get("status") != "ok":
+        sys.exit(1)
+
+
+@agent_cmd.command("screen")
+@click.option("--mode", type=click.Choice(["session", "always"]), default=None)
+@click.option("--revoke", is_flag=True, default=False)
+@click.argument("duration", required=False)
+def agent_screen_cmd(mode: str | None, revoke: bool, duration: str | None) -> None:
+    """Grant/revoke screen-control permission (phase-4-agent#5.3).
+
+    `aipc agent screen --mode session <seconds>` | `--mode always` | `--revoke`.
+    A grant only lifts the gate check -- it never bypasses the window-class
+    blacklist at /etc/aipc/agent-gate/screen-blacklist.conf.
+    """
+    if revoke:
+        resp = screen_client.revoke()
+    elif mode == "session":
+        if not duration:
+            click.echo("--mode session needs a DURATION in seconds", err=True)
+            sys.exit(1)
+        resp = screen_client.grant_session(duration)
+    elif mode == "always":
+        resp = screen_client.grant_always()
+    else:
+        click.echo("need --mode session <duration>, --mode always, or --revoke", err=True)
+        sys.exit(1)
+    click.echo(json.dumps(resp))
+    if "error" in resp:
+        sys.exit(1)
 
 
 @main.group()
