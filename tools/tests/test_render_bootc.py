@@ -60,4 +60,4 @@ def test_aipc_cli_installed(two_mods: list[Module]) -> None:
     out = render(two_mods, base="base:latest", image_ref="x", build_date="d")
     assert "COPY tools/ /usr/lib/aipc/tools/" in out
     assert "pip install --no-cache-dir /usr/lib/aipc/tools" in out
-    assert "ln -sf /usr/lib/aipc/tools/.venv/bin/aipc /usr/local/bin/aipc" in out
+    assert "ln -sf /usr/lib/aipc/tools/.venv/bin/aipc /usr/bin/aipc" in out

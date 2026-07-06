@@ -27,11 +27,17 @@ def render(
     # previously a manual "pip install --user -e" runbook step
     # (openspec/changes/phase-0-foundation/tasks.md#8.5) that never actually
     # ran on a real deployed image.
+    #
+    # Symlink target is /usr/bin, not /usr/local/bin: on this bootc image
+    # /usr/local is a symlink to /var/usrlocal, which doesn't exist yet at
+    # build time (write goes to the read-only /usr layer, `ln` fails with
+    # "No such file or directory") -- the same trap already hit and
+    # documented in db-postgres's README and secrets-sops (503c175).
     lines.append("COPY tools/ /usr/lib/aipc/tools/")
     lines.append(
         "RUN python3 -m venv /usr/lib/aipc/tools/.venv "
         "&& /usr/lib/aipc/tools/.venv/bin/pip install --no-cache-dir /usr/lib/aipc/tools "
-        "&& ln -sf /usr/lib/aipc/tools/.venv/bin/aipc /usr/local/bin/aipc"
+        "&& ln -sf /usr/lib/aipc/tools/.venv/bin/aipc /usr/bin/aipc"
     )
     lines.append("")
 

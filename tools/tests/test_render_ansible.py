@@ -85,4 +85,4 @@ def test_aipc_cli_installed(two_mods: list[Module]) -> None:
     install_task = next((t for t in tasks if "aipc" in str(t.get("shell", ""))), None)
     assert install_task is not None
     assert "pip install --no-cache-dir /usr/lib/aipc/tools" in install_task["shell"]
-    assert install_task["args"]["creates"] == "/usr/local/bin/aipc"
+    assert install_task["args"]["creates"] == "/usr/bin/aipc"
