@@ -1,1 +1,8 @@
 python3-dateutil
+python3-pyyaml
+# Google Calendar backend only (task 4.2). Lazily imported and guarded with
+# ImportError -> not_configured, so the tool degrades cleanly if these land
+# in a Python environment that can't see them (see README's venv-visibility
+# note — the orchestrator's venv is created without --system-site-packages).
+python3-google-api-client
+python3-google-auth-oauthlib

@@ -1,11 +1,33 @@
 # Calendar provider configuration — D8
+#
+# No secrets live in this file. Passwords/app-passwords are read at runtime
+# from the *_password_file path below (0600, user-owned — write it by hand
+# at firstboot, never bake it into the image; see CLAUDE.md §5).
 providers:
   google:
     enabled: false
-    # Configure at firstboot: aipc agent oauth google
+    # Configure at firstboot:
+    #   aipc agent oauth google --client-secret /path/to/client_secret.json
+    # Token is stored at /var/lib/aipc-agent/oauth/google.json (0600).
+    # Calendar only — Gmail is not wired up.
+
   proton:
     enabled: false
-    # Requires Proton Bridge running locally
+    # Requires Proton Bridge running locally: https://proton.me/mail/bridge
+    # Bridge shows its local IMAP port in the Bridge app itself (varies by
+    # install). Proton doesn't publish a fixed CalDAV port/path — fill in
+    # caldav_url from your own Bridge instance's settings.
+    imap_host: 127.0.0.1
+    imap_port: 1143
+    caldav_url: ""
+    username: ""
+    password_file: /var/lib/aipc-agent/secrets/proton_bridge_password
+
   fastmail:
     enabled: false
-    # CalDAV endpoint + app password
+    # App password: https://www.fastmail.help/hc/en-us/articles/360058752854
+    imap_host: imap.fastmail.com
+    imap_port: 993
+    caldav_url: "https://caldav.fastmail.com/dav/calendars/user/USERNAME/Default"
+    username: ""
+    password_file: /var/lib/aipc-agent/secrets/fastmail_app_password
