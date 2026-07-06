@@ -1,9 +1,0 @@
-# distrobox-assemble template for agent-runtime sandbox — D3
-agent-runtime:
-  image: registry.fedoraproject.org/fedora-toolbox:latest
-  additional_packages:
-    - python3
-    - python3-pip
-    - git
-  volumes:
-    - ~/projects:/home/user/projects:rw
