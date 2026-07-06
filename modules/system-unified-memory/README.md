@@ -112,6 +112,57 @@ suspending and resuming after `gpp-wake-fix.service` has run; if it still hangs,
 data point to gather is whether it's charging-state-dependent (reported trigger in
 `#2988`) and whether a newer BIOS than `.308` is available.
 
+## Known issue: resume-from-s2idle amdgpu/SMU hang (separate from the GPP0/GPP1 issue above)
+
+Distinct from the "sleep/suspend freeze" above (that one hangs at suspend *entry* via a
+spurious PCIe wake interrupt; this one hangs on *resume*, after suspend/resume otherwise
+completed cleanly) — `gpp-wake-fix.service` being active does not prevent this.
+
+Hit 3 times so far on this fleet (2026-07-05 x2, 2026-07-06): system resumes from `s2idle`
+normally (`PM: suspend exit`, `System returned from sleep operation 'suspend'`), then
+`amdgpu` starts failing SMU communication within ~30-90s — `SMU: No response msg_reg: 32
+resp_reg: 0`, `Failed to retrieve enabled ppfeatures!`, `Failed to disable gfxoff!` —
+escalating to a full GPU hang: `ring gfx_0.0.0 timeout`, `GPU reset begin!`, then every
+recovery path fails in sequence (`MES failed to respond to msg=RESET` → `failed to reset
+legacy queue` → `reset via MES failed and try pipe reset -110` → `Ring gfx_0.0.0 reset
+failed`), `kwin_wayland` loses its GL context repeatedly, the desktop goes fully
+unresponsive (power-key presses logged but nothing happens), and the machine needs a hard
+power-off. 2026-07-06's occurrence happened with the GPU confirmed idle at suspend time
+(user closed the lid after unplugging AC, no active GPU job) — ruling out "only happens
+under compute load" as a precondition.
+
+This matches an open, unresolved-upstream class of Strix Halo (gfx1151) bug, not something
+fixable from this repo: `ROCm/ROCm#5590` ("amdgpu compute wave store and resume causing MES
+failures"), `#5724` (MES firmware causing GPU hang / memory access fault), `#6165` (silent
+hard hang under sustained load, hangcheck never fires) are all still open as of this
+writing. `linux-firmware` on this fleet is `20260519` — recent, but no confirmed fixed
+release is known for this specific failure signature.
+
+**Mitigation attempted, not a confirmed fix**: added `amdgpu.cwsr_enable=0` (disables
+Compute Wave Store/Resume — the mechanism the ROCm#5590 thread ties to this exact MES
+failure class) alongside the existing `gttsize`/`dcdebugmask` kargs. Per the same and
+related upstream threads, this is explicitly **not guaranteed** — some reporters found
+disabling CWSR doesn't fix their case ("correlation not causation"), and disabling it also
+means the GPU can no longer preempt mid-wave during a compute job, a real (if narrow)
+functional regression risk for anything relying on shader preemption. Direct user decision
+2026-07-06: try it anyway and report back after real-world use, since no better option
+exists today (deep/S3 sleep isn't available on this hardware — `/sys/power/mem_sleep` only
+lists `[s2idle]` — so switching sleep modes isn't on the table either).
+
+**Re-check when revisiting this module:**
+1. Did `amdgpu.cwsr_enable=0` actually reduce/eliminate recurrences after real use? Record
+   the outcome here either way — this entry should not stay "attempted, unconfirmed"
+   forever.
+2. Has `ROCm/ROCm#5590`/`#5724`/`#6165` (or their eventual duplicates) closed with a real
+   upstream firmware/kernel fix? If so, re-evaluate whether `cwsr_enable=0` is still needed
+   at all, and whether its functional downside (no compute-wave preemption) is worth
+   removing once a real fix lands.
+3. If a hang recurs *even with* `cwsr_enable=0`, that's a data point that this workaround
+   doesn't apply to this fleet's specific trigger — don't keep re-trying the same knob:
+   the next thing to check is whether it's coincident with lid-close specifically (as
+   opposed to idle-timeout or manual suspend) and whether disabling lid-close-triggers-
+   suspend (behavioral change, not a kernel fix) is the only remaining lever.
+
 ## Known issue: idle power draw / thermals — AC vs battery power profile
 
 Hardware-verified 2026-07-04: with the default ASUS EC `platform_profile=balanced`, this
