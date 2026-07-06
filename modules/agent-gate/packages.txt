@@ -1,0 +1,4 @@
+# No host packages, no venv. Pure stdlib (socket, socketserver, sqlite3,
+# json, threading) — task 5.1 explicitly scopes this daemon that way; do
+# not add a pip dependency for it. Runs against system python3 directly
+# (unlike agent-orchestrator, which needs a venv for its pip deps).

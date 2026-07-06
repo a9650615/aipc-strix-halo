@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from aipc_lib import ccs_sync as ccs_sync_mod
 from aipc_lib import config_menu as config_menu_mod
 from aipc_lib import desktop_presets as desktop_presets_mod
 from aipc_lib import doctor as doctor_mod
+from aipc_lib import gate_client as gate_client_mod
 from aipc_lib import log_append as log_append_mod
 from aipc_lib import models as models_mod
 from aipc_lib import opencode_sync as opencode_sync_mod
@@ -111,6 +113,85 @@ def power_guard_status() -> None:
     table.add_row("power_now uW", str(state.get("power_now_uw", _read("/sys/class/power_supply/BAT0/power_now"))))
     table.add_row("cur freq factor", str(state.get("cur_factor", "?")))
     table.add_row("charge cap", _read("/sys/class/power_supply/BAT0/charge_control_end_threshold") + "%")
+    Console().print(table)
+
+
+@main.group("agent")
+def agent_cmd() -> None:
+    """Agent runtime controls (phase-4-agent)."""
+
+
+@agent_cmd.group("gate")
+def agent_gate_cmd() -> None:
+    """Grant/revoke/inspect risky-action permissions via aipc-agent-gate (D5).
+
+    Thin client over the UNIX socket at /run/aipc-agent-gate.sock --
+    see modules/agent-gate/README.md for the wire protocol.
+    """
+
+
+@agent_gate_cmd.command("grant")
+@click.option("--scope", type=click.Choice(["session", "task"]), required=True)
+@click.option("--actions", required=True, help="Comma-separated action names, e.g. screen-control,git-push")
+@click.argument("duration_or_task_id")
+def agent_gate_grant(scope: str, actions: str, duration_or_task_id: str) -> None:
+    """Grant ACTIONS. DURATION_OR_TASK_ID is seconds for --scope session,
+    or a task id string for --scope task."""
+    actions_list = [a.strip() for a in actions.split(",") if a.strip()]
+    req: dict = {"cmd": "grant", "actions": actions_list, "scope": scope}
+    if scope == "session":
+        try:
+            req["duration_seconds"] = int(duration_or_task_id)
+        except ValueError:
+            click.echo("session scope needs an integer duration in seconds", err=True)
+            sys.exit(1)
+    else:
+        req["task_id"] = duration_or_task_id
+    resp = gate_client_mod.send(req)
+    click.echo(json.dumps(resp))
+    if "error" in resp:
+        sys.exit(1)
+
+
+@agent_gate_cmd.command("revoke")
+@click.option("--grant-id", default=None)
+@click.option("--task-id", default=None)
+def agent_gate_revoke(grant_id: str | None, task_id: str | None) -> None:
+    """Revoke a single grant (--grant-id) or every task-scoped grant for --task-id."""
+    if not grant_id and not task_id:
+        click.echo("revoke needs --grant-id or --task-id", err=True)
+        sys.exit(1)
+    req: dict = {"cmd": "revoke"}
+    if grant_id:
+        req["grant_id"] = grant_id
+    if task_id:
+        req["task_id"] = task_id
+    resp = gate_client_mod.send(req)
+    click.echo(json.dumps(resp))
+    if "error" in resp:
+        sys.exit(1)
+
+
+@agent_gate_cmd.command("status")
+def agent_gate_status() -> None:
+    """List active (non-expired) grants."""
+    resp = gate_client_mod.send({"cmd": "status"})
+    if "error" in resp:
+        click.echo(json.dumps(resp), err=True)
+        sys.exit(1)
+
+    table = Table(title="aipc agent gate status")
+    for col in ("grant_id", "actions", "scope", "expires_at", "task_id", "granted_at"):
+        table.add_column(col)
+    for g in resp.get("grants", []):
+        table.add_row(
+            g.get("grant_id", ""),
+            ",".join(g.get("actions", [])),
+            g.get("scope", ""),
+            str(g.get("expires_at")),
+            str(g.get("task_id")),
+            str(g.get("granted_at")),
+        )
     Console().print(table)
 
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=aipc agent permission gate (grant/revoke/check/audit for risky actions)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m aipc_agent_gate.server
+Environment=PYTHONPATH=/usr/lib/aipc-agent
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
