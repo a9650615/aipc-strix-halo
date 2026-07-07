@@ -1,0 +1,5 @@
+mem0ai==2.0.11
+fastapi==0.139.0
+uvicorn==0.50.2
+psycopg[binary,pool]==3.3.4
+mcp>=1.28

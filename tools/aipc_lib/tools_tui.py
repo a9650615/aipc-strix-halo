@@ -9,12 +9,10 @@ from aipc_lib.tools_menu import CATEGORIES, Tool
 
 
 class ToolRow(Static):
-    """One tool: [x]/[ ] mark + name + a plain Install/Remove button.
+    """One tool: [x]/[ ] mark + name + a plain action button.
 
-    The button toggles with install state — Install when absent, Remove
-    when present — so a tool can be added or torn back out again without
-    leaving the TUI. Mouse-clickable and keyboard-focusable (Tab/Shift+Tab
-    to move focus, Enter/Space to activate) — same effect either way.
+    The button label follows the tool state, so regular tools can install/remove
+    and config-only tools can apply/re-apply without leaving the TUI.
     """
 
     def __init__(self, tool: Tool) -> None:
@@ -25,7 +23,7 @@ class ToolRow(Static):
     def compose(self) -> ComposeResult:
         yield Static(self._label(), classes="tool-label", id=f"label-{self._safe_id()}")
         yield Button(
-            "Remove" if self.installed else "Install",
+            self.tool.uninstall_label if self.installed else self.tool.install_label,
             id=f"install-{self._safe_id()}",
         )
 
@@ -121,10 +119,10 @@ class ToolsApp(App):
             for category, tools in CATEGORIES.items():
                 yield CategoryBlock(category, tools)
         yield RichLog(id="log")
-        yield Static("q quit   r refresh   tab / click to install or remove", classes="hint")
+        yield Static("q quit   r refresh   tab / click to run action", classes="hint")
 
     def on_mount(self) -> None:
-        self.query_one("#log", RichLog).write("Ready. Click Install/Remove, or Tab + Enter.")
+        self.query_one("#log", RichLog).write("Ready. Click an action, or Tab + Enter.")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         row = event.button.parent
@@ -145,7 +143,7 @@ class ToolsApp(App):
         if result.returncode == 0:
             self.call_from_thread(log.write, f"{row.tool.name}: installed")
             self.call_from_thread(setattr, row, "installed", True)
-            self.call_from_thread(setattr, button, "label", "Remove")
+            self.call_from_thread(setattr, button, "label", row.tool.uninstall_label)
             self.call_from_thread(row.query_one(".tool-label", Static).update, row._label())
         else:
             self.call_from_thread(
@@ -155,14 +153,20 @@ class ToolsApp(App):
     @work(thread=True)
     def _uninstall(self, row: ToolRow, button: Button) -> None:
         log = self.query_one("#log", RichLog)
-        self.call_from_thread(log.write, f"Removing {row.tool.name}...")
+        action = "Removing" if row.tool.uninstall_marks_absent else "Running"
+        self.call_from_thread(log.write, f"{action} {row.tool.name}...")
         self.call_from_thread(setattr, button, "disabled", True)
         result = row.tool.uninstall()
         self.call_from_thread(setattr, button, "disabled", False)
         if result.returncode == 0:
             self.call_from_thread(log.write, f"{row.tool.name}: removed")
-            self.call_from_thread(setattr, row, "installed", False)
-            self.call_from_thread(setattr, button, "label", "Install")
+            self.call_from_thread(setattr, row, "installed", not row.tool.uninstall_marks_absent)
+            self.call_from_thread(
+                setattr,
+                button,
+                "label",
+                row.tool.install_label if row.tool.uninstall_marks_absent else row.tool.uninstall_label,
+            )
             self.call_from_thread(row.query_one(".tool-label", Static).update, row._label())
         else:
             self.call_from_thread(
@@ -175,7 +179,7 @@ class ToolsApp(App):
             label = row.query_one(".tool-label", Static)
             label.update(row._label())
             button = row.query_one(Button)
-            button.label = "Remove" if row.installed else "Install"
+            button.label = row.tool.uninstall_label if row.installed else row.tool.install_label
             button.disabled = False
 
 

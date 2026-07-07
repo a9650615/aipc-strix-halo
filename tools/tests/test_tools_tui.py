@@ -17,6 +17,15 @@ def _fail(*_a: object, **_kw: object) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(args=[], returncode=1)
 
 
+reapply_calls = 0
+
+
+def _reapply(*_a: object, **_kw: object) -> subprocess.CompletedProcess:
+    global reapply_calls
+    reapply_calls += 1
+    return subprocess.CompletedProcess(args=[], returncode=0)
+
+
 @pytest.fixture()
 def fake_categories() -> dict[str, list[Tool]]:
     return {
@@ -109,4 +118,38 @@ async def test_failed_uninstall_keeps_remove_button_and_logs_error(fake_categori
                     break
                 await pilot.pause(0.05)
             assert str(button.label) == "Remove"
+            assert row.installed is True
+
+
+@pytest.mark.asyncio
+async def test_reapply_tool_stays_installed_after_click() -> None:
+    global reapply_calls
+    reapply_calls = 0
+    categories = {
+        "Test category": [
+            Tool(
+                "mem0 local service",
+                lambda: True,
+                _reapply,
+                _reapply,
+                install_label="Configure Claude",
+                uninstall_label="Re-apply Claude",
+                uninstall_marks_absent=False,
+            )
+        ]
+    }
+    with patch("aipc_lib.tools_tui.CATEGORIES", categories):
+        app = ToolsApp()
+        async with app.run_test() as pilot:
+            row = next(iter(app.query(ToolRow)))
+            button = row.query_one("Button")
+            assert str(button.label) == "Re-apply Claude"
+            await pilot.click(button)
+            await pilot.pause()
+            for _ in range(20):
+                if button.disabled is False:
+                    break
+                await pilot.pause(0.05)
+            assert reapply_calls == 1
+            assert str(button.label) == "Re-apply Claude"
             assert row.installed is True

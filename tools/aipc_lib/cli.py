@@ -18,6 +18,7 @@ from aipc_lib import desktop_presets as desktop_presets_mod
 from aipc_lib import doctor as doctor_mod
 from aipc_lib import gate_client as gate_client_mod
 from aipc_lib import log_append as log_append_mod
+from aipc_lib import mem0_local_mcp as mem0_local_mcp_mod
 from aipc_lib import mem0_migrate as mem0_migrate_mod
 from aipc_lib import models as models_mod
 from aipc_lib import opencode_sync as opencode_sync_mod
@@ -757,8 +758,9 @@ def config_sync_ccs() -> None:
 
 
 @config.command("tools")
+@click.option("--mem0-local", is_flag=True, help="Configure Claude Code's mem0 plugin to use the local mem0 service.")
 @click.option("--no-tui", is_flag=True, help="Plain sequential y/N prompts instead of the TUI.")
-def config_tools(no_tui: bool) -> None:
+def config_tools(mem0_local: bool, no_tui: bool) -> None:
     """Categorized checklist: which dev tools are installed, install more.
 
     This is the standalone, re-runnable half of ops-firstboot's aipc-init
@@ -771,6 +773,17 @@ def config_tools(no_tui: bool) -> None:
     work, per user direction 2026-07-03 — "像 claude code"). --no-tui falls
     back to plain prompts for non-interactive/scripted use.
     """
+    if mem0_local:
+        try:
+            paths = mem0_local_mcp_mod.point_claude_plugin()
+        except mem0_local_mcp_mod.Mem0LocalMcpError as e:
+            click.echo(f"mem0-local failed: {e}", err=True)
+            sys.exit(1)
+        for path in paths:
+            click.echo(f"configured {path} -> local mem0 service")
+        click.echo(f"Done ({len(paths)} file(s)). Restart Claude Code for the mem0 MCP to reconnect locally.")
+        return
+
     if not no_tui:
         from aipc_lib.tools_tui import run as run_tui
 
@@ -783,15 +796,17 @@ def config_tools(no_tui: bool) -> None:
             installed = tool.is_installed()
             status = "[installed]" if installed else "[not installed]"
             click.echo(f"  {tool.name} {status}")
-            if installed:
+            if installed and tool.uninstall_marks_absent:
                 continue
-            if not click.confirm(f"  Install {tool.name}?", default=False):
+            action = tool.uninstall if installed else tool.install
+            verb = tool.uninstall_label if installed else tool.install_label
+            if not click.confirm(f"  {verb} {tool.name}?", default=False):
                 continue
-            result = tool.install()
+            result = action()
             if result.returncode != 0:
-                click.echo(f"  {tool.name}: install failed (exit {result.returncode})", err=True)
+                click.echo(f"  {tool.name}: {verb.lower()} failed (exit {result.returncode})", err=True)
             else:
-                click.echo(f"  {tool.name}: installed")
+                click.echo(f"  {tool.name}: {verb.lower()} done")
 
 
 @config.group("preset")

@@ -9,14 +9,29 @@ def test_categories_cover_expected_groups() -> None:
     assert set(tools_menu.CATEGORIES.keys()) == {"AI coding tools", "Terminal"}
 
 
-def test_ai_coding_tools_category_has_all_five_tools() -> None:
+def test_ai_coding_tools_category_has_all_tools() -> None:
     names = [t.name for t in tools_menu.CATEGORIES["AI coding tools"]]
-    assert names == ["aider", "cline (VSCode)", "continue (VSCode)", "goose", "opencode"]
+    assert names == [
+        "aider",
+        "cline (VSCode)",
+        "continue (VSCode)",
+        "goose",
+        "opencode",
+        "mem0 local service",
+    ]
 
 
 def test_terminal_category_has_ccstatus() -> None:
     names = [t.name for t in tools_menu.CATEGORIES["Terminal"]]
     assert names == ["ccstatus"]
+
+
+def test_mem0_local_tool_is_service_config_action() -> None:
+    tool = tools_menu.CATEGORIES["AI coding tools"][-1]
+    assert tool.name == "mem0 local service"
+    assert tool.install_label == "Configure Claude"
+    assert tool.uninstall_label == "Re-apply Claude"
+    assert tool.uninstall_marks_absent is False
 
 
 def test_has_returns_false_for_nonexistent_command() -> None:

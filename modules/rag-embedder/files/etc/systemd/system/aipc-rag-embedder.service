@@ -1,0 +1,20 @@
+[Unit]
+Description=aipc-rag-embedder (bge-m3 embeddings, native venv, CPU)
+After=network-online.target
+Requires=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/aipc-rag-embedder/venv/bin/uvicorn aipc_rag_embedder.server:app --host 127.0.0.1 --port 8201
+Environment=PYTHONPATH=/usr/lib/aipc-rag-embedder
+Environment=HF_HOME=/var/lib/aipc-rag-embedder/hf-cache
+# Offline-only: bge-m3 weights are pre-staged under HF_HOME; never phone home
+# to HF. The service's SELinux context denies egress anyway, and §6 requires
+# offline load once weights are present. Set explicitly so a stale-cache HEAD
+# can't hang the first request on "could not connect to huggingface.co".
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

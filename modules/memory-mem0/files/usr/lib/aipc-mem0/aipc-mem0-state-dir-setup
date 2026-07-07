@@ -1,0 +1,19 @@
+#!/bin/sh
+# aipc-mem0-state-dir-setup — make mem0's SQLite history store writable
+# by both the root service and per-user MCP servers.
+set -eu
+
+state_dir=/var/lib/aipc-mem0
+mkdir -p "$state_dir"
+
+target_user=${AIPC_PRIMARY_USER:-}
+if [ -z "$target_user" ]; then
+  target_user=$(awk -F: '$3 >= 1000 && $3 < 60000 {print $1; exit}' /etc/passwd || true)
+fi
+
+if [ -z "${target_user:-}" ]; then
+  echo "aipc-mem0-state-dir-setup: no primary user found; leaving $state_dir owned by root" >&2
+  exit 0
+fi
+
+chown -R "$target_user:$target_user" "$state_dir"

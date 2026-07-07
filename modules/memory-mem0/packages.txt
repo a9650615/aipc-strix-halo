@@ -1,1 +1,4 @@
-# Service runs in container — no host rpm packages
+# Native systemd + venv (see post-install.sh), not a container --
+# docker.io/mem0/mem0:latest doesn't exist and the real published image
+# (mem0/mem0-api-server) has no amd64 variant. python3 only; psycopg[binary]
+# ships its own libpq, no system postgres client headers needed.

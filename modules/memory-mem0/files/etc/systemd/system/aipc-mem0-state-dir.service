@@ -1,0 +1,11 @@
+[Unit]
+Description=Prepare aipc-mem0 state directory ownership
+Before=aipc-mem0.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/aipc-mem0/aipc-mem0-state-dir-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target

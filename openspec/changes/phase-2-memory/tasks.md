@@ -8,13 +8,25 @@
 - [x] 1.2 `db-qdrant`: scaffolded 2026-06-30. README, quadlet,
   `.disabled`, verify.sh skip-when-disabled (`exit 2`).
 - [x] 1.3 `rag-embedder`: scaffolded 2026-06-30, build-time fixed
-  2026-07-01. README, quadlet (port 8201, iGPU devices), verify.sh
-  (`/healthz` + service-active). **Descoped**: "post-install.sh cache
-  warmup" — can't run at build time (no init, nothing to warm), same
-  build/runtime lesson as the other 4 modules; correctly left
-  enable-only. `embed-bge` alias now wired (2026-07-06, this pass) but
-  unverified — the backing image (`docker.io/aipc/rag-embedder:latest`)
-  has no source in this repo yet (see README).
+  2026-07-01. **Superseded 2026-07-07**: the quadlet's
+  `docker.io/aipc/rag-embedder:latest` never had a real source anywhere
+  (same root-cause class as memory-mem0) — replaced with a native
+  `aipc-rag-embedder.service` (systemd + venv) running a small FastAPI
+  wrapper around `sentence-transformers`' `BAAI/bge-m3`, CPU-only for
+  now (`ponytail:` — swap for Lemonade/iGPU once that runtime exposes an
+  embeddings API). Real functional round trip on this dev host: real
+  venv built, real weights downloaded, `GET /healthz` → 200, `POST
+  /v1/embeddings` → real 1024-dim vector, and confirmed LiteLLM's
+  `embed-bge` alias resolves through it end-to-end
+  (`http://127.0.0.1:4000/v1/embeddings` → 200). Found and fixed a real
+  bug along the way: `sentence-transformers.encode()` returns
+  `numpy.float32`, which FastAPI/pydantic can't JSON-serialize — cast to
+  native `float`. **Updated 2026-07-08**: hardware-verified on the physical
+  AI PC; bge-m3 is pre-staged under `HF_HOME`, the unit runs offline, and
+  the venv entrypoints are relabeled `bin_t` so systemd does not leave the
+  service in `init_t`. `bge-reranker-v2-m3`/`/rerank` **not implemented**
+  (nothing in the current write path calls it; separate follow-up). See
+  `modules/rag-embedder/README.md`.
 - [~] 1.4 `rag-ingest`: scaffolded 2026-06-30 (README, 5 systemd
   units, consent config skeletons), build-time bug fixed 2026-07-06
   (`--now` removed, fake `pip install aipc-rag-ingest` dropped — see
@@ -78,12 +90,52 @@
 
 ## 6. mem0 Server + Wiring
 
-- [x] 6.1 Quadlet on port 7000, `DATABASE_URL` points at the
-  Postgres backend.
-- [x] 6.2 `LITELLM_BASE_URL=http://127.0.0.1:4000` set in the
-  quadlet env.
+- [x] 6.1 ~~Quadlet on port 7000~~ **superseded 2026-07-06**: the
+  quadlet's `docker.io/mem0/mem0:latest` image doesn't exist and the
+  real published image (`mem0/mem0-api-server`) has no amd64 variant —
+  replaced with a native `aipc-mem0.service` (systemd + venv) wrapping the
+  real `mem0ai` PyPI package, same port 7000, real pgvector connection
+  functionally verified against a live `db-postgres` container on this
+  dev host (not the physical AI PC). See `modules/memory-mem0/README.md`.
+- [x] 6.2 LiteLLM gateway wiring: `openai_base_url=http://127.0.0.1:4000`
+  set for both the `llm` (ornith-35b) and `embedder` (embed-bge)
+  configs — verified for real. **2026-07-07**: the `embed-bge` gap is
+  now closed (see 1.3, `rag-embedder`); a full real add→embed→pgvector
+  round trip passes end-to-end. Found and fixed two real bugs in the
+  process — `Memory.add()` has no `app_id` kwarg (mem0ai==2.0.11),
+  and `Memory.search()` needs a flat `filters` dict, not the nested
+  `{"OR": [...]}` scheme the Platform API's docs describe — see
+  `modules/memory-mem0/README.md`'s Verification section for the full
+  trace.
 - [x] 6.3 Client config example (`memory.endpoint` +
   `AIPC_PRIMARY_USER`) in README.
+- [x] 6.4 **New, 2026-07-07**: `aipc mem0 migrate-from-saas` CLI
+  (`tools/aipc_lib/mem0_migrate.py` + `cli.py`) pulls all Mem0 SaaS
+  memories (every user/agent/app/run scope, via a real `filters` OR
+  block against `/v3/memories/`) and imports them into the local
+  `aipc-mem0.service`, preserving every scope field. Dry-run by default;
+  `--apply` writes for real. API key read from `--key-file` or
+  `$MEM0_API_KEY`, never logged or written to any repo file. **Found and
+  fixed a real bug**: the SaaS API rejects `Authorization: Bearer <key>`
+  (401 `token_not_valid`) — it requires `Authorization: Token <key>`,
+  confirmed via a live probe against the real API. **Migration itself
+  is blocked today**: this account's SaaS usage quota is exhausted
+  (1000/1000 this billing period, resets 2026-08-01) — confirmed via a
+  real `429` response, same quota this session's own `mem0` MCP tool
+  calls were hitting. Not a code issue; re-run `aipc mem0
+  migrate-from-saas --apply --key-file <path>` after the reset (or on a
+  higher-tier plan) to actually pull the data over.
+- [x] 6.5 **New, 2026-07-08**: local stdio MCP server added for the
+  self-hosted stack (`aipc_mem0.mcp_server`) because the official Mem0 MCP is
+  SaaS-only. The service is the primary unit; Claude Code plugin-cache
+  repointing is exposed as the `mem0 local service` row in `aipc config tools`
+  (`Configure Claude` / `Re-apply Claude`), with `aipc config tools --mem0-local`
+  for headless use and `tools/aipc_mem0_point_mcp_local.sh` as the fallback.
+  opencode and hermes were configured to the same local MCP on the live machine.
+  Hardware-verified with real add/search calls through local bge-m3 + pgvector.
+  Found and fixed the `history.db` ownership bug with
+  `aipc-mem0-state-dir.service`, resolving the primary user dynamically instead
+  of hardcoding a username.
 
 ## 7. `aipc rag` CLI
 
@@ -147,8 +199,10 @@
 ## 12. AI PC Hardware Verification
 
 - [ ] 12.1 Deploy `:rolling` tag to the AI PC via `bootc switch`.
-- [ ] 12.2 Confirm Postgres + pgvector up, embedder /healthz 200,
-  mem0 /healthz 200.
+- [x] 12.2 **Hardware-verified 2026-07-08 on the live AI PC**: Postgres +
+  pgvector up, `aipc-rag-embedder` `/healthz` 200, `aipc-mem0` `/healthz`
+  200, `embed-bge` via LiteLLM returns real bge-m3 embeddings, and mem0
+  add/search round-trips through pgvector.
 - [ ] 12.3 Drop a file into `~/Desktop`; confirm a vector appears
   within one watcher cycle.
 - [ ] 12.4 Opt in to Firefox capture via the wizard; confirm

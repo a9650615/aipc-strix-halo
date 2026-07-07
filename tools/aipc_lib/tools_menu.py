@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
+from aipc_lib import mem0_local_mcp
 
 # Broad categories (per user direction 2026-07-03: "大分類" grouping over a
 # flat list) — currently two; add more as new dev-tool areas come online
@@ -22,6 +25,9 @@ class Tool:
     is_installed: Callable[[], bool]
     install: Callable[[], subprocess.CompletedProcess]
     uninstall: Callable[[], subprocess.CompletedProcess]
+    install_label: str = "Install"
+    uninstall_label: str = "Remove"
+    uninstall_marks_absent: bool = True
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -135,6 +141,20 @@ def _uninstall_ccstatus() -> subprocess.CompletedProcess:
     return _remove_which("ccstatus")
 
 
+def _mem0_local_service_configured() -> bool:
+    return mem0_local_mcp.claude_plugin_is_local()
+
+
+def _configure_mem0_local_service() -> subprocess.CompletedProcess:
+    try:
+        paths = mem0_local_mcp.point_claude_plugin()
+    except mem0_local_mcp.Mem0LocalMcpError as e:
+        return subprocess.CompletedProcess(args=["mem0-local"], returncode=1, stderr=str(e))
+    print(f"configured {len(paths)} Claude mem0 plugin config(s); restart Claude Code", file=sys.stderr)
+    return subprocess.CompletedProcess(args=["mem0-local"], returncode=0)
+
+
+
 CATEGORIES: dict[str, list[Tool]] = {
     "AI coding tools": [
         Tool("aider", lambda: _has("aider"), _install_aider, _uninstall_aider),
@@ -152,6 +172,15 @@ CATEGORIES: dict[str, list[Tool]] = {
         ),
         Tool("goose", lambda: _has("goose"), _install_goose, _uninstall_goose),
         Tool("opencode", _opencode_installed, _install_opencode, _uninstall_opencode),
+        Tool(
+            "mem0 local service",
+            _mem0_local_service_configured,
+            _configure_mem0_local_service,
+            _configure_mem0_local_service,
+            install_label="Configure Claude",
+            uninstall_label="Re-apply Claude",
+            uninstall_marks_absent=False,
+        ),
     ],
     "Terminal": [
         Tool("ccstatus", lambda: _has("ccstatus"), _install_ccstatus, _uninstall_ccstatus),

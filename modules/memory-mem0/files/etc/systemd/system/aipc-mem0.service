@@ -1,0 +1,15 @@
+[Unit]
+Description=aipc-mem0 (mem0 memory server, native venv)
+After=network-online.target postgres.service aipc-rag-embedder.service litellm.service aipc-mem0-state-dir.service
+Requires=postgres.service
+Wants=aipc-mem0-state-dir.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/aipc-mem0/venv/bin/uvicorn aipc_mem0.server:app --host 127.0.0.1 --port 7000
+Environment=PYTHONPATH=/usr/lib/aipc-mem0
+Environment=MEM0_TELEMETRY=False
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -1,1 +1,3 @@
-# Service runs in container — no host rpm packages
+# Native systemd + venv (see post-install.sh), not a container --
+# docker.io/aipc/rag-embedder:latest never had a real source; same fix as
+# memory-mem0. python3 only; torch/sentence-transformers come from the venv.
