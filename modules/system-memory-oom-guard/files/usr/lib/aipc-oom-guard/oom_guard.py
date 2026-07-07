@@ -155,6 +155,16 @@ class OomGuard:
         except OSError as e:
             self.log_event(level=SOFT, action="drop_caches", result="error", reason=repr(e))
 
+    @staticmethod
+    def _pick_lemonade_victim(loaded, prefill_tok_s):
+        # Reload cost of an evicted model = model load time + re-prefilling
+        # whatever prompt comes next. A model with fast prefill is cheap to
+        # bring back, so it's evicted first; models with no recorded number
+        # score 0 and only get picked via the last_use tie-break (original
+        # behavior), never ahead of a model we know is fast to reload.
+        return max(loaded, key=lambda m: (prefill_tok_s.get(m["model_name"], 0),
+                                           m.get("last_use", 0)))
+
     def _unload_idle_model(self):
         # unload one idle non-pinned loaded model from whichever backend has
         # one. Best-effort; backends not running are skipped.
@@ -176,7 +186,7 @@ class OomGuard:
                     loaded = [m for m in health.get("all_models_loaded", [])
                               if m.get("loaded") and not m.get("pinned")]
                     if loaded:
-                        v = max(loaded, key=lambda m: m.get("last_use", 0))
+                        v = self._pick_lemonade_victim(loaded, bcfg.get("prefill_tok_s", {}))
                         self._http(bcfg["base_url"] + bcfg["unload_path"],
                                    {"model_name": v["model_name"]})
                         self.log_event(level=SOFT, action="unload:lemonade", result="ok", target=v["model_name"])
@@ -333,6 +343,12 @@ def self_test():
     assert g.is_protected(app) is False          # individual app under it is eligible
     assert g.is_protected(lemon) is False
     assert g.priority(app) < g.priority(lemon)
+
+    fast, slow = {"model_name": "fast-model", "last_use": 1}, {"model_name": "slow-model", "last_use": 5}
+    prefill = {"fast-model": 304}
+    assert OomGuard._pick_lemonade_victim([fast, slow], prefill)["model_name"] == "fast-model"
+    assert OomGuard._pick_lemonade_victim([fast, slow], {})["model_name"] == "slow-model"  # no data -> last_use fallback
+
     print("self-test passed")
 
 

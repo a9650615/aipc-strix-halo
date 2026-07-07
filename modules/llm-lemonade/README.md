@@ -1,8 +1,8 @@
 # llm-lemonade
 
 Runs AMD's Lemonade Server — a multi-backend local inference platform, not
-just an NPU-only server. As of 2026-07-05 it serves **all three** local
-model aliases:
+just an NPU-only server. As of 2026-07-06 it serves three production local
+model aliases plus one experimental giant alias:
 
 - **FLM backend (NPU/XDNA)**: `resident-small` — an always-on model that
   has no business permanently occupying iGPU/GTT memory that
@@ -10,8 +10,10 @@ model aliases:
   Hardware-verified 2026-07-04 with a real chat completion, including
   persistence of the pulled model across a service restart.
 - **llamacpp:vulkan backend**: `coder-agentic` and `ornith-35b` — moved
-  here from Ollama 2026-07-05. See "Backend choice: Vulkan, not ROCm"
-  below for why, and the speed numbers that justified the move.
+  here from Ollama 2026-07-05. `qwen35-122b-q3` is registered on this path
+  as a 53.9GB Q3_K_XL experiment, not a default. See "Backend choice:
+  Vulkan, not ROCm" below for why, and the speed numbers that justified
+  the move.
 - **vLLM backend (ROCm, gfx1151)**: continuous batching + PagedAttention
   for concurrent-request throughput, as opposed to single-stream serving.
   Hardware-verified 2026-07-04 with a real chat completion against

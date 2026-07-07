@@ -18,6 +18,10 @@ See `openspec/changes/memory-oom-guard/` for the full design.
   login / journald / self) are hard-protected.
 - Models: SOFT calls the backend unload API (Ollama `keep_alive:0`, Lemonade
   `POST /api/v0/unload`, vLLM `/sleep`); HARD `systemctl restart`s the unit.
+  For Lemonade, SOFT picks among idle non-pinned loaded models by fastest
+  known prefill speed first (`backends.lemonade.prefill_tok_s` in
+  `config.yaml`) — cheapest to reload later. Models missing from that map
+  fall back to the original last-use ordering.
 - Apps: SIGTERM, escalate to SIGKILL.
 - Every trigger logged to journald + `/var/lib/aipc-oom-guard/events.jsonl`
   for post-mortem.

@@ -26,6 +26,9 @@ Environment=OLLAMA_HOST=127.0.0.1:11434
 Environment=OLLAMA_MODELS=/models
 Environment=HSA_OVERRIDE_GFX_VERSION=11.5.1
 Environment=OLLAMA_IGPU_ENABLE=1
+# Qwen 3.5-122B needs Vulkan/GTT on Strix Halo; ROCm runner fails to allocate
+# its ~75GiB model buffer as one device allocation.
+Environment=OLLAMA_LLM_LIBRARY=vulkan
 # Default eviction for any model without a per-model keep_alive override in
 # llm-litellm's config.yaml (litellm_params.keep_alive) — that override is
 # how resident-small stays loaded forever (-1) while everything else frees

@@ -27,6 +27,7 @@ from aipc_lib import rag as rag_mod
 from aipc_lib import screen_client
 from aipc_lib import secrets
 from aipc_lib import status_dashboard as status_mod
+from aipc_lib import storage_reclaim as storage_reclaim_mod
 from aipc_lib import tools_menu as tools_menu_mod
 from aipc_lib.modules import discover
 from aipc_lib.render_bootc import render as render_bootc
@@ -98,6 +99,18 @@ def lemonade_unload(model: str, base_url: str) -> None:
         click.echo("If it is stuck in-flight, use: sudo systemctl restart lemonade.service", err=True)
         sys.exit(1)
     click.echo(f"lemonade unload requested: {model} -> {model_name}")
+
+
+@main.group("storage")
+def storage_cmd() -> None:
+    """Storage maintenance helpers."""
+
+
+@storage_cmd.command("reclaim-live")
+@click.option("--confirm", is_flag=True, help="Actually delete AIPC_LIVE after typing the confirmation phrase.")
+def storage_reclaim_live(confirm: bool) -> None:
+    """Reclaim the adjacent AIPC_LIVE install partition into the running rootfs."""
+    sys.exit(storage_reclaim_mod.run_reclaim(confirm))
 
 
 @main.group("power-guard")

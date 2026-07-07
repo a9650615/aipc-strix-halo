@@ -35,3 +35,13 @@ if [ -f "$CFG" ]; then
   jq '.max_loaded_models = 2 | .enable_dgpu_gtt = true | .llamacpp.backend = "vulkan"' "$CFG" > "$tmp"
   mv "$tmp" "$CFG"
 fi
+
+# Qwen 3.5-122B moved to Ollama 2026-07-07 to avoid Lemonade slot-tracking bug
+# (see models.yaml comment). Remove from user_models.json so lemond won't
+# auto-load it on startup — same slot issue that caused the crash.
+UM=/var/lib/aipc-lemonade/cache/user_models.json
+if [ -f "$UM" ]; then
+  tmp2=$(mktemp -p "$(dirname "$UM")")
+  jq 'del(.["Qwen3.5-122B-A10B-GGUF-Q3_K_XL"])' "$UM" > "$tmp2"
+  mv "$tmp2" "$UM"
+fi

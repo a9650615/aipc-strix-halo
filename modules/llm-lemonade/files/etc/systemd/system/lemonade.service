@@ -17,6 +17,7 @@ RestartSec=5
 # container its own default ulimits regardless of the launching process's
 # limits); LimitMEMLOCK= here covers the podman process itself.
 LimitMEMLOCK=infinity
+TimeoutStopSec=30
 ExecStartPre=-/usr/bin/podman rm -f lemonade
 ExecStartPre=/usr/bin/mkdir -p /var/lib/aipc-lemonade/cache /var/lib/aipc-lemonade/flm /var/lib/aipc-lemonade/huggingface
 # See configure-lemonade.sh for what this does and why.
@@ -36,7 +37,8 @@ ExecStart=/usr/bin/podman run \
     -v /var/lib/aipc-lemonade/huggingface:/root/.cache/huggingface:Z \
     ghcr.io/lemonade-sdk/lemonade-server@sha256:e727643dad3b0680ececbcf7ee1430e5f447a3bdf3700824335d3ee18a3dcfb5 \
     ./lemond --host 0.0.0.0 --port 8001
-ExecStop=/usr/bin/podman stop lemonade
+ExecStop=/usr/bin/podman stop -t 20 lemonade
+ExecStopPost=-/usr/bin/podman rm -f lemonade
 
 [Install]
 WantedBy=multi-user.target

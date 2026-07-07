@@ -26,6 +26,12 @@ backends:
     base_url: http://127.0.0.1:8001
     unload_path: /api/v0/unload
     unit: lemonade.service
+    # SOFT eviction among idle loaded models prefers the fastest known
+    # prefill first (cheapest to reload later). Only hardware-verified
+    # numbers belong here (see llm-lemonade/README.md); a model missing
+    # from this map just falls back to the old last_use-only ordering.
+    prefill_tok_s:
+      Gemma-4-26B-A4B-it-GGUF: 304   # coder-agentic, verified 2026-07-05
   ollama:
     cgroup: system.slice/ollama.service
     base_url: http://127.0.0.1:11434

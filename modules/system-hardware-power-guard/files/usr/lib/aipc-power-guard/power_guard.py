@@ -14,13 +14,10 @@ Controls (AMD Ryzen AI MAX+ 395, amd-pstate-epp):
   - energy_performance_preference : amd-pstate EPP hint (power .. performance)
 
 Detection (read from /sys/class/power_supply):
-  - status in (Discharging, Not charging) AND AC0 online == 1 -> definite back-feed
-    ("Not charging" happens at the charge-cap boundary — EC pauses the
-    charge circuit there, and the gap is fed straight from the battery;
-    a plain Discharging check misses this)
+  - status == Discharging AND AC0 online == 1 -> definite back-feed
   - power_now < drain_threshold_uw              -> early numeric back-feed
   - energy_now falling for 2 consecutive polls while AC online -> back-feed
-    catch-all for any future status string this daemon doesn't know about
+    catch-all for charge-cap states like Not charging, where zero draw is normal
   - power_now trending down toward 0 while charging -> caution (approaching limit)
 
 KILL SWITCH: touch /etc/aipc/power-guard.disabled to freeze (monitor-only).
@@ -225,16 +222,15 @@ class PowerGuard:
         pnow = bat["power_now"]
         enow = bat["energy_now"]
 
-        # energy_now trend catch-all: 2 consecutive falls while AC is online
-        # catches any battery-draining status string this daemon doesn't
-        # special-case (e.g. "Not charging" at the charge-cap boundary).
+        # energy_now trend catch-all: 2 consecutive falls while AC is online.
+        # "Not charging" alone is normal at charge cap; only falling energy is drain.
         if enow is not None and self.last_energy is not None and ac:
             self.energy_drop_streak = self.energy_drop_streak + 1 if enow < self.last_energy else 0
         else:
             self.energy_drop_streak = 0
         self.last_energy = enow
 
-        draining = (bat["status"] in ("Discharging", "Not charging") and ac) or \
+        draining = (bat["status"] == "Discharging" and ac) or \
                    (pnow is not None and pnow < self.drain_threshold_uw) or \
                    self.energy_drop_streak >= 2
         delta = (pnow - self.last_power) if (pnow is not None and self.last_power is not None) else 0
@@ -271,10 +267,9 @@ class PowerGuard:
 
         if self.state == "RECONNECTING":
             if time.time() - self.reconnect_t0 >= self.observe_period_s:
-                # Stop touching EPP once stable: tuned/powerdevil own EPP outside
-                # emergencies. Only scaling_max_freq (hard ceiling, which they do
-                # NOT write) is ours — that's the clamp that actually bounds draw.
-                # Writing EPP here would fight tuned every poll.
+                # Hand EPP back once stable; otherwise an earlier emergency can
+                # leave the box stuck on EPP=power even after the clamp is expanding.
+                self._apply_epp(self.epp_normal)
                 self._set_state("EXPANDING")
         elif self.state == "EXPANDING":
             if delta < 0:  # margin shrinking

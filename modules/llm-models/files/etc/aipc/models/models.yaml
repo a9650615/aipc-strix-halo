@@ -62,6 +62,18 @@ models:
     model_id: Ornith-1.0-35B-GGUF-Q4_K_M
     size_gb: 19.7
 
+  # Experimental giant local model. Moved from Lemonade to Ollama 2026-07-07:
+  # Qwen 3.5-122B was unstable on Lemonade due to a slot-tracking bug in
+  # the router when max_loaded_models=2 (Ornith-35B + Qwen resident → router
+  # tried to evict a non-existent model → llama-server exit). Ollama handles
+  # the 54GB GGUF fine (verified: qwen3.6:35b-a3b 24GB runs on Ollama
+  # already on this hardware). Same weights, same quality — just a different
+  # serving backend.
+  - alias: qwen35-122b-q3
+    backend: ollama
+    model_id: qwen3.5:122b
+    size_gb: 53.9
+
   - alias: main-cloud
     backend: anthropic
     model_id: claude-sonnet-4-6
