@@ -91,3 +91,49 @@ def test_alias_display_name_falls_back_to_bare_id_when_unregistered(tmp_path: Pa
     manifest_path = tmp_path / "models.yaml"
     manifest_path.write_text("models:\n  - alias: coder-fast\n    backend: ollama\n    model_id: qwen2.5-coder:7b\n")
     assert status_dashboard.alias_display_name("llama3.2:3b", manifest_path) == "llama3.2:3b"
+
+
+def test_loaded_lemonade_returns_none_when_unreachable() -> None:
+    import urllib.error
+    orig = status_dashboard.urllib.request.urlopen
+    status_dashboard.urllib.request.urlopen = lambda url, timeout=None: (_ for _ in ()).throw(
+        urllib.error.URLError("refused")
+    )
+    try:
+        assert status_dashboard.loaded_lemonade_models(base_url="http://127.0.0.1:1") is None
+    finally:
+        status_dashboard.urllib.request.urlopen = orig
+
+
+def test_loaded_lemonade_filters_to_loaded_only() -> None:
+    import json
+    from unittest.mock import patch
+    sample = json.dumps({
+        "all_models_loaded": [
+            {"model_name": "m1", "loaded": True, "pinned": False},
+            {"model_name": "m2", "loaded": False, "pinned": False},
+            {"model_name": "m3", "loaded": True, "pinned": True},
+        ]
+    }).encode()
+
+    fake_resp = patch("urllib.request.urlopen")
+    fake_resp.start()
+    fake_resp.stop()  # placeholder; the real impl is in test_models_loaded_unload.py
+
+    # Inline mock: return a fake response object.
+    class _FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def read(self):
+            return sample
+
+    with patch("urllib.request.urlopen", return_value=_FakeResp()):
+        result = status_dashboard.loaded_lemonade_models(base_url="http://x")
+    assert result is not None
+    assert len(result) == 2
+    assert result[0]["model_name"] == "m1"
+    assert result[1]["model_name"] == "m3"

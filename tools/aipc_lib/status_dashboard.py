@@ -11,6 +11,19 @@ from aipc_lib.models import DEFAULT_MANIFEST, load_manifest
 from aipc_lib.modules import Module, discover
 
 DEFAULT_OLLAMA_BASE = "http://127.0.0.1:11434"
+DEFAULT_LEMONADE_BASE = "http://127.0.0.1:8001"
+LEMONADE_HEALTH_PATH = "/api/v0/health"
+
+
+def loaded_lemonade_models(base_url: str = DEFAULT_LEMONADE_BASE) -> list[dict] | None:
+    """Query Lemonade's /api/v0/health. Returns list of loaded model dicts
+    (filtered to loaded=true) or None if Lemonade isn't reachable."""
+    try:
+        with urllib.request.urlopen(f"{base_url}{LEMONADE_HEALTH_PATH}", timeout=3) as resp:
+            data = json.load(resp)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None
+    return [m for m in data.get("all_models_loaded", []) if m.get("loaded")]
 
 
 @dataclass

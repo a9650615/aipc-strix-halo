@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import click
@@ -16,6 +18,7 @@ from aipc_lib import desktop_presets as desktop_presets_mod
 from aipc_lib import doctor as doctor_mod
 from aipc_lib import gate_client as gate_client_mod
 from aipc_lib import log_append as log_append_mod
+from aipc_lib import mem0_migrate as mem0_migrate_mod
 from aipc_lib import models as models_mod
 from aipc_lib import opencode_sync as opencode_sync_mod
 from aipc_lib import panel_mirror as panel_mirror_mod
@@ -47,11 +50,53 @@ def main() -> None:
 POWER_GUARD_UNIT = "power-guard.service"
 POWER_GUARD_SENTINEL = "/etc/aipc/power-guard.disabled"
 POWER_GUARD_STATE = "/var/lib/aipc-power-guard/state.json"
+LEMONADE_BASE_URL = "http://127.0.0.1:8001"
+LEMONADE_UNLOAD_PATH = "/api/v0/unload"
 
 
 def _sudo(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     cmd = ["sudo", *args] if os.geteuid() != 0 else list(args)
     return subprocess.run(cmd, check=check)
+
+
+def _lemonade_model_name(model_or_alias: str) -> str:
+    for entry in models_mod.load_manifest(models_mod.DEFAULT_MANIFEST):
+        if entry.alias == model_or_alias and entry.backend == "lemonade":
+            return entry.model_id
+    return model_or_alias
+
+
+def _lemonade_post(base_url: str, path: str, payload: dict) -> dict:
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        base_url.rstrip("/") + path,
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = resp.read()
+    return json.loads(body) if body[:1] in b"[{" else {}
+
+
+@main.group("lemonade")
+def lemonade_cmd() -> None:
+    """Lemonade backend controls."""
+
+
+@lemonade_cmd.command("unload")
+@click.argument("model", default="qwen35-122b-q3", required=False)
+@click.option("--base-url", default=LEMONADE_BASE_URL, show_default=True)
+def lemonade_unload(model: str, base_url: str) -> None:
+    """Unload a Lemonade model by aipc alias or raw Lemonade model id."""
+    model_name = _lemonade_model_name(model)
+    try:
+        _lemonade_post(base_url, LEMONADE_UNLOAD_PATH, {"model_name": model_name})
+    except urllib.error.URLError as e:
+        click.echo(f"lemonade unload failed for {model_name}: {e}", err=True)
+        click.echo("If it is stuck in-flight, use: sudo systemctl restart lemonade.service", err=True)
+        sys.exit(1)
+    click.echo(f"lemonade unload requested: {model} -> {model_name}")
 
 
 @main.group("power-guard")
@@ -440,6 +485,155 @@ def models_sync(check: bool, manifest: Path, models_root: Path) -> None:
     sys.exit(1 if failed else 0)
 
 
+def _resolve_entry(alias: str, manifest: Path) -> models_mod.ModelEntry | None:
+    for entry in models_mod.load_manifest(manifest):
+        if entry.alias == alias:
+            return entry
+    return None
+
+
+@models_cmd.command("loaded")
+@click.option(
+    "--manifest",
+    type=click.Path(path_type=Path),
+    default=models_mod.DEFAULT_MANIFEST,
+    show_default=True,
+)
+def models_loaded(manifest: Path) -> None:
+    """Show models actually loaded in memory by Ollama and/or Lemonade.
+
+    Cloud aliases never appear here — they live in remote providers,
+    not on this machine's GPU/NPU RAM.
+    """
+    console = Console()
+    entries_by_backend: dict[str, list[models_mod.ModelEntry]] = {}
+    for e in models_mod.load_manifest(manifest):
+        if not e.is_cloud:
+            entries_by_backend.setdefault(e.backend, []).append(e)
+
+    has_anything = False
+    for backend in ("lemonade", "ollama"):
+        if backend not in entries_by_backend:
+            continue
+        has_anything = True
+        if backend == "ollama":
+            loaded = status_mod.loaded_models()
+            title = f"Ollama — currently loaded models ({status_mod.DEFAULT_OLLAMA_BASE})"
+        else:
+            loaded = status_mod.loaded_lemonade_models()
+            title = f"Lemonade — currently loaded models ({status_mod.DEFAULT_LEMONADE_BASE})"
+
+        table = Table(title=title)
+        table.add_column("alias")
+        table.add_column("model_id")
+        table.add_column("backend")
+        table.add_column("detail")
+
+        if loaded is None:
+            click.echo(f"{backend}: not reachable at " +
+                       (status_mod.DEFAULT_OLLAMA_BASE if backend == "ollama" else status_mod.DEFAULT_LEMONADE_BASE))
+            continue
+
+        if not loaded:
+            click.echo(f"{backend}: no models currently loaded.")
+            continue
+
+        loaded_ids = {m.get("model_name") if backend == "lemonade" else m.get("name"): m
+                      for m in loaded}
+        for entry in entries_by_backend[backend]:
+            raw = loaded_ids.get(entry.model_id)
+            if raw is None:
+                continue
+            detail_parts = []
+            if backend == "ollama":
+                size_gb = raw.get("size", 0) / 1e9
+                detail_parts.append(f"{size_gb:.1f}GB")
+                expires = raw.get("expires_at")
+                if expires and expires != 0:
+                    detail_parts.append(f"expires {expires}")
+            else:
+                if raw.get("pinned"):
+                    detail_parts.append("pinned")
+                if raw.get("vram_loaded"):
+                    detail_parts.append("vram_loaded")
+            table.add_row(
+                entry.alias,
+                entry.model_id,
+                backend,
+                " | ".join(detail_parts) or "-",
+            )
+        if table.row_count:
+            console.print(table)
+        else:
+            click.echo(f"{backend}: none of the declared models are in memory.")
+
+    if not has_anything:
+        click.echo("No local-backend models declared in " + str(manifest))
+
+
+def _ollama_unload(model_name: str) -> bool:
+    # Ollama's unload mechanism: keep_alive=0 forces immediate unloading.
+    data = json.dumps({"model": model_name, "keep_alive": 0}).encode()
+    req = urllib.request.Request(
+        status_mod.DEFAULT_OLLAMA_BASE + "/api/generate",
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+        return True
+    except urllib.error.URLError as e:
+        click.echo(f"ollama unload failed for {model_name}: {e}", err=True)
+        return False
+
+
+@models_cmd.command("unload")
+@click.argument("alias")
+@click.option(
+    "--manifest",
+    type=click.Path(path_type=Path),
+    default=models_mod.DEFAULT_MANIFEST,
+    show_default=True,
+)
+def models_unload(alias: str, manifest: Path) -> None:
+    """Unload a model by aipc alias, regardless of backend.
+
+    Looks up the alias in models.yaml to find the backend and raw model_id,
+    then dispatches to the appropriate unload API (Ollama keep_alive=0 or
+    Lemonade POST /api/v0/unload).
+    """
+    entry = _resolve_entry(alias, manifest)
+    if entry is None:
+        click.echo(f"unknown alias: {alias!r} (not in {manifest})", err=True)
+        sys.exit(1)
+    if entry.is_cloud:
+        click.echo(f"{alias} is a cloud model — nothing to unload locally.", err=True)
+        sys.exit(1)
+
+    if entry.backend == "ollama":
+        ok = _ollama_unload(entry.model_id)
+        if ok:
+            click.echo(f"ollama unload requested: {alias} -> {entry.model_id}")
+        else:
+            sys.exit(1)
+    elif entry.backend == "lemonade":
+        try:
+            _lemonade_post(
+                LEMONADE_BASE_URL, LEMONADE_UNLOAD_PATH,
+                {"model_name": entry.model_id},
+            )
+        except urllib.error.URLError as e:
+            click.echo(f"lemonade unload failed for {alias}: {e}", err=True)
+            click.echo("If it is stuck in-flight, use: sudo systemctl restart lemonade.service", err=True)
+            sys.exit(1)
+        click.echo(f"lemonade unload requested: {alias} -> {entry.model_id}")
+    else:
+        click.echo(f"unsupported backend for unload: {entry.backend}", err=True)
+        sys.exit(1)
+
+
 @main.group()
 def log() -> None:
     """Agent log operations."""
@@ -750,6 +944,33 @@ def rag_purge(source: str, confirm: bool) -> None:
         sys.exit(1)
     n = rag_mod.purge_source(s)
     click.echo(f"purged {n} vectors for {s.name}")
+
+
+@main.group("mem0")
+def mem0_cmd() -> None:
+    """mem0 SaaS -> local host migration (openspec/changes/phase-2-memory)."""
+
+
+@mem0_cmd.command("migrate-from-saas")
+@click.option(
+    "--key-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Path to a file containing the Mem0 SaaS API key. Falls back to $MEM0_API_KEY.",
+)
+@click.option("--apply", is_flag=True, help="Write to the local mem0 host. Default is dry-run.")
+def mem0_migrate_from_saas(key_file: Path | None, apply: bool) -> None:
+    """Pull all SaaS memories (every user/agent/app/run scope) and import them locally."""
+    try:
+        api_key = mem0_migrate_mod.read_api_key(key_file)
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    result = mem0_migrate_mod.migrate_from_saas(api_key, apply=apply)
+    if not apply:
+        click.echo(f"dry-run: {result.fetched} SaaS memories found, 0 imported (pass --apply to write)")
+        return
+    click.echo(f"imported {result.imported}/{result.fetched} memories into local mem0")
 
 
 @main.command("status")
