@@ -389,6 +389,8 @@ def doctor() -> None:
     if vectors is not None:
         results.append(vectors)
 
+    results.extend(doctor_mod.check_voice_once())
+
     table = Table(title="aipc doctor")
     table.add_column("Module")
     table.add_column("Status")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import urllib.error
 import urllib.request
@@ -156,3 +157,53 @@ def check_vector_count(
             message=f"{count} vectors > {threshold} — consider `aipc db migrate qdrant`",
         )
     return Result(module="memory-rag-vectors", status=STATUS_OK, message=f"{count} vectors")
+
+
+def check_voice_once(
+    script: Path = Path("/usr/bin/aipc-voice-once"),
+    stt_unit: Path = Path("/etc/systemd/system/aipc-voice-stt-sensevoice.service"),
+    notifier: str = "notify-send",
+    runner=subprocess.run,
+) -> list[Result]:
+    results: list[Result] = []
+    if not script.exists() or not script.is_file() or not script.stat().st_mode & 0o111:
+        return [
+            Result(
+                module="voice-pipecat",
+                status=STATUS_FAIL,
+                message=f"{script} missing or not executable",
+            )
+        ]
+
+    results.append(Result("voice-pipecat", STATUS_OK, f"{script} executable"))
+
+    if not stt_unit.exists():
+        results.append(
+            Result(
+                "voice-stt-sensevoice",
+                STATUS_OPTIONAL,
+                f"{stt_unit.name} unit not installed; voice STT not enabled on this host",
+            )
+        )
+    else:
+        proc = runner(["systemctl", "is-active", "--quiet", stt_unit.name], check=False)
+        status = STATUS_OK if proc.returncode == 0 else STATUS_OPTIONAL
+        message = (
+            f"{stt_unit.name} active"
+            if proc.returncode == 0
+            else f"{stt_unit.name} installed but not active"
+        )
+        results.append(Result("voice-stt-sensevoice", status, message))
+
+    if shutil.which(notifier) is None:
+        results.append(
+            Result(
+                "voice-pipecat-notify",
+                STATUS_WARN,
+                "notify-send not found; replies fall back to stdout",
+            )
+        )
+    else:
+        results.append(Result("voice-pipecat-notify", STATUS_OK, "notify-send available"))
+
+    return results

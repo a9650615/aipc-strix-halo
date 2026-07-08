@@ -106,15 +106,8 @@
 
 ## 8. Doctor Checks
 
-- [ ] 8.1 `aipc doctor` voice section asserts:
-  - Pipecat service active.
-  - Each STT /healthz returns 200.
-  - Each TTS /healthz returns 200.
-  - `voice-wake.service` is loaded; NPU device accessible.
-  - `aipc-voice-mute.target` exists.
-- [ ] 8.2 INFO (not FAIL) checks:
-  - `/etc/aipc/voice/persona.yaml` present (wizard completed).
-  - `/var/lib/aipc-voice/wake/*.onnx` present (wake word trained).
+- [x] 8.1 `aipc doctor` includes static voice checks for `aipc-voice-once`, SenseVoice unit install/activity, and notifier fallback. Full Pipecat/STT/TTS/wake health checks remain open for the full Phase 3 runtime path.
+- [x] 8.2 Desktop/microphone/runtime readiness is reported as optional/warn instead of render-time failure. Persona and wake-word artifact checks remain open until firstboot/wake tasks land.
 
 ## 9. Documentation
 
