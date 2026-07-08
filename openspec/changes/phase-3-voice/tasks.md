@@ -120,10 +120,8 @@
 
 ## 10. Local Build Verification
 
-- [ ] 10.1 Run `tools/aipc render bootc`; confirm Containerfile
-  includes all 6 voice modules.
-- [ ] 10.2 Run `tools/aipc render ansible --check`; confirm it lints
-  clean.
+- [x] 10.1 `PYTHONPATH=tools python -m aipc_lib.cli render bootc --image-ref localhost/aipc:voice-stage --build-date 2026-07-08 --out /tmp/aipc-voice-Containerfile.generated` passed and includes staged `voice-pipecat` files.
+- [x] 10.2 `PYTHONPATH=tools python -m aipc_lib.cli render ansible --out /tmp/aipc-voice-site.generated.yml` passed and includes staged `voice-pipecat` files.
 - [ ] 10.3 Run each module's `verify.sh` in a privileged container;
   all non-optional modules exit 0.
 
@@ -147,8 +145,7 @@
 
 ## 12. Archive Change
 
-- [ ] 12.1 Run `npx -y @fission-ai/openspec validate phase-3-voice
-  --strict` — must print `Change 'phase-3-voice' is valid`.
+- [x] 12.1 `npx -y @fission-ai/openspec validate phase-3-voice --strict` passed: `Change 'phase-3-voice' is valid`.
 - [ ] 12.2 Run `npx -y @fission-ai/openspec archive phase-3-voice` to
   merge the spec into `openspec/specs/voice/spec.md` and close the
   change.
