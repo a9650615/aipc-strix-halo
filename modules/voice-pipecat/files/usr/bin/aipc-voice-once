@@ -35,6 +35,13 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib/aipc-voice"))
+try:
+    import aipc_voice_tts
+except Exception:
+    aipc_voice_tts = None
 
 STT_URL = os.environ.get("AIPC_VOICE_STT_URL", "http://127.0.0.1:9001/transcribe")
 CHAT_URL = os.environ.get("AIPC_VOICE_CHAT_URL", "http://127.0.0.1:4100/chat")
@@ -95,7 +102,10 @@ def chat(text, session_id):
 
 
 def show(reply):
-    """Display the reply as text — replaces TTS entirely for this v0."""
+    """Speak the reply when TTS is ready; always keep text fallback."""
+    if os.environ.get("AIPC_VOICE_TTS", "1") != "0" and aipc_voice_tts is not None:
+        if aipc_voice_tts.speak(reply):
+            return
     if shutil.which("notify-send"):
         subprocess.run(["notify-send", "AIPC Assistant", reply], check=False)
     else:
@@ -110,6 +120,7 @@ def _self_test():
     assert _parse_text_field(b'{"text": "hello"}') == "hello"
     ns = build_parser().parse_args(["--seconds", "3"])
     assert ns.seconds == 3
+    assert os.environ.get("AIPC_VOICE_TTS", "1") in ("0", "1")
     print("aipc-voice-once: self-test OK")
     return 0
 

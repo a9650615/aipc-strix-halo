@@ -6,22 +6,30 @@ if [ -f "$this_dir/.disabled" ]; then
     exit 2
 fi
 
-voice_once="$this_dir/files/usr/bin/aipc-voice-once"
-hotkey="$this_dir/files/usr/bin/aipc-voice-bind-hotkey"
-python3 -c "import ast; ast.parse(open('$voice_once').read())" || {
-    echo "voice-pipecat: aipc-voice-once syntax error" >&2
+check_script() {
+    script_name="$1"
+    script_path="$this_dir/files/usr/bin/$script_name"
+    python3 -c "import ast; ast.parse(open('$script_path').read())" || {
+        echo "voice-pipecat: $script_name syntax error" >&2
+        exit 1
+    }
+    python3 "$script_path" --self-test >/dev/null || {
+        echo "voice-pipecat: $script_name self-test failed" >&2
+        exit 1
+    }
+}
+
+for script in aipc-voice-once aipc-voice-bind-hotkey; do
+    check_script "$script"
+done
+
+tts="$this_dir/files/usr/lib/aipc-voice/aipc_voice_tts.py"
+python3 -c "import ast; ast.parse(open('$tts').read())" || {
+    echo "voice-pipecat: aipc_voice_tts syntax error" >&2
     exit 1
 }
-python3 "$voice_once" --self-test >/dev/null || {
-    echo "voice-pipecat: aipc-voice-once self-test failed" >&2
-    exit 1
-}
-python3 -c "import ast; ast.parse(open('$hotkey').read())" || {
-    echo "voice-pipecat: aipc-voice-bind-hotkey syntax error" >&2
-    exit 1
-}
-python3 "$hotkey" --self-test >/dev/null || {
-    echo "voice-pipecat: aipc-voice-bind-hotkey self-test failed" >&2
+python3 "$tts" >/dev/null || {
+    echo "voice-pipecat: aipc_voice_tts self-test failed" >&2
     exit 1
 }
 

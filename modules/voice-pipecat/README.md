@@ -53,6 +53,10 @@ repo's own ethos. Revisit `pipecat-ai` once the streaming pieces (wake
 word, TTS, barge-in) are actually being built; the pip package stays a
 reasonable choice for that later work.
 
+TTS is opportunistic. Set `AIPC_VOICE_TTS=0` to force text-only output.
+If local TTS endpoints are unavailable, `aipc-voice-once` keeps the
+existing `notify-send` or stdout fallback.
+
 ### STT interface contract
 
 `voice-stt-sensevoice` (port 9001) landed in parallel and its real

@@ -64,8 +64,7 @@
 - [ ] 4.1 CosyVoice 2 quadlet with reference-sample mount,
   zero-shot-clone path enabled when sample present.
 - [ ] 4.2 Kokoro / Piper quadlet (English).
-- [ ] 4.3 Pipecat language-router step: dispatch by language tag
-  already produced during STT routing.
+- [x] 4.3 Minimal language router exists in `aipc_voice_tts.py`; spoken output remains hardware-gated until local TTS services are active and tested.
 
 ## 5. Pipecat Orchestrator + /chat Client
 
