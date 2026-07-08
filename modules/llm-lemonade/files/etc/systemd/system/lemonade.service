@@ -19,7 +19,10 @@ RestartSec=5
 LimitMEMLOCK=infinity
 TimeoutStopSec=30
 ExecStartPre=-/usr/bin/podman rm -f lemonade
-ExecStartPre=/usr/bin/mkdir -p /var/lib/aipc-lemonade/cache /var/lib/aipc-lemonade/flm /var/lib/aipc-lemonade/huggingface
+ExecStartPre=/usr/bin/mkdir -p /var/lib/aipc-lemonade/cache /var/lib/aipc-lemonade/flm /var/lib/aipc-models/hf
+# HF model cache lives under the shared /var/lib/aipc-models tree (symlink to
+# the primary user's ~/aipc-models, resolved by aipc-models-dir.service) so all
+# model weights — Ollama blobs and Lemonade HF downloads — share one root.
 # See configure-lemonade.sh for what this does and why.
 ExecStartPre=/usr/lib/aipc/llm-lemonade/configure-lemonade.sh
 ExecStart=/usr/bin/podman run \
@@ -34,7 +37,7 @@ ExecStart=/usr/bin/podman run \
     -p 127.0.0.1:8001:8001 \
     -v /var/lib/aipc-lemonade/cache:/root/.cache/lemonade:Z \
     -v /var/lib/aipc-lemonade/flm:/root/.config/flm:Z \
-    -v /var/lib/aipc-lemonade/huggingface:/root/.cache/huggingface:Z \
+    -v /var/lib/aipc-models/hf:/root/.cache/huggingface:Z \
     ghcr.io/lemonade-sdk/lemonade-server@sha256:e727643dad3b0680ececbcf7ee1430e5f447a3bdf3700824335d3ee18a3dcfb5 \
     ./lemond --host 0.0.0.0 --port 8001
 ExecStop=/usr/bin/podman stop -t 20 lemonade
