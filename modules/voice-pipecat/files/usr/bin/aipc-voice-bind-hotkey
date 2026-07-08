@@ -94,8 +94,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     _write_desktop_file(DESKTOP_FILE, desktop_text)
-    for cmd in cmds:
-        subprocess.run(cmd, check=True)
+    try:
+        for cmd in cmds:
+            subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as exc:
+        print(f"aipc-voice-bind-hotkey: desktop binding failed: {exc}", file=sys.stderr)
+        return 2
     print(f"aipc-voice-bind-hotkey: bound {args.shortcut} to {args.command}")
     return 0
 
