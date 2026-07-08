@@ -232,7 +232,7 @@ running container:
   container restart while looking like it persisted something:
   - `/var/lib/aipc-lemonade/cache` -> `/root/.cache/lemonade`
   - `/var/lib/aipc-lemonade/flm` -> `/root/.config/flm`
-  - `/var/lib/aipc-lemonade/huggingface` -> `/root/.cache/huggingface`
+  - `/var/lib/aipc-models/hf` -> `/root/.cache/huggingface` (consolidated 2026-07-09 under the shared `/var/lib/aipc-models` tree that Ollama's blobs also use, resolved to the primary user's `~/aipc-models` by `aipc-models-dir.service`, so all model weights — Ollama + Lemonade — live under one root)
 - Exposes an OpenAI-compatible HTTP API on `127.0.0.1:8001`.
 - `aipc models sync` pulls all three aliases' weights via
   `podman exec lemonade /opt/lemonade/lemonade pull <model-id>` (see
