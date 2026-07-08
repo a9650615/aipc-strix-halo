@@ -96,3 +96,16 @@ This is a small safety tool, so do not build a large partition test suite. Verif
 - `bash -n install-aipc-linux.sh` must pass.
 
 Static verification is enough for implementation review. Actually deleting `AIPC_LIVE` and growing the filesystem is hardware verification and must only happen after the user explicitly asks to run it on the machine.
+
+## Update 2026-07-09 — root detection on ostree/composefs
+
+Safety gate 1 ("`/` resolves to a local block device") was implemented in
+`storage_reclaim.py:load_plan` as `findmnt -n -o SOURCE /`, which on an
+ostree/composefs (bootc) host returns the literal string `composefs` rather
+than the backing block device — so the tool aborted with `root partition
+composefs not found` on its own target host. Fixed in commit `9130905`:
+`_resolve_root_device()` walks `/sysroot` → `/var` → `/`, takes the first
+`/dev/`-backed mount, and strips any btrfs `[subvol]` suffix. The adjacency
+guard (gate 4) is unchanged. Tracked in the `reclaim-live-root-detect`
+OpenSpec change; the destructive reclaim path remains unverified (no
+R6b-after-root host exists yet).
