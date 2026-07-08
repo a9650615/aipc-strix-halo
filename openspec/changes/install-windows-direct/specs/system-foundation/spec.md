@@ -59,3 +59,17 @@ When a user installs via the R6b Windows-direct path, the documented recovery me
 
 - **WHEN** the user has just completed the R6b install
 - **THEN** the Windows partition and the 30 GB install partition both remain on disk and bootable, and the `docs/install-windows-direct-runbook.md` post-install section explicitly instructs the user to wait until `aipc doctor` has been green for ≥30 days before wiping
+
+### Requirement: AIPC_LIVE Install Partition Placed After Root Space
+
+The R6b Windows-direct path SHALL create the 30 GB `AIPC_LIVE` partition at the **end** of the unallocated region (after the ≥120 GB space reserved for the bazzite-dx install), not at the beginning, so that after install `AIPC_LIVE` sits immediately after the installed system partition. This physical adjacency is what `aipc storage reclaim-live`'s guard requires to safely delete `AIPC_LIVE` and grow the root filesystem into the freed space. Placing `AIPC_LIVE` *before* the root region (the layout the original diskpart sequence produced) strands it on the wrong side of root — root can only grow toward its end, never back across its start — leaving the 30 GB permanently unreclaimable, as observed on the physical host 2026-07-09.
+
+#### Scenario: AIPC_LIVE is created after the bazzite install region
+
+- **WHEN** the runbook's diskpart step creates the `AIPC_LIVE` partition from the unallocated space
+- **THEN** it uses an explicit byte offset placing `AIPC_LIVE` after the ≥120 GB region reserved for bazzite, yielding a post-install on-disk order of `[Windows NTFS][bazzite root…][AIPC_LIVE]`
+
+#### Scenario: Adjacent AIPC_LIVE is reclaimable post-install
+
+- **WHEN** the R6b install has completed and the host boots the installed bazzite-dx
+- **THEN** `AIPC_LIVE` is the partition immediately after the root partition on the same disk, so `aipc storage reclaim-live` (with its root-detection defect fixed per the `reclaim-live-root-detect` change) can plan and execute a reclaim without moving partitions
