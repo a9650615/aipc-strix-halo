@@ -54,6 +54,7 @@ POWER_GUARD_SENTINEL = "/etc/aipc/power-guard.disabled"
 POWER_GUARD_STATE = "/var/lib/aipc-power-guard/state.json"
 LEMONADE_BASE_URL = "http://127.0.0.1:8001"
 LEMONADE_UNLOAD_PATH = "/api/v0/unload"
+BACKEND_HTTP_ERRORS = (urllib.error.URLError, TimeoutError, OSError)
 
 
 def _sudo(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
@@ -86,17 +87,23 @@ def lemonade_cmd() -> None:
     """Lemonade backend controls."""
 
 
+def _lemonade_unload(model_name: str, base_url: str = LEMONADE_BASE_URL) -> bool:
+    try:
+        _lemonade_post(base_url, LEMONADE_UNLOAD_PATH, {"model_name": model_name})
+        return True
+    except BACKEND_HTTP_ERRORS as e:
+        click.echo(f"lemonade unload failed for {model_name}: {e}", err=True)
+        click.echo("If it is stuck in-flight, use: sudo systemctl restart lemonade.service", err=True)
+        return False
+
+
 @lemonade_cmd.command("unload")
 @click.argument("model", default="qwen35-122b-q3", required=False)
 @click.option("--base-url", default=LEMONADE_BASE_URL, show_default=True)
 def lemonade_unload(model: str, base_url: str) -> None:
     """Unload a Lemonade model by aipc alias or raw Lemonade model id."""
     model_name = _lemonade_model_name(model)
-    try:
-        _lemonade_post(base_url, LEMONADE_UNLOAD_PATH, {"model_name": model_name})
-    except urllib.error.URLError as e:
-        click.echo(f"lemonade unload failed for {model_name}: {e}", err=True)
-        click.echo("If it is stuck in-flight, use: sudo systemctl restart lemonade.service", err=True)
+    if not _lemonade_unload(model_name, base_url):
         sys.exit(1)
     click.echo(f"lemonade unload requested: {model} -> {model_name}")
 
@@ -598,7 +605,7 @@ def _ollama_unload(model_name: str) -> bool:
         with urllib.request.urlopen(req, timeout=10) as resp:
             resp.read()
         return True
-    except urllib.error.URLError as e:
+    except BACKEND_HTTP_ERRORS as e:
         click.echo(f"ollama unload failed for {model_name}: {e}", err=True)
         return False
 
@@ -633,14 +640,7 @@ def models_unload(alias: str, manifest: Path) -> None:
         else:
             sys.exit(1)
     elif entry.backend == "lemonade":
-        try:
-            _lemonade_post(
-                LEMONADE_BASE_URL, LEMONADE_UNLOAD_PATH,
-                {"model_name": entry.model_id},
-            )
-        except urllib.error.URLError as e:
-            click.echo(f"lemonade unload failed for {alias}: {e}", err=True)
-            click.echo("If it is stuck in-flight, use: sudo systemctl restart lemonade.service", err=True)
+        if not _lemonade_unload(entry.model_id):
             sys.exit(1)
         click.echo(f"lemonade unload requested: {alias} -> {entry.model_id}")
     else:

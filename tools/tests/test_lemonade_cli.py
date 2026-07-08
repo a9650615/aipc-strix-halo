@@ -23,7 +23,11 @@ def test_lemonade_unload_resolves_alias_and_posts_model_id(monkeypatch) -> None:
         ],
     )
     monkeypatch.setattr(cli.models_mod, "DEFAULT_MANIFEST", Path("/tmp/models.yaml"))
-    monkeypatch.setattr(cli, "_lemonade_post", lambda base_url, path, payload: calls.append((base_url, path, payload)))
+    monkeypatch.setattr(
+        cli,
+        "_lemonade_post",
+        lambda base_url, path, payload: calls.append((base_url, path, payload)),
+    )
 
     result = CliRunner().invoke(cli.main, ["lemonade", "unload", "qwen35-122b-q3"])
 
@@ -60,4 +64,20 @@ def test_lemonade_unload_reports_restart_hint_on_failure(monkeypatch) -> None:
 
     assert result.exit_code == 1
     assert "lemonade unload failed" in result.output
+    assert "sudo systemctl restart lemonade.service" in result.output
+
+
+def test_lemonade_unload_reports_restart_hint_on_timeout(monkeypatch) -> None:
+    monkeypatch.setattr(cli.models_mod, "load_manifest", lambda path: [])
+    monkeypatch.setattr(
+        cli,
+        "_lemonade_post",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("timed out")),
+    )
+
+    result = CliRunner().invoke(cli.main, ["lemonade", "unload", "ornith-35b"])
+
+    assert result.exit_code == 1
+    assert "lemonade unload failed" in result.output
+    assert "timed out" in result.output
     assert "sudo systemctl restart lemonade.service" in result.output

@@ -234,6 +234,27 @@ def test_models_unload_lemonade_posts_model_id(monkeypatch, tmp_path: Path) -> N
     assert "user.Ornith-35B" in result.output
 
 
+def test_models_unload_lemonade_timeout_exits_1_with_restart_hint(monkeypatch, tmp_path: Path) -> None:
+    manifest = _make_manifest(
+        tmp_path,
+        [{"alias": "ornith-35b", "backend": "lemonade", "model_id": "user.Ornith-35B"}],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_lemonade_post",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("timed out")),
+    )
+
+    result = CliRunner().invoke(
+        cli.main, ["models", "unload", "ornith-35b", "--manifest", str(manifest)],
+    )
+
+    assert result.exit_code == 1
+    assert "lemonade unload failed for user.Ornith-35B" in result.output
+    assert "timed out" in result.output
+    assert "sudo systemctl restart lemonade.service" in result.output
+
+
 def test_models_unload_unknown_alias_exits_1(tmp_path: Path) -> None:
     manifest = _make_manifest(
         tmp_path,
@@ -272,7 +293,7 @@ def test_models_unload_ollama_failure_exits_1(monkeypatch, tmp_path: Path) -> No
     )
     monkeypatch.setattr(
         cli.urllib.request, "urlopen",
-        lambda *a, **kw: (_ for _ in ()).throw(urllib.error.URLError("refused")),
+        lambda *a, **kw: (_ for _ in ()).throw(TimeoutError("timed out")),
     )
 
     result = CliRunner().invoke(
