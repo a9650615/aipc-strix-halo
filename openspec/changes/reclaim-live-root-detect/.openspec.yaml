@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-07-08
+goal: Make aipc storage reclaim-live detect the real root partition on
+  ostree/composefs and align its guard with the R6b install layout

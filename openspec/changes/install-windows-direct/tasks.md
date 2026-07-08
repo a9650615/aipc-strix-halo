@@ -43,3 +43,9 @@
 - [x] 7.1 Run `npx -y @fission-ai/openspec validate install-windows-direct --strict`; output must be "valid".
 - [x] 7.2 Add a cross-link from `docs/architecture.md` §9 (just under the "Install Flow" heading) to the new §9 Alt section so users on the USB path also know the alternative exists.
 - [ ] 7.3 Hardware verification on the AI PC (one pass): confirm rEFInd registers on Strix Halo firmware (Q1), and confirm the bazzite-dx installer's behaviour with respect to "install alongside" vs "use entire disk" (Q2). Record findings in the runbook and, if needed, open a follow-up change. (AI PC)
+
+## 8. AIPC_LIVE placement (reclaim-compatible layout)
+
+- [ ] 8.1 Update `docs/install-windows-direct-runbook.md` §7 diskpart sequence: create the 30 GB `AIPC_LIVE` partition with an explicit `offset=` placing it *after* the ≥120 GB region reserved for bazzite (use the tail of the unallocated space), not at the start. Post-install order must be `[Windows][bazzite root…][AIPC_LIVE]`.
+- [ ] 8.2 If `targets/windows/install-windows.ps1`/`Install-AIPC-Windows.ps1` create an on-disk (non-USB) `AIPC_LIVE`, align their partition step to the same after-root offset.
+- [ ] 8.3 Note in the runbook *why* placement matters: `AIPC_LIVE` must sit immediately after root for `aipc storage reclaim-live` to reclaim it (root grows only toward its end). Cross-ref the `reclaim-live-root-detect` change. (AI PC)
