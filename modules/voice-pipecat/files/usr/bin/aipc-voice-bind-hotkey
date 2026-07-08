@@ -12,7 +12,7 @@ from pathlib import Path
 
 DEFAULT_SHORTCUT = "Meta+Space"
 DEFAULT_COMMAND = "/usr/bin/aipc-voice-once"
-ACTION_ID = "aipc-voice-once"
+DESKTOP_FILE = Path.home() / ".local/share/applications/aipc-voice-once.desktop"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,9 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _commands(shortcut: str, command: str) -> list[list[str]]:
-    desktop = Path.home() / ".local/share/applications/aipc-voice-once.desktop"
-    desktop_text = (
+def _desktop_entry_text(command: str) -> str:
+    return (
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=AIPC Voice Assistant\n"
@@ -34,8 +33,10 @@ def _commands(shortcut: str, command: str) -> list[list[str]]:
         "Terminal=false\n"
         "Categories=Utility;\n"
     )
+
+
+def _shortcut_commands(shortcut: str) -> list[list[str]]:
     return [
-        ["install-desktop", str(desktop), desktop_text],
         [
             "kwriteconfig6",
             "--file",
@@ -50,17 +51,9 @@ def _commands(shortcut: str, command: str) -> list[list[str]]:
     ]
 
 
-def _apply_desktop_file(path: str, text: str) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text)
-
-
-def _run(cmd: list[str]) -> None:
-    if cmd[0] == "install-desktop":
-        _apply_desktop_file(cmd[1], cmd[2])
-        return
-    subprocess.run(cmd, check=True)
+def _write_desktop_file(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
 
 
 def _missing_tools() -> list[str]:
@@ -68,10 +61,12 @@ def _missing_tools() -> list[str]:
 
 
 def _self_test() -> int:
-    cmds = _commands(DEFAULT_SHORTCUT, DEFAULT_COMMAND)
-    assert cmds[0][0] == "install-desktop"
-    assert "aipc-voice-once.desktop" in cmds[1]
-    assert DEFAULT_SHORTCUT in cmds[1][-1]
+    desktop_text = _desktop_entry_text(DEFAULT_COMMAND)
+    cmds = _shortcut_commands(DEFAULT_SHORTCUT)
+    assert f"Exec={DEFAULT_COMMAND}" in desktop_text
+    assert cmds[0][0] == "kwriteconfig6"
+    assert "aipc-voice-once.desktop" in cmds[0]
+    assert DEFAULT_SHORTCUT in cmds[0][-1]
     print("aipc-voice-bind-hotkey: self-test OK")
     return 0
 
@@ -81,24 +76,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_test:
         return _self_test()
 
+    desktop_text = _desktop_entry_text(args.command)
+    cmds = _shortcut_commands(args.shortcut)
     missing = _missing_tools()
-    cmds = _commands(args.shortcut, args.command)
-    if args.dry_run or missing or not os.environ.get("DISPLAY"):
+    has_display = bool(os.environ.get("DISPLAY"))
+
+    if args.dry_run or missing or not has_display:
+        print(f"write {DESKTOP_FILE}")
         for cmd in cmds:
-            if cmd[0] == "install-desktop":
-                print(f"write {cmd[1]}")
-            else:
-                print(" ".join(cmd))
+            print(" ".join(cmd))
         if missing:
             print(f"aipc-voice-bind-hotkey: missing desktop tools: {', '.join(missing)}", file=sys.stderr)
             return 2
-        if not os.environ.get("DISPLAY"):
+        if not has_display:
             print("aipc-voice-bind-hotkey: DISPLAY is not set; run inside the desktop session", file=sys.stderr)
             return 2
         return 0
 
+    _write_desktop_file(DESKTOP_FILE, desktop_text)
     for cmd in cmds:
-        _run(cmd)
+        subprocess.run(cmd, check=True)
     print(f"aipc-voice-bind-hotkey: bound {args.shortcut} to {args.command}")
     return 0
 
