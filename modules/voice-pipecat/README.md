@@ -30,6 +30,15 @@ Run it directly: `aipc-voice-once` (or `aipc-voice-once --seconds 8` for a
 longer recording). `--self-test` runs offline checks only (used by
 `verify.sh`).
 
+Bind the push-to-talk shortcut from a desktop session:
+
+```bash
+aipc-voice-bind-hotkey
+```
+
+If KDE tools or `DISPLAY` are unavailable, the helper prints the commands it
+would run and exits optional (`2`) instead of changing system state.
+
 ### Why plain Python, not `pipecat-ai`
 
 `pipecat-ai` (confirmed real, latest `1.5.0` on PyPI) is a framework for
@@ -78,7 +87,9 @@ Response: 200 {"text": "..."}
   — this v0 always calls the supervisor's `/chat`, never a direct
   Daily-Assistant shortcut.
 
-### Verification reached
+#See `docs/voice-pipeline.md` for the staged end-to-end flow and verification tiers.
+
+## Verification reached
 
 - **Static**: `verify.sh` runs `ast.parse` on `aipc-voice-once` plus
   `aipc-voice-once --self-test` (offline: URL defaults, JSON response

@@ -203,6 +203,8 @@ modules/<name>/
 | `voice-tts-cosyvoice` | CosyVoice 2 service (Chinese TTS) |
 | `voice-tts-kokoro` | Kokoro / Piper service (English / fallback) |
 
+Voice pipeline details and current staged verification status live in `docs/voice-pipeline.md`.
+
 ### Phase 4 — Agent
 
 | Module | Purpose |

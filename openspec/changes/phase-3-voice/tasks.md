@@ -114,8 +114,7 @@
 - [ ] 9.1 Per-module README for each of the 6 modules: purpose,
   packages, files, dependencies, verify behaviour, firstboot user
   actions where applicable.
-- [ ] 9.2 `docs/voice-pipeline.md`: end-to-end diagram + path-A
-  default + path-B opt-in toggle instructions.
+- [x] 9.2 `docs/voice-pipeline.md` documents the staged v0/PTT, TTS fallback, and full Phase 3 path with verification tiers.
 - [ ] 9.3 Confirm `docs/architecture.md §7` Phase 3 row matches the
   6-module list shipped here (no count change to the §7 header
   total).
