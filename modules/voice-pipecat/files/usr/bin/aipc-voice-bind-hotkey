@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Bind AIPC voice push-to-talk in the current desktop session."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+DEFAULT_SHORTCUT = "Meta+Space"
+DEFAULT_COMMAND = "/usr/bin/aipc-voice-once"
+ACTION_ID = "aipc-voice-once"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--shortcut", default=DEFAULT_SHORTCUT)
+    parser.add_argument("--command", default=DEFAULT_COMMAND)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--self-test", action="store_true")
+    return parser
+
+
+def _commands(shortcut: str, command: str) -> list[list[str]]:
+    desktop = Path.home() / ".local/share/applications/aipc-voice-once.desktop"
+    desktop_text = (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=AIPC Voice Assistant\n"
+        f"Exec={command}\n"
+        "Terminal=false\n"
+        "Categories=Utility;\n"
+    )
+    return [
+        ["install-desktop", str(desktop), desktop_text],
+        [
+            "kwriteconfig6",
+            "--file",
+            "kglobalshortcutsrc",
+            "--group",
+            "services",
+            "--key",
+            "aipc-voice-once.desktop",
+            f"{shortcut},none,AIPC Voice Assistant",
+        ],
+        ["qdbus6", "org.kde.kglobalaccel", "/kglobalaccel", "org.kde.KGlobalAccel.reloadConfig"],
+    ]
+
+
+def _apply_desktop_file(path: str, text: str) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+
+
+def _run(cmd: list[str]) -> None:
+    if cmd[0] == "install-desktop":
+        _apply_desktop_file(cmd[1], cmd[2])
+        return
+    subprocess.run(cmd, check=True)
+
+
+def _missing_tools() -> list[str]:
+    return [name for name in ("kwriteconfig6", "qdbus6") if shutil.which(name) is None]
+
+
+def _self_test() -> int:
+    cmds = _commands(DEFAULT_SHORTCUT, DEFAULT_COMMAND)
+    assert cmds[0][0] == "install-desktop"
+    assert "aipc-voice-once.desktop" in cmds[1]
+    assert DEFAULT_SHORTCUT in cmds[1][-1]
+    print("aipc-voice-bind-hotkey: self-test OK")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.self_test:
+        return _self_test()
+
+    missing = _missing_tools()
+    cmds = _commands(args.shortcut, args.command)
+    if args.dry_run or missing or not os.environ.get("DISPLAY"):
+        for cmd in cmds:
+            if cmd[0] == "install-desktop":
+                print(f"write {cmd[1]}")
+            else:
+                print(" ".join(cmd))
+        if missing:
+            print(f"aipc-voice-bind-hotkey: missing desktop tools: {', '.join(missing)}", file=sys.stderr)
+            return 2
+        if not os.environ.get("DISPLAY"):
+            print("aipc-voice-bind-hotkey: DISPLAY is not set; run inside the desktop session", file=sys.stderr)
+            return 2
+        return 0
+
+    for cmd in cmds:
+        _run(cmd)
+    print(f"aipc-voice-bind-hotkey: bound {args.shortcut} to {args.command}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

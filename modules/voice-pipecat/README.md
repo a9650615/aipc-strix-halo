@@ -1,19 +1,20 @@
 # voice-pipecat
 
-## Current status: v0 push-to-talk, text-out — enabled; plumbing hardware-verified, real mic input not yet confirmed
+## Current status: v0 push-to-talk, text-out — enabled; runtime hotkey helper present, no wake word, no guaranteed TTS yet
 
-This is a deliberately reduced scope, not the full Phase 3 design: **no
-TTS, no wake word, no hotkey**. The user's explicit direction was "text
-output is fine, the assistant does not need to speak yet." What's here is
-a manually-invoked one-shot round trip: record -> transcribe -> ask the
-agent -> show the reply as a desktop notification.
+This is a deliberately reduced scope, not the full Phase 3 design: the
+user's explicit direction was "text output is fine, the assistant does
+not need to speak yet." What's here is a manually-invoked one-shot round
+trip: record -> transcribe -> ask the agent -> show the reply as a desktop
+notification, plus a runtime helper that can bind push-to-talk from a
+desktop session.
 
 ### What it does (v0)
 
 `files/usr/bin/aipc-voice-once` — a single stdlib-only Python script, no
 systemd unit, invoked manually from a terminal (or a keyboard-shortcut
-launcher a user sets up themselves; no hotkey is registered by this
-module):
+launcher a user sets up themselves; the module also ships a runtime
+hotkey helper for desktop-session binding):
 
 1. Records N seconds of audio (default 5, `--seconds` or
    `$AIPC_VOICE_RECORD_SECONDS`) from the default ALSA input via
@@ -62,11 +63,9 @@ Response: 200 {"text": "..."}
   explicit user direction. Tasks 4.x, D5.
 - NPU wake-word classifier/training pipeline — task group 2, a separate,
   more complex piece. `modules/voice-wake` doesn't exist yet.
-- Global hotkey (`Super+Space` push-to-talk, D6) — GNOME keybinding
-  registration is real desktop-integration complexity; tasks 1.2/2.x/7.1
-  are all still open. `aipc-voice-once` must be invoked manually (a
-  terminal alias or a user-configured keybinding calling it is a
-  reasonable stopgap, not shipped here).
+- Full desktop hotkey registration — `aipc-voice-bind-hotkey` exists for
+  runtime binding, but the broader hotkey/session integration work is
+  still deferred.
 - The full path-A pipeline config (`files/etc/aipc/pipecat/pipeline.yaml`)
   describes the eventual wake/STT-router/LLM/TTS-router shape and is left
   in place untouched — it is not read by `aipc-voice-once` and does
