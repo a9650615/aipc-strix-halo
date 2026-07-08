@@ -45,6 +45,9 @@ def build_plan(lsblk: dict, root_part: str, root_fstype: str) -> Plan:
     if live_part.get("disk") != root.get("disk"):
         return Plan(False, f"AIPC_LIVE is on {live_part.get('disk')}, but root is on {root.get('disk')}", [])
 
+    # A partition grows toward its end, never back across its start, so
+    # AIPC_LIVE must sit immediately after root to be reclaimable. R6b installs
+    # place it there (install-windows-direct); pre-fix layouts stranded it.
     if live_part.get("partn") != root.get("partn") + 1:
         return Plan(False, "AIPC_LIVE is not immediately after the root partition", [])
 
@@ -67,9 +70,30 @@ def _json(args: list[str]) -> dict:
     return json.loads(subprocess.check_output(args, text=True))
 
 
+def _findmnt(field: str, mount: str) -> str:
+    return subprocess.check_output(["findmnt", "-n", "-o", field, mount], text=True).strip()
+
+
+def _resolve_root_device(
+    findmnt: Callable[[str, str], str] = _findmnt,
+) -> tuple[str, str]:
+    # On an ostree/composefs host, findmnt SOURCE / returns the literal
+    # "composefs" overlay rather than the backing block device. Walk the real
+    # mount points — /sysroot (ostree) → /var (bazzite bind) → / (plain host) —
+    # and take the first whose SOURCE is a /dev/ path, stripping any btrfs
+    # subvolume suffix (e.g. /dev/nvme0n1p9[/root] → /dev/nvme0n1p9).
+    for mnt in ("/sysroot", "/var", "/"):
+        try:
+            src = findmnt("SOURCE", mnt)
+        except subprocess.CalledProcessError:
+            continue
+        if src.startswith("/dev/"):
+            return src.split("[", 1)[0], findmnt("FSTYPE", mnt)
+    raise RuntimeError("no block-device backed mount found for root")
+
+
 def load_plan() -> Plan:
-    root = subprocess.check_output(["findmnt", "-n", "-o", "SOURCE", "/"], text=True).strip()
-    fstype = subprocess.check_output(["findmnt", "-n", "-o", "FSTYPE", "/"], text=True).strip()
+    root, fstype = _resolve_root_device()
     return build_plan(_json(["lsblk", "-J", "-O"]), root, fstype)
 
 
