@@ -45,3 +45,18 @@ Full Phase 3 adds wake-word inference, listen-off mute triggers, command-vs-chat
 - Hardware-verified: microphone capture, STT, agent `/chat`, notification or audio output, and desktop hotkey are exercised on the physical AI PC.
 
 Do not treat render-verified as hardware-verified for microphone, TTS, wake word, or desktop hotkey behavior.
+
+## Hardware handoff
+
+Current status on 2026-07-08: static and render verification passed for the staged v0/PTT, doctor, docs, and opportunistic TTS fallback work. Physical Strix Halo hardware verification was not run in this session.
+
+Run these on the AI PC after deploying the image:
+
+```bash
+systemctl is-active aipc-voice-stt-sensevoice.service
+aipc-voice-once --seconds 5
+aipc-voice-bind-hotkey --dry-run
+aipc doctor
+```
+
+Only mark hardware tasks complete after the matching command path is exercised on the physical AI PC. Wake word, listen-off triggers, firstboot voice screens, and full command/chat routing remain pending.

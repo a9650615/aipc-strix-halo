@@ -127,6 +127,8 @@
 
 ## 11. AI PC Hardware Verification
 
+Hardware verification was not run in this session; keep 11.x unchecked until exercised on the physical Strix Halo AI PC.
+
 - [ ] 11.1 Deploy `:rolling` tag to the AI PC via `bootc switch`.
 - [ ] 11.2 Run firstboot wizard; complete persona + wake-word
   screens. Confirm `/etc/aipc/voice/persona.yaml` and
