@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
 from click.testing import CliRunner
 
 from aipc_lib import storage_reclaim
@@ -117,3 +118,40 @@ def test_cli_reclaim_live_propagates_failure(monkeypatch) -> None:
     result = CliRunner().invoke(main, ["storage", "reclaim-live", "--confirm"])
 
     assert result.exit_code == 7
+
+
+def test_resolve_root_device_ostree_falls_through_composefs() -> None:
+    # / is the composefs overlay (no /dev source); /sysroot is the backing btrfs.
+    table = {
+        ("SOURCE", "/sysroot"): "/dev/nvme0n1p9[/root]",
+        ("FSTYPE", "/sysroot"): "btrfs",
+        ("SOURCE", "/"): "composefs",
+        ("FSTYPE", "/"): "composefs",
+    }
+
+    dev, fstype = storage_reclaim._resolve_root_device(lambda f, m: table[(f, m)])
+
+    assert (dev, fstype) == ("/dev/nvme0n1p9", "btrfs")
+
+
+def test_resolve_root_device_plain_host() -> None:
+    # No /sysroot or /var (mounts missing → CalledProcessError); / is /dev-backed.
+    def findmnt(field: str, mount: str) -> str:
+        if mount == "/":
+            return {"SOURCE": "/dev/sda2", "FSTYPE": "ext4"}[field]
+        raise subprocess.CalledProcessError(1, ["findmnt"])
+
+    dev, fstype = storage_reclaim._resolve_root_device(findmnt)
+
+    assert (dev, fstype) == ("/dev/sda2", "ext4")
+
+
+def test_resolve_root_device_raises_when_no_block_device() -> None:
+    # / is composefs; /sysroot and /var are absent → no /dev source anywhere.
+    def findmnt(field: str, mount: str) -> str:
+        if mount == "/":
+            return "composefs"
+        raise subprocess.CalledProcessError(1, ["findmnt"])
+
+    with pytest.raises(RuntimeError, match="no block-device backed mount"):
+        storage_reclaim._resolve_root_device(findmnt)
