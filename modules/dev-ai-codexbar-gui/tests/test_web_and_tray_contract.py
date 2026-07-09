@@ -25,6 +25,18 @@ def test_primary_usage_ui_not_qmenu_popup() -> None:
     assert "class UsagePopover(QMenu)" not in pop
 
 
+def test_popover_constructs_with_web_url() -> None:
+    """Regression: set_web_url must not run before Open Web button exists."""
+    from PySide6.QtWidgets import QApplication
+
+    from codexbar_gui.popover import UsagePopover
+
+    _ = QApplication.instance() or QApplication([])
+    pop = UsagePopover(web_url="http://127.0.0.1:8787/")
+    assert pop._web_url == "http://127.0.0.1:8787/"
+    assert pop._web_btn.isEnabled()
+
+
 def test_paint_remaining_digits_non_null() -> None:
     from PySide6.QtWidgets import QApplication
 

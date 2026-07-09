@@ -245,14 +245,19 @@ class UsagePopover(QWidget):
         self._web_label.setOpenExternalLinks(True)
         self._web_label.setStyleSheet("color:#89b4fa; font-size:11px; border:none;")
         outer.addWidget(self._web_label)
-        self._set_web_url(web_url)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll.setStyleSheet("QScrollArea { background:transparent; border:none; }")
+        self._scroll.setStyleSheet(
+            "QScrollArea { background:transparent; border:none; }"
+            "QScrollArea > QWidget > QWidget { background:transparent; }"
+            "QScrollArea QWidget { background:transparent; }"
+        )
+        self._scroll.viewport().setStyleSheet("background:transparent;")
         self._body = QWidget()
+        self._body.setStyleSheet("background:transparent;")
         self._body_layout = QVBoxLayout(self._body)
         self._body_layout.setContentsMargins(0, 0, 0, 0)
         self._body_layout.setSpacing(8)
@@ -277,6 +282,9 @@ class UsagePopover(QWidget):
         btns.addWidget(close_btn)
         outer.addLayout(btns)
 
+        # After buttons exist (set_web_url enables Open Web).
+        self._set_web_url(web_url)
+
         self.setMinimumWidth(420)
         self.resize(440, 340)
 
@@ -285,16 +293,20 @@ class UsagePopover(QWidget):
 
     def _set_web_url(self, url: Optional[str]) -> None:
         self._web_url = url
+        if not hasattr(self, "_web_label"):
+            return
         if url:
             self._web_label.setText(
                 f'Web UI: <a href="{url}" style="color:#89b4fa;">{url}</a>'
                 "  (not :8080 — that is JSON-only serve)"
             )
             self._web_label.show()
-            self._web_btn.setEnabled(True)
+            if hasattr(self, "_web_btn"):
+                self._web_btn.setEnabled(True)
         else:
             self._web_label.setText("Web UI: not running")
-            self._web_btn.setEnabled(False)
+            if hasattr(self, "_web_btn"):
+                self._web_btn.setEnabled(False)
 
     def _open_web(self) -> None:
         if not self._web_url:
