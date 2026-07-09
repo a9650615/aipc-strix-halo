@@ -21,6 +21,13 @@
   unit: pipecat.service
   port: nil
 
+# Assistant aggregator is a CLI hub (no long-running unit yet). Doctor may
+# run module verify.sh separately; listed for catalog completeness.
+- name: assistant-aggregator
+  unit: nil
+  port: nil
+  note: verify via modules/assistant-aggregator/verify.sh; NPU-first local chat
+
 - name: mem0
   unit: mem0.service
   port: nil

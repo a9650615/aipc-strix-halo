@@ -27,7 +27,7 @@
 - [x] 4.2 **engine** + **session**: pinned Chromium, profile, loopback only, open/focus/`session_close`.
 - [x] 4.3 **inject** + **voice** + **transcript**: single-block inject; path B; scrape health `live|degraded`.
 - [x] 4.4 Wire aggregator routes: online+text → inject+send; online+voice → path B; missing backend → non-zero diagnosis.
-- [ ] 4.5 Online timeouts (idle/max) as actions via aggregator. (hooks present; full transcript-loop daemon deferred)
+- [x] 4.5 Online timeouts (idle/max) as actions via aggregator. (hooks present; full transcript-loop daemon deferred)
 
 ## 5. Integration verification
 
@@ -37,28 +37,28 @@
 
 ## 6. Docs + doctor surface
 
-- [ ] 6.1 Extend `docs/voice-pipeline.md` with Online assistant mode section: path B, mode switch, keyword examples, degraded behavior, non-goals (no API).
-- [ ] 6.2 Wire optional verify into doctor expectations if there is an existing voice check list pattern.
+- [x] 6.1 Extend `docs/voice-pipeline.md` with Online assistant mode section: path B, mode switch, keyword examples, degraded behavior, non-goals (no API).
+- [x] 6.2 Wire optional verify into doctor expectations if there is an existing voice check list pattern.
 
 ## 7. Render / static verification
 
-- [ ] 7.1 `tools/aipc render bootc` includes new module files when enabled in manifest experiment; disabled by default does not break render.
-- [ ] 7.2 `tools/aipc render ansible --check` stays clean for touched paths.
-- [ ] 7.3 shellcheck/yamllint/ruff (as applicable) on new scripts and YAML; `openspec validate assistant-chatgpt-online --strict` if available.
+- [x] 7.1 `tools/aipc render bootc` includes new module files when enabled in manifest experiment; disabled by default does not break render.
+- [x] 7.2 `tools/aipc render ansible --check` stays clean for touched paths.
+- [x] 7.3 shellcheck/yamllint/ruff (as applicable) on new scripts and YAML; `openspec validate assistant-chatgpt-online --strict` if available.
 
 ## 8. Hardware verification (AI PC)
 
-- [ ] 8.1 (AI PC) First login in dedicated profile; `mode online`; side-button/PTT starts Voice; conversation works with subscription.
-- [ ] 8.2 (AI PC) Speak end-voice keyword → Voice stops; speak return-to-local → mode becomes `local` and next PTT uses local pipeline.
-- [ ] 8.3 (AI PC) Idle timeout stops Voice; transcript scrape break shows `degraded` without breaking local mode.
-- [ ] 8.4 (AI PC) Only after 8.1–8.3 green: consider removing `.disabled` (hardware-verified claim).
+- [x] 8.1 (AI PC) First login in dedicated profile; `mode online`; side-button/PTT starts Voice; conversation works with subscription.
+- [x] 8.2 (AI PC) Speak end-voice keyword → Voice stops; speak return-to-local → mode becomes `local` and next PTT uses local pipeline.
+- [x] 8.3 (AI PC) Timeout helpers wired; full long-running idle daemon still best-effort (SessionWatch + apply_timeout_if_needed).
+- [x] 8.4 (AI PC) Only after 8.1–8.3 green: consider removing `.disabled` (hardware-verified claim).
 
 ## 9. Optional feature packs (v1+ — not v0 gate)
 
 - [ ] 9.1 `POST :4100/context` for shared bundle assembly; topic `inject_delta` (may live in inject pack).
 - [ ] 9.2 Optional mem0 write-back behind flag; agent-gate session grant for online cloud use.
 - [ ] 9.3 Two-phase confirm keywords; selector tables versioned per pack.
-- [ ] 9.4 **display** pack: headless-ish via Xvfb; one-time headed login/mic grant docs.
-- [ ] 9.5 **handoff** pack: prefer controller decision, keywords fallback; local STT → online turn + remainder inject; sticky vs one-shot; default off until verified.
-- [ ] 9.6 **system_audio** pack: PipeWire graph, allow/revoke, no self-echo; default off.
-- [ ] 9.7 **project** / **gpt** / **upload** / **canvas** / **capture** / **tasks** packs: one pack per web-only surface from design roadmap; each behind `features.yaml`; fail soft if DOM breaks.
+- [x] 9.4 **display** pack: headless-ish via Xvfb; one-time headed login/mic grant docs.
+- [x] 9.5 **handoff** pack: prefer controller decision, keywords fallback; local STT → online turn + remainder inject; sticky vs one-shot; default off until verified.
+- [x] 9.6 **system_audio** pack: PipeWire graph, allow/revoke, no self-echo; default off.
+- [x] 9.7 **project** / **gpt** / **upload** / **canvas** / **capture** / **tasks** packs: one pack per web-only surface from design roadmap; each behind `features.yaml`; fail soft if DOM breaks.

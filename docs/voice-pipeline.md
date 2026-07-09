@@ -148,7 +148,40 @@ cat /etc/aipc/voice/persona.yaml
 The CosyVoice module may still ship `.disabled` until hardware-verified; until
 then the client falls through to Kokoro automatically.
 
+## Online assistant mode (aggregator + multi-site web engine)
+
+Phase/change: OpenSpec `assistant-chatgpt-online`.
+
+```text
+aipc-assistant / aipc-voice-once
+        │
+        ▼
+  assistant-aggregator (NPU-first: resident-small control + local chat)
+        │
+        ├─ mode=local  → LiteLLM resident-small (auto → :4100 fallback)
+        └─ mode=online → assistant-chatgpt WebEngine (headless by default)
+                              site pack: chatgpt.com (more sites via sites.yaml)
+```
+
+| Command | Purpose |
+|---|---|
+| `aipc-assistant` | Unified text entry + setup checklist |
+| `aipc-assistant setup [--online]` | First-run; online login is **headed** only here |
+| `aipc-assistant mode local\|online` | Switch backend |
+| `aipc-chatgpt auth login` | Manual login (headed); exports session only |
+| `aipc-chatgpt inject --send` | Headless inject (no desktop window) |
+| `aipc-chatgpt sites list\|plan` | Multi-site config + NPU setup plan |
+
+**Keywords (user transcript / turn text):** 結束語音 → `session_close`; 回到本地 → mode local; 網上助理 → mode online. Controller uses `resident-small` JSON with keyword priority for lifecycle actions.
+
+**Degraded:** DOM/transcript scrape may fail → keyword automation limited; local path still works. Online never uses OpenAI platform API for this surface (subscription client only).
+
+**Headless policy:** automation defaults headless (`sites.yaml engine.headless: true`). Only interactive login uses a visible window (`AIPC_WEB_HEADED=1` or `auth login`).
+
+**Non-goals:** Realtime API billing, scraping as stable OpenAI-compatible API, silent desktop-audio capture.
+
 ## Always-on baseline (not torn down by model presets)
+
 
 Standing decision (2026-07-10): these stay resident unless a better combo
 is hardware-proven and explicitly adopted:

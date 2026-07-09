@@ -73,15 +73,25 @@ def run_turn(req: TurnRequest) -> TurnResponse:
             pass
         bundle = context_slot.assemble_bundle(fulfill_text or text)
         try:
+            from aipc_assistant.slots.timeouts import apply_timeout_if_needed, new_watch
+
+            watch = new_watch()
             if req.modality == "voice":
                 online.turn_voice(context_bundle=bundle)
+                # One-shot turn: record watch metadata; long-running daemon is v1.
+                # Immediate max/idle check is a no-op at t=0; callers may poll.
+                reason = apply_timeout_if_needed(watch, online)
+                note = "(online voice session started)"
+                if reason:
+                    note = f"(online voice ended: {reason})"
                 return TurnResponse(
-                    text="(online voice session started)",
+                    text=note,
                     mode_used=mode,
                     actions=decided,
                     backend="online",
                 )
             reply = online.inject_and_send(fulfill_text or text, context_bundle=bundle)
+            watch.touch()
             return TurnResponse(
                 text=reply or "(sent online)",
                 mode_used=mode,

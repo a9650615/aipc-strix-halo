@@ -127,31 +127,56 @@ def chat(text: str, session_id: str | None = None) -> str:
         except urllib.error.URLError as e:
             raise RuntimeError(f"local agent unreachable: {e}") from e
 
-    if mode == "auto":
+    def _npu_or_raise() -> str:
         try:
-            return _npu_chat(text, lb, session_id)
-        except Exception:
-            try:
-                return _agent_chat(text, session_id, lb)
-            except Exception as exc:
-                raise RuntimeError(f"npu and agent local backends failed: {exc}") from exc
+            out = _npu_chat(text, lb, session_id)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")[:300]
+            raise RuntimeError(
+                f"NPU chat via LiteLLM HTTP {e.code}: {detail} "
+                f"(model={lb.get('model', 'resident-small')})"
+            ) from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(
+                f"LiteLLM unreachable for NPU model: {e}. "
+                "Start litellm + lemonade (resident-small on NPU)."
+            ) from e
+        except (KeyError, IndexError, json.JSONDecodeError, TypeError) as e:
+            raise RuntimeError(f"bad NPU chat response: {e}") from e
+        if not out:
+            raise RuntimeError("NPU chat returned empty text")
+        return out
+
+    def _agent_or_raise() -> str:
+        try:
+            out = _agent_chat(text, session_id, lb)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")[:300]
+            raise RuntimeError(f"local agent HTTP {e.code}: {detail}") from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"local agent unreachable: {e}") from e
+        if not out or out.startswith("error:"):
+            raise RuntimeError(f"local agent bad reply: {out!r}")
+        return out
+
+    if mode == "agent":
+        return _agent_or_raise()
+
+    if mode == "auto":
+        npu_err: Exception | None = None
+        try:
+            return _npu_or_raise()
+        except Exception as exc:  # noqa: BLE001 — fall through to agent
+            npu_err = exc
+        try:
+            return _agent_or_raise()
+        except Exception as agent_exc:
+            raise RuntimeError(
+                f"npu and agent local backends failed: npu={npu_err}; agent={agent_exc}"
+            ) from agent_exc
 
     # default npu
-    try:
-        return _npu_chat(text, lb, session_id)
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")[:300]
-        raise RuntimeError(
-            f"NPU chat via LiteLLM HTTP {e.code}: {detail} "
-            f"(model={lb.get('model', 'resident-small')})"
-        ) from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(
-            f"LiteLLM unreachable for NPU model: {e}. "
-            "Start litellm + lemonade (resident-small on NPU)."
-        ) from e
-    except (KeyError, IndexError, json.JSONDecodeError, TypeError) as e:
-        raise RuntimeError(f"bad NPU chat response: {e}") from e
+    return _npu_or_raise()
 
 
 def npu_reachable() -> tuple[bool, str]:

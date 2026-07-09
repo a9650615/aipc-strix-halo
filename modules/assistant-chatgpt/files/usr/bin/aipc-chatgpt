@@ -77,6 +77,15 @@ def main(argv: list[str] | None = None) -> int:
     sp_cap.add_argument("--region", action="store_true", help="interactive region")
     sp_cap.add_argument("--site", default="")
 
+    sp_proj = sub.add_parser("project", help="ChatGPT Projects navigation")
+    sp_proj.add_argument("project_cmd", choices=("home", "open"))
+    sp_proj.add_argument("name", nargs="?", default="")
+    sp_proj.add_argument("--site", default="")
+
+    sp_gpt = sub.add_parser("gpt", help="open a custom GPT by slug/url")
+    sp_gpt.add_argument("slug", help="g-… slug or full URL")
+    sp_gpt.add_argument("--site", default="")
+
     p.add_argument("--site", default="", help="default site id for this invocation")
     p.add_argument("--self-test", action="store_true")
 
@@ -94,6 +103,8 @@ def main(argv: list[str] | None = None) -> int:
             "sites",
             "upload",
             "capture",
+            "project",
+            "gpt",
         )
     ):
         return _self_test()
@@ -155,6 +166,35 @@ def main(argv: list[str] | None = None) -> int:
             )
             page = be._eng()._page_ready()  # noqa: SLF001
             print(upload_mod.attach_file(page, str(path)))
+            return 0
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    if args.cmd == "project":
+        from aipc_chatgpt.sites import project as project_mod
+
+        try:
+            page = be._eng()._page_ready()  # noqa: SLF001
+            if args.project_cmd == "home":
+                project_mod.open_projects_home(page)
+                print(page.url)
+                return 0
+            if not args.name:
+                print("project open needs a name", file=sys.stderr)
+                return 2
+            print(project_mod.open_project_by_name(page, args.name))
+            return 0
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    if args.cmd == "gpt":
+        from aipc_chatgpt.sites import gpt as gpt_mod
+
+        try:
+            page = be._eng()._page_ready()  # noqa: SLF001
+            print(gpt_mod.open_gpt(page, args.slug))
             return 0
         except Exception as exc:
             print(str(exc), file=sys.stderr)
