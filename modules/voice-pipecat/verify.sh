@@ -23,6 +23,18 @@ for script in aipc-voice-once aipc-voice-bind-hotkey; do
     check_script "$script"
 done
 
+for script in aipc-voice-status aipc-voice-record-clone; do
+    script_path="$this_dir/files/usr/bin/$script"
+    [ -f "$script_path" ] || {
+        echo "voice-pipecat: missing $script" >&2
+        exit 1
+    }
+    python3 -c "import ast; ast.parse(open('$script_path').read())" || {
+        echo "voice-pipecat: $script syntax error" >&2
+        exit 1
+    }
+done
+
 hotkey_file="$this_dir/files/etc/aipc/voice/hotkey"
 [ -f "$hotkey_file" ] || {
     echo "voice-pipecat: missing hotkey config" >&2

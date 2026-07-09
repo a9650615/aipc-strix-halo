@@ -57,8 +57,20 @@ def _clone_present() -> bool:
 
 
 def _model_present() -> bool:
+    """Require real weight files, not a partial modelscope download."""
     p = Path(MODEL_DIR)
-    return p.is_dir() and any(p.iterdir()) if p.is_dir() else False
+    if not p.is_dir():
+        return False
+    # CosyVoice2-0.5B ships several large weights; any empty/partial dir
+    # used to report ready and 503 on first /tts.
+    required_any = (
+        "llm.pt",
+        "flow.pt",
+        "flow.encoder.fp32.zip",
+        "hift.pt",
+        "speech_tokenizer_v2.onnx",
+    )
+    return any((p / name).is_file() and (p / name).stat().st_size > 1_000_000 for name in required_any)
 
 
 def _checkout_present() -> bool:

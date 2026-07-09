@@ -102,7 +102,19 @@ def choose_voice(text: str) -> str:
 
 def prefer_cosyvoice() -> bool:
     """Default on: CJK replies try CosyVoice clone first."""
-    return os.environ.get("AIPC_PREFER_COSYVOICE", "1") == "1"
+    env = os.environ.get("AIPC_PREFER_COSYVOICE", "").strip()
+    if env != "":
+        return env == "1"
+    path = Path(os.environ.get("AIPC_PREFER_COSYVOICE_FILE", "/etc/aipc/voice/prefer-cosyvoice"))
+    try:
+        if path.is_file():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                s = line.strip()
+                if s and not s.startswith("#"):
+                    return s == "1"
+    except OSError:
+        pass
+    return False
 
 
 def force_cosyvoice() -> bool:
