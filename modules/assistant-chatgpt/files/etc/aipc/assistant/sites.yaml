@@ -7,7 +7,9 @@ engine:
   kind: playwright-chromium
   cdp_port: 9222
   # Shared browser process; per-site profile under data_root/sites/<id>/
-  headless: false
+  # Default headless so automation never steals the desktop. Interactive
+  # login forces headed via AIPC_WEB_HEADED=1 or `auth login`.
+  headless: true
   locale: zh-TW
 
 # Setup judge: always NPU-resident model (no Vulkan 35B required)

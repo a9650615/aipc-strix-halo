@@ -11,20 +11,42 @@ from aipc_chatgpt.sites import registry as site_registry
 
 
 def collect_facts(site_id: str | None = None) -> dict[str, Any]:
+    """Gather setup facts **without** launching a browser window.
+
+    Do not call auth_status() here — that opens Chromium and steals focus.
+    Infer login from storage_state / profile presence only.
+    """
+    from aipc_chatgpt.paths import profile_dir, storage_state_path
+
     cfg = site_registry.load_sites_config()
     sid = site_id or site_registry.default_site_id(cfg)
-    eng = WebEngine(sid)
-    st = eng.status()
-    # Avoid launching browser for facts if possible
+    sc = site_registry.get_site_config(sid, cfg)
+    try:
+        import playwright  # noqa: F401
+
+        pw_ok = True
+    except ImportError:
+        pw_ok = False
+    st_path = storage_state_path(sid)
+    prof = profile_dir(sid)
+    # Heuristic only — full login check needs headless probe if explicitly asked
+    logged_guess = None
+    if st_path.is_file() and st_path.stat().st_size > 50:
+        logged_guess = True  # had a prior export
+    elif prof.is_dir() and any(prof.iterdir()):
+        logged_guess = None  # profile exists but unknown
+    else:
+        logged_guess = False
     facts = {
         "site_id": sid,
-        "site_title": st.get("site_title"),
-        "playwright": eng.available(),
-        "profile": st.get("profile"),
-        "storage_state_present": st.get("storage_state_present"),
-        "enabled_sites": st.get("sites_enabled"),
-        "setup_hints": (cfg.get("sites") or {}).get(sid, {}).get("setup_hints") or [],
-        "logged_in": st.get("logged_in"),
+        "site_title": sc.get("title") or sid,
+        "playwright": pw_ok,
+        "profile": str(prof),
+        "storage_state_present": st_path.is_file(),
+        "enabled_sites": site_registry.list_site_ids(cfg),
+        "setup_hints": sc.get("setup_hints") or [],
+        "logged_in": logged_guess,
+        "headless_default": True,
     }
     return facts
 

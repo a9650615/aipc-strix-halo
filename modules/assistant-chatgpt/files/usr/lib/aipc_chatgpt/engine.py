@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import time
 from pathlib import Path
@@ -23,12 +24,14 @@ def _port_open(port: int, host: str = "127.0.0.1") -> bool:
 class WebEngine:
     """Multi-site browser host. Site-specific DOM lives in sites/* packs."""
 
-    def __init__(self, site_id: str | None = None) -> None:
+    def __init__(self, site_id: str | None = None, *, force_headed: bool = False) -> None:
         self.cfg = site_registry.load_sites_config()
         self.site_id = site_id or site_registry.default_site_id(self.cfg)
         self.site_cfg = site_registry.get_site_config(self.site_id, self.cfg)
         self.pack = site_registry.load_pack(self.site_id, self.cfg)
         self.url = str(self.site_cfg.get("url") or getattr(self.pack, "url", ""))
+        self.force_headed = force_headed
+        self._headless = True
         self._pw = None
         self._browser = None
         self._context = None
@@ -55,14 +58,11 @@ class WebEngine:
             "cdp_port": cdp_port(),
             "cdp_up": _port_open(cdp_port()),
             "engine": "playwright-chromium",
+            "headless": bool(getattr(self, "_headless", True)),
             "sites_enabled": site_registry.list_site_ids(self.cfg),
-            "logged_in": None,
+            # Do NOT open a browser just to check login — steals desktop focus.
+            "logged_in": True if st.is_file() and st.stat().st_size > 50 else None,
         }
-        try:
-            if self._page is not None or st.is_file() or profile_dir(self.site_id).is_dir():
-                out["logged_in"] = self.auth_status().get("logged_in")
-        except Exception:
-            pass
         return out
 
     def _ensure_browser(self) -> None:
@@ -77,32 +77,46 @@ class WebEngine:
         if self._browser is not None or self._context is not None:
             return
 
-        if _port_open(port):
+        # Only reuse an existing CDP browser when explicitly requested.
+        # Auto-attach used to steal focus from whatever was already on :9222.
+        reuse = os.environ.get("AIPC_WEB_CDP_REUSE", "").strip() in ("1", "true", "yes")
+        if reuse and _port_open(port):
             self._pw = sync_playwright().start()
             self._browser = self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
             ctxs = self._browser.contexts
             self._context = ctxs[0] if ctxs else self._browser.new_context()
             pages = self._context.pages
             self._page = pages[0] if pages else self._context.new_page()
+            self._headless = not bool(getattr(self, "force_headed", False))
             return
 
         profile = profile_dir(self.site_id)
         profile.mkdir(parents=True, exist_ok=True)
         eng = self.cfg.get("engine") or {}
+        # Headless by default — never steal the user's desktop during tests.
+        # Force headed only when: AIPC_WEB_HEADED=1, or eng.headless false,
+        # or caller set self.force_headed (auth login).
+        env_headed = os.environ.get("AIPC_WEB_HEADED", "").strip() in ("1", "true", "yes")
+        force = bool(getattr(self, "force_headed", False))
+        headless = not force and not env_headed and bool(eng.get("headless", True))
         self._pw = sync_playwright().start()
+        args = [
+            f"--remote-debugging-port={port}",
+            "--remote-debugging-address=127.0.0.1",
+            "--no-first-run",
+            "--disable-translate",
+        ]
+        # --app= is mainly for headed chrome app window chrome
+        if not headless:
+            args.append(f"--app={self.url}")
         self._context = self._pw.chromium.launch_persistent_context(
             user_data_dir=str(profile),
-            headless=bool(eng.get("headless", False)),
-            args=[
-                f"--remote-debugging-port={port}",
-                "--remote-debugging-address=127.0.0.1",
-                f"--app={self.url}",
-                "--no-first-run",
-                "--disable-translate",
-            ],
+            headless=headless,
+            args=args,
             viewport={"width": 1280, "height": 900},
             locale=str(eng.get("locale") or "zh-TW"),
         )
+        self._headless = headless
         self._browser = self._context.browser
         pages = self._context.pages
         self._page = pages[0] if pages else self._context.new_page()
@@ -112,10 +126,12 @@ class WebEngine:
     def _page_ready(self):
         self._ensure_browser()
         assert self._page is not None
-        try:
-            self._page.bring_to_front()
-        except Exception:
-            pass
+        # Never bring_to_front in headless/automation — steals desktop focus
+        if not getattr(self, "_headless", True):
+            try:
+                self._page.bring_to_front()
+            except Exception:
+                pass
         if self.url and self.url.split("/")[2] not in (self._page.url or ""):
             self._page.goto(self.url, wait_until="domcontentloaded", timeout=60000)
         self._page.wait_for_timeout(600)
@@ -184,6 +200,13 @@ class WebEngine:
         }
 
     def auth_login(self, timeout_s: int = 300) -> dict[str, Any]:
+        """Interactive login only — forces a visible (headed) window."""
+        if self._context is not None and getattr(self, "_headless", True):
+            try:
+                self.session_close()
+            except Exception:
+                pass
+        self.force_headed = True
         page = self._page_ready()
         page.goto(self.url, wait_until="domcontentloaded", timeout=60000)
         banner = self.pack.login_banner_text()

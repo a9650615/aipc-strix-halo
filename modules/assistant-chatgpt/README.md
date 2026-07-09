@@ -34,8 +34,12 @@ CLI / `get_backend()` for aggregator:
 
 - `inject --send` / `turn --voice` / `session close` / `voice stop` / `status`
 
-Profile: `$XDG_DATA_HOME/aipc-chatgpt/profile` (not system Chrome).
-CDP port: `AIPC_CHATGPT_CDP_PORT` default 9222 loopback.
+Profile: `$XDG_DATA_HOME/aipc-web/sites/<id>/profile`.
+CDP port: `AIPC_WEB_CDP_PORT` / `AIPC_CHATGPT_CDP_PORT` default 9222.
+
+**Headless by default** — automation must not steal the desktop.
+Only `auth login` / `setup --online` opens a visible window (or set
+`AIPC_WEB_HEADED=1` / `sites.yaml engine.headless: false`).
 
 ## Auth / login session (no passwords)
 

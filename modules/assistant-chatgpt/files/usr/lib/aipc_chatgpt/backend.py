@@ -11,13 +11,14 @@ from aipc_chatgpt.sites import registry as site_registry
 class PlaywrightBackend:
     """Backward-compatible name: actually multi-site WebEngine wrapper."""
 
-    def __init__(self, site_id: str | None = None) -> None:
+    def __init__(self, site_id: str | None = None, *, force_headed: bool = False) -> None:
         self._site_id = site_id
+        self._force_headed = force_headed
         self._engine: WebEngine | None = None
 
     def _eng(self) -> WebEngine:
         if self._engine is None:
-            self._engine = WebEngine(self._site_id)
+            self._engine = WebEngine(self._site_id, force_headed=self._force_headed)
         return self._engine
 
     def available(self) -> bool:
@@ -42,6 +43,14 @@ class PlaywrightBackend:
         return self._eng().auth_status()
 
     def auth_login(self, timeout_s: int = 300) -> dict[str, Any]:
+        # Always headed for human login
+        if self._engine is not None and getattr(self._engine, "_headless", True):
+            try:
+                self._engine.session_close()
+            except Exception:
+                pass
+            self._engine = None
+        self._force_headed = True
         return self._eng().auth_login(timeout_s=timeout_s)
 
     def auth_export(self, dest=None):
