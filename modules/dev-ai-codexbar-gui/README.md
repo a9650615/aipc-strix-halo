@@ -6,19 +6,23 @@ visualization of AI coding tool usage directly in your desktop's system tray.
 Built for KDE/Plasma with StatusNotifier support, featuring dynamic SVG icons
 that reflect usage levels at a glance.
 
+## Design (important)
+
+**Real usage comes from the official Linux CLI** (`codexbar` from
+[steipete/CodexBar](https://github.com/steipete/CodexBar) releases), not the
+half-port Python `aipc-usage` fetchers. The GUI:
+
+1. Prefers `codexbar usage --format json` (OAuth session/weekly/pace/credits)
+2. Or `codexbar serve` → `GET /usage` (same JSON)
+3. Only falls back to `aipc-usage` if the official binary is missing
+
 ## Features
 
-- **System tray meter icon** (painted QPixmap — reliable on Plasma StatusNotifier):
-  - Green (&lt;50%) / yellow (50–80%) / red (&gt;80%) / gray (no data)
-  - Tooltip lists per-provider usage; icon uses **max** usage across providers
-- **Context menu** (refreshes on every open):
-  - Progress bars, % , reset text, status (`ok` / `no key` / `error` / …)
-  - Sorted by urgency (high usage first)
-  - **Show details** expands secondary windows / errors / identity
-- **Left-click or double-click** opens the menu
-- **Auto-start** `aipc-usage serve` if health check fails
-- **Settings** dialog writes `~/.config/codexbar/config.json` (`apiKey` camelCase)
-- Prefer `aipc usage gui` as the human entrypoint
+- Provider **cards** (CLI-faithful): Session (5h) + Weekly remaining bars,
+  pace line, account/plan/credits, real CLI errors
+- Tray meter uses remaining→used mapping; tooltip mirrors card headlines
+- Left-click / double-click opens menu; menu refreshes on open
+- Auto-starts **`codexbar serve`** when possible
 
 ## Architecture
 

@@ -1,92 +1,44 @@
-"""Server launcher — detect and start the aipc-usage HTTP server.
-
-The CodexBar GUI polls the usage server (default port 8080) for usage data.
-This module handles:
-
-- Detecting whether the server is already running (HTTP health check)
-- Launching ``aipc-usage serve`` as a subprocess if it is not
-- Waiting for the server to be ready before returning control
-- Reusing an existing server process when possible
-
-The launcher uses the ``aipc-usage`` CLI entry point (installed by the
-``dev-ai-codexbar-usage`` module), not the Python module directly, so the
-behavior matches what users would invoke from the terminal.
-"""
+"""Start official ``codexbar serve`` (preferred) or aipc-usage fallback."""
 
 from __future__ import annotations
 
 import json
 import logging
 import os
+import shutil
 import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple
 
-import urllib.request
-import urllib.error
+from codexbar_gui.upstream import find_codexbar_binary
 
 logger = logging.getLogger("codexbar_gui.server_launcher")
 
-
 DEFAULT_PORT = 8080
 DEFAULT_HOST = "127.0.0.1"
-HEALTH_URL_TEMPLATE = "http://{host}:{port}/health"
-MAX_WAIT_SECONDS = 30
-POLL_INTERVAL = 0.5
+MAX_WAIT_SECONDS = 45
+POLL_INTERVAL = 0.4
 
-# Module-level reference to prevent subprocess GC by Python's garbage collector.
-# The server should outlive the GUI process so keep this reference alive.
 _server_proc: Optional[subprocess.Popen] = None
 
 
-def _find_cli() -> list[str]:
-    """Return the command to invoke the ``aipc-usage`` CLI as a list.
-
-    Search order:
-    1. ``/usr/bin/aipc-usage`` (image install)
-    2. ``aipc-usage`` on PATH (user pipx / ~/.local)
-    3. ``python -m codexbar_usage`` (dev tree / venv)
-    """
-    import shutil
-
-    for candidate in (Path("/usr/bin/aipc-usage"), Path("/usr/lib/aipc/tools/.venv/bin/aipc-usage")):
-        if candidate.is_file():
-            return [str(candidate)]
-    which = shutil.which("aipc-usage")
-    if which:
-        return [which]
-    return [sys.executable, "-m", "codexbar_usage"]
-
-
-def _is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
-    """Check if a TCP port is accepting connections."""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        result = sock.connect_ex((host, port))
-        sock.close()
-        return result == 0
-    except Exception:
-        return False
+def _health_url(host: str, port: int) -> str:
+    return f"http://{host}:{port}/health"
 
 
 def check_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:
-    """Return True if the usage server responds to a health check."""
-    url = HEALTH_URL_TEMPLATE.format(host=host, port=port)
     try:
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            if resp.status == 200:
-                body = resp.read().decode("utf-8")
-                data = json.loads(body)
-                return data.get("status") == "ok"
-    except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
-        pass
-    logger.debug("Server health check failed at %s", url)
-    return False
+        req = urllib.request.Request(_health_url(host, port), method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("status") == "ok"
+    except Exception:
+        return False
 
 
 def wait_for_server(
@@ -94,19 +46,30 @@ def wait_for_server(
     port: int = DEFAULT_PORT,
     timeout: float = MAX_WAIT_SECONDS,
 ) -> bool:
-    """Block until the server is reachable or timeout expires.
-
-    Returns True if the server responded to a health check before timeout.
-    """
-    # Always use a blocking poll — this runs from a worker / startup path,
-    # never from inside a Qt or asyncio event loop.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if check_server(host, port):
-            logger.info("Server ready at http://%s:%s", host, port)
+            logger.info("Server ready http://%s:%s", host, port)
             return True
         time.sleep(POLL_INTERVAL)
     return False
+
+
+def _serve_cmd(port: int) -> Optional[list[str]]:
+    binary = find_codexbar_binary()
+    if binary:
+        return [binary, "serve", "--port", str(port)]
+    # Fallback only — wrong data for real quotas
+    for path in (
+        Path("/usr/bin/aipc-usage"),
+        Path("/usr/lib/aipc/tools/.venv/bin/aipc-usage"),
+    ):
+        if path.is_file():
+            return [str(path), "serve", "--port", str(port)]
+    which = shutil.which("aipc-usage")
+    if which:
+        return [which, "serve", "--port", str(port)]
+    return [sys.executable, "-m", "codexbar_usage", "serve", "--port", str(port)]
 
 
 def start_server(
@@ -115,26 +78,19 @@ def start_server(
     wait: bool = True,
     timeout: float = MAX_WAIT_SECONDS,
 ) -> Tuple[bool, Optional[subprocess.Popen]]:
-    """Launch the usage server if it is not already running.
-
-    Returns a tuple of (success, process_handle).
-    ``success`` is True if the server is reachable after launch.
-    ``process_handle`` is the Popen object (or None if reusing an existing server).
-    """
     global _server_proc
 
     if check_server(host, port):
-        logger.info("Server already running at http://%s:%s", host, port)
+        logger.info("Server already running")
         return True, None
 
-    cli = _find_cli()
-    cmd = cli + ["serve", "--port", str(port)]
+    cmd = _serve_cmd(port)
+    if not cmd:
+        return False, None
     logger.info("Starting server: %s", " ".join(cmd))
 
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
-    # Dev checkout: modules/dev-ai-codexbar-gui/files/usr/lib/codexbar-gui/codexbar_gui/
-    # parents[6] == modules/
     modules_root = Path(__file__).resolve().parents[6]
     repo_usage = (
         modules_root
@@ -144,10 +100,8 @@ def start_server(
         / "lib"
         / "aipc-codexbar-usage"
     )
-    for pkg in (Path("/usr/lib/aipc-codexbar-usage"), repo_usage):
-        if pkg.is_dir():
-            env["PYTHONPATH"] = f"{pkg}{os.pathsep}{env.get('PYTHONPATH', '')}"
-            break
+    if repo_usage.is_dir() and "codexbar_usage" in " ".join(cmd):
+        env["PYTHONPATH"] = f"{repo_usage}{os.pathsep}{env.get('PYTHONPATH', '')}"
 
     try:
         proc = subprocess.Popen(
@@ -157,19 +111,14 @@ def start_server(
             env=env,
             start_new_session=True,
         )
-    except FileNotFoundError:
-        logger.error("Server binary not found: %s", cli)
-        return False, None
-    except OSError as e:
-        logger.error("Failed to start server: %s", e)
+    except OSError as exc:
+        logger.error("Failed to start server: %s", exc)
         return False, None
 
     _server_proc = proc
-
     if wait:
-        ok = wait_for_server(host, port, timeout)
-        if not ok:
-            logger.warning("Server failed to start within %ds, terminating", timeout)
+        if not wait_for_server(host, port, timeout):
+            logger.warning("Server did not become ready")
             proc.terminate()
             try:
                 proc.wait(timeout=5)
@@ -177,17 +126,13 @@ def start_server(
                 proc.kill()
             _server_proc = None
             return False, None
-        logger.info("Server started successfully on port %d", port)
-        return True, proc
-
     return True, proc
 
 
 def kill_server() -> None:
-    """Terminate the server process if we launched it."""
     global _server_proc
     if _server_proc and _server_proc.poll() is None:
-        logger.info("Terminating server process (pid=%d)", _server_proc.pid)
+        logger.info("Stopping server pid=%s", _server_proc.pid)
         try:
             _server_proc.terminate()
             _server_proc.wait(timeout=10)
@@ -197,5 +142,4 @@ def kill_server() -> None:
 
 
 def detect_server() -> bool:
-    """Convenience wrapper: returns True if server is reachable on default port."""
     return check_server()

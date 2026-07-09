@@ -1,4 +1,4 @@
-"""CodexBar system tray application."""
+"""CodexBar tray — data from official ``codexbar`` CLI / serve."""
 
 from __future__ import annotations
 
@@ -13,7 +13,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from codexbar_gui.icon_updater import make_simple_pixmap, paint_usage_pixmap
 from codexbar_gui.server_launcher import kill_server, start_server
-from codexbar_gui.usage_panel import UsagePanel, fetch_usage_data, summary_from_data
+from codexbar_gui.upstream import fetch_usage_views, find_codexbar_binary
+from codexbar_gui.usage_panel import UsagePanel, summary_from_views
 
 logger = logging.getLogger("codexbar_gui.tray_app")
 
@@ -37,19 +38,26 @@ class CodexBarApp:
         self._panel: Optional[UsagePanel] = None
         self._refresh_timer: Optional[QTimer] = None
         self._server_proc: Optional[subprocess.Popen] = None
-        self._current_percent: Optional[float] = None
+        self._current_used: Optional[float] = None
 
     def run(self) -> int:
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setApplicationName("CodexBar")
         self._app.setQuitOnLastWindowClosed(False)
 
+        binary = find_codexbar_binary()
         logger.info(
-            "Starting CodexBar http://%s:%d refresh=%ds",
+            "CodexBar GUI host=%s:%d refresh=%ds binary=%s",
             self._host,
             self._port,
             self._refresh_interval_ms // 1000,
+            binary or "MISSING",
         )
+        if not binary:
+            logger.warning(
+                "Official codexbar binary not found — install Linux CLI "
+                "(https://github.com/steipete/CodexBar releases)"
+            )
 
         self._init_tray()
         self._start_server()
@@ -57,17 +65,14 @@ class CodexBarApp:
         self._start_refresh_timer()
 
         if self._tray is None or not self._tray.isSystemTrayAvailable():
-            logger.warning("System tray unavailable")
             QMessageBox.warning(
                 None,
                 "CodexBar",
-                "No system tray available.\n"
-                "On GNOME install AppIndicator / StatusNotifier support.",
+                "No system tray.\nGNOME needs AppIndicator / StatusNotifier.",
             )
         else:
             self._tray.show()
 
-        logger.info("CodexBar is running")
         try:
             return self._app.exec()
         finally:
@@ -76,10 +81,10 @@ class CodexBarApp:
     def _init_tray(self) -> None:
         self._tray = QSystemTrayIcon()
         self._tray.setIcon(QIcon(make_simple_pixmap("C", 24, "#4a90d9")))
-        self._tray.setToolTip("CodexBar — AI usage")
+        self._tray.setToolTip("CodexBar")
         self._panel = UsagePanel(self._host, self._port)
         self._tray.setContextMenu(self._panel)
-        self._tray.activated.connect(self._on_tray_activated)
+        self._tray.activated.connect(self._on_activated)
 
     def _start_server(self) -> bool:
         try:
@@ -87,58 +92,52 @@ class CodexBarApp:
             if ok:
                 self._server_proc = proc
                 return True
-            self._update_icon(error=True)
+            # CLI path still works without serve
+            if find_codexbar_binary():
+                logger.info("serve failed; GUI will call codexbar CLI directly")
+                return True
+            self._set_icon(error=True)
             QTimer.singleShot(400, self._show_server_error)
             return False
         except Exception as exc:
-            logger.error("server start: %s", exc)
-            self._update_icon(error=True)
-            return False
+            logger.error("server: %s", exc)
+            return bool(find_codexbar_binary())
 
     def _show_server_error(self) -> None:
         QMessageBox.warning(
             None,
             "CodexBar",
-            "Failed to start usage server.\n"
-            f"Try: aipc usage serve --port {self._port}\n"
-            f"or: aipc-usage serve --port {self._port}",
+            "Could not start usage server and no codexbar CLI found.\n"
+            "Install: https://github.com/steipete/CodexBar/releases\n"
+            "Then: codexbar serve --port 8080",
         )
 
     def _refresh_data(self) -> None:
         try:
-            data = fetch_usage_data(self._host, self._port)
-            if not data:
-                self._update_icon(error=True)
-                if self._tray:
-                    self._tray.setToolTip("CodexBar — no data / server down")
-                return
-            max_pct, tip = summary_from_data(data)
-            self._current_percent = max_pct
-            self._update_icon(percent=max_pct, error=False)
+            views = fetch_usage_views(
+                self._host, self._port, prefer_cli=bool(find_codexbar_binary())
+            )
+            used, tip = summary_from_views(views)
+            self._current_used = used
+            self._set_icon(percent=used, error=not views or all(not v.ok for v in views))
             if self._tray:
                 self._tray.setToolTip(tip)
         except Exception:
             logger.warning("refresh failed", exc_info=True)
-            self._update_icon(error=True)
+            self._set_icon(error=True)
 
     def _start_refresh_timer(self) -> None:
         self._refresh_timer = QTimer()
         self._refresh_timer.timeout.connect(self._refresh_data)
         self._refresh_timer.start(self._refresh_interval_ms)
 
-    def _update_icon(
-        self,
-        percent: Optional[float] = None,
-        error: bool = False,
-    ) -> None:
-        if self._tray is None:
+    def _set_icon(self, percent: Optional[float] = None, error: bool = False) -> None:
+        if not self._tray:
             return
-        pct = percent if percent is not None else self._current_percent
-        pm = paint_usage_pixmap(percent=pct, error=error, size=24)
-        self._tray.setIcon(QIcon(pm))
+        pct = percent if percent is not None else self._current_used
+        self._tray.setIcon(QIcon(paint_usage_pixmap(percent=pct, error=error, size=24)))
 
-    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        # Trigger = left click on many desktops; DoubleClick kept for compatibility.
+    def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (
             QSystemTrayIcon.ActivationReason.Trigger,
             QSystemTrayIcon.ActivationReason.DoubleClick,
@@ -147,10 +146,8 @@ class CodexBarApp:
                 self._panel.popup(QCursor.pos())
 
     def _cleanup(self) -> None:
-        logger.info("Cleaning up CodexBar")
         if self._refresh_timer:
             self._refresh_timer.stop()
-        # Only stop the server we spawned (kill_server tracks that).
         kill_server()
         if self._tray:
             self._tray.hide()
@@ -165,9 +162,7 @@ def main(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     )
-    return CodexBarApp(
-        host=host, port=port, refresh_interval_ms=refresh_interval_ms
-    ).run()
+    return CodexBarApp(host, port, refresh_interval_ms).run()
 
 
 if __name__ == "__main__":
