@@ -95,7 +95,8 @@ def find_codexbar_binary() -> Optional[str]:
 def _window_from_dict(label: str, data: Optional[dict]) -> Optional[RateWindowView]:
     if not isinstance(data, dict):
         return None
-    # Official uses usedPercent; our port used used_percent (0–1 or 0–100).
+    # Official usedPercent is 0–100 (e.g. 1 = 1% used). Legacy aipc port may
+    # emit a 0–1 fraction; only scale true open-unit fractions, never 1 or 2.
     raw = data.get("usedPercent", data.get("used_percent"))
     if raw is None:
         return None
@@ -103,7 +104,7 @@ def _window_from_dict(label: str, data: Optional[dict]) -> Optional[RateWindowVi
         used = float(raw)
     except (TypeError, ValueError):
         return None
-    if 0.0 <= used <= 2.0:
+    if 0.0 < used < 1.0:
         used *= 100.0
     used = max(0.0, min(100.0, used))
     mins = data.get("windowMinutes", data.get("window_minutes"))

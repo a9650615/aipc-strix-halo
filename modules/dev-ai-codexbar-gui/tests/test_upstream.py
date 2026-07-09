@@ -99,3 +99,48 @@ def test_cli_provider_default(monkeypatch) -> None:
     monkeypatch.delenv("CODEXBAR_PROVIDER", raising=False)
     monkeypatch.setenv("CODEXBAR_ALL_PROVIDERS", "1")
     assert _cli_provider_arg(None) is None
+
+
+def test_official_used_percent_0_1_2_not_fraction_scaled() -> None:
+    """Live CLI uses 0–100 scale: usedPercent=1 → 99% remaining (not 0)."""
+    for used, rem in ((0, 100.0), (1, 99.0), (2, 98.0)):
+        v = parse_upstream_item(
+            {
+                "provider": "codex",
+                "source": "oauth",
+                "usage": {
+                    "primary": {
+                        "usedPercent": used,
+                        "windowMinutes": 300,
+                        "resetDescription": "soon",
+                    },
+                    "secondary": {"usedPercent": 100, "windowMinutes": 10080},
+                },
+            }
+        )
+        assert v.primary is not None
+        assert v.primary.used_percent == float(used)
+        assert v.primary.remaining_percent == rem
+        assert v.headline_remaining == rem
+
+
+def test_legacy_fraction_only_open_unit() -> None:
+    """0.32 (true fraction) → 32 used / 68 left; 1.0 stays 1% used."""
+    frac = parse_upstream_item(
+        {
+            "provider": "codex",
+            "usage": {"primary": {"usedPercent": 0.32, "windowMinutes": 300}},
+        }
+    )
+    assert frac.primary is not None
+    assert frac.primary.used_percent == 32.0
+    assert frac.primary.remaining_percent == 68.0
+    one = parse_upstream_item(
+        {
+            "provider": "codex",
+            "usage": {"primary": {"usedPercent": 1.0, "windowMinutes": 300}},
+        }
+    )
+    assert one.primary is not None
+    assert one.primary.used_percent == 1.0
+    assert one.primary.remaining_percent == 99.0

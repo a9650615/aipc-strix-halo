@@ -161,7 +161,9 @@ def _used_pct(window: Optional[dict]) -> Optional[float]:
     if raw is None:
         return None
     val = float(raw)
-    if 0.0 <= val <= 2.0:
+    # Official usedPercent is 0–100 (1 = 1% used). Only scale open unit
+    # fractions (0,1); never multiply integers 1 or 2.
+    if 0.0 < val < 1.0:
         val *= 100.0
     return max(0.0, min(100.0, val))
 

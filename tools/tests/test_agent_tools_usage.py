@@ -96,6 +96,35 @@ def test_lookup_usage_normalize_official_shape() -> None:
     assert p["account"] == "a@b.c"
 
 
+def test_used_pct_official_0_1_2_scale() -> None:
+    """Official usedPercent=1 is 1% used → 99 left (not *100 to 100 used)."""
+    from aipc_agent_tools_usage.usage import _normalize_upstream, _used_pct
+
+    assert _used_pct({"usedPercent": 0}) == 0.0
+    assert _used_pct({"usedPercent": 1}) == 1.0
+    assert _used_pct({"usedPercent": 2}) == 2.0
+    assert _used_pct({"usedPercent": 0.32}) == 32.0  # true fraction only
+    out = _normalize_upstream(
+        [
+            {
+                "provider": "codex",
+                "source": "oauth",
+                "usage": {
+                    "primary": {"usedPercent": 1, "windowMinutes": 300},
+                    "secondary": {"usedPercent": 2, "windowMinutes": 10080},
+                    "accountEmail": "a@b.c",
+                },
+            }
+        ],
+        None,
+    )
+    p = out["providers"][0]
+    assert p["used_percent"] == 1.0
+    assert p["remaining_percent"] == 99.0
+    assert p["weekly_used_percent"] == 2.0
+    assert p["weekly_remaining_percent"] == 98.0
+
+
 def test_lookup_usage_live_or_failsoft() -> None:
     """Real entry point: structured ok/error/not_configured — never crash."""
     from aipc_agent_tools_usage.usage import lookup_usage
