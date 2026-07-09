@@ -1,35 +1,32 @@
 #!/bin/bash
-# CodexBar GUI launcher (image path). Auto-starts usage server if needed.
+# CodexBar GUI — Linux tray shell over official codexbar CLI.
 set -eu
 
 PORT="${CODEXBAR_PORT:-8080}"
-USAGE_ROOT="${CODEXBAR_USAGE_ROOT:-/usr/lib/aipc-codexbar-usage}"
 GUI_ROOT="$(cd "$(dirname "$0")" && pwd)"
-
-export PYTHONPATH="${GUI_ROOT}:${USAGE_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${GUI_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 if ! python3 -c "import PySide6" 2>/dev/null; then
-    echo "ERROR: PySide6 not installed" >&2
+    echo "ERROR: PySide6 not installed (python3-pyside6)" >&2
     exit 1
 fi
 
+if ! command -v codexbar >/dev/null 2>&1 && [[ ! -x "${HOME}/.local/bin/codexbar" ]]; then
+    echo "ERROR: official codexbar CLI not found." >&2
+    echo "Install Linux CLI from https://github.com/steipete/CodexBar/releases" >&2
+    echo "This GUI only ports the UI — core logic is upstream." >&2
+    exit 1
+fi
+
+export PATH="${HOME}/.local/bin:${PATH}"
+
 if ! curl -sf "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
-    echo "Starting usage server on port ${PORT}..."
-    if command -v aipc-usage >/dev/null 2>&1; then
-        aipc-usage serve --port "${PORT}" &
-    else
-        python3 -m codexbar_usage serve --port "${PORT}" &
-    fi
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        if curl -sf "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
-            break
-        fi
+    echo "Starting official codexbar serve on :${PORT}..."
+    codexbar serve --port "${PORT}" &
+    for _ in $(seq 1 30); do
+        curl -sf "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 && break
         sleep 0.5
     done
-    if ! curl -sf "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
-        echo "ERROR: usage server failed to start on port ${PORT}" >&2
-        exit 1
-    fi
 fi
 
 exec python3 -m codexbar_gui --port "${PORT}" "$@"

@@ -1,135 +1,83 @@
-# CodexBar GUI — System Tray Application
+# CodexBar GUI (Linux tray shell)
 
-A PySide6 (Qt6) system tray application for CodexBar, providing real-time
-visualization of AI coding tool usage directly in your desktop's system tray.
+**Scope: GUI only.**
 
-Built for KDE/Plasma with StatusNotifier support, featuring dynamic SVG icons
-that reflect usage levels at a glance.
+Core usage/OAuth/provider logic is **not** reimplemented here. This module is a
+PySide6 system-tray front-end on top of the official Linux CLI:
 
-## Design (important)
+- [steipete/CodexBar](https://github.com/steipete/CodexBar) → `codexbar` binary
+- `codexbar usage --format json`
+- `codexbar serve` → `GET /usage` / `/health`
 
-**Real usage comes from the official Linux CLI** (`codexbar` from
-[steipete/CodexBar](https://github.com/steipete/CodexBar) releases), not the
-half-port Python `aipc-usage` fetchers. The GUI:
+```
+┌─────────────┐     JSON      ┌──────────────────────┐
+│ codexbar-gui│ ────────────► │ official codexbar    │
+│ (this repo) │ ◄──────────── │ CLI / serve          │
+└─────────────┘               └──────────────────────┘
+```
 
-1. Prefers `codexbar usage --format json` (OAuth session/weekly/pace/credits)
-2. Or `codexbar serve` → `GET /usage` (same JSON)
-3. Only falls back to `aipc-usage` if the official binary is missing
+Do **not** route this GUI through `aipc-usage` Python fetchers.
 
-## Features
+## Requirements
 
-- Provider **cards** (CLI-faithful): Session (5h) + Weekly remaining bars,
-  pace line, account/plan/credits, real CLI errors
-- Tray meter uses remaining→used mapping; tooltip mirrors card headlines
-- Left-click / double-click opens menu; menu refreshes on open
-- Auto-starts **`codexbar serve`** when possible
+1. Official Linux CLI on `PATH` (or `~/.local/bin/codexbar` / `CODEXBAR_BIN`)
+2. PySide6 (`python3-pyside6` or pip)
+3. A desktop with a system tray (KDE Plasma works out of the box)
 
-## Architecture
+## Install official CLI
+
+```sh
+# Example: tarball from GitHub Releases (linux-x86_64 / aarch64 / musl)
+# https://github.com/steipete/CodexBar/releases
+install -m 755 CodexBarCLI ~/.local/bin/codexbar
+codexbar --version
+```
+
+Configure providers the same way as upstream (CLI config under
+`~/.config/codexbar/` — see upstream docs).
+
+## Run
+
+```sh
+codexbar-gui
+# or
+/usr/lib/codexbar-gui/start.sh
+# or
+python3 -m codexbar_gui --port 8080
+```
+
+The tray app will start `codexbar serve` if nothing is on the port, or call
+`codexbar usage --format json` directly.
+
+## What the menu shows (upstream fields)
+
+- Session (5h) + Weekly **% left** bars
+- Pace summary when present
+- Account / plan / credits
+- Real CLI error strings (e.g. Claude parse failures)
+
+## Layout
 
 ```
 codexbar_gui/
-├── __init__.py            # Package root, version
-├── __main__.py            # Entry point (codexbar-gui CLI)
-├── tray_app.py            # Main app class (tray icon, server, timer)
-├── usage_panel.py         # Right-click context menu (QMenu + ProviderRow)
-├── icon_updater.py        # Dynamic SVG icon generator
-├── config_dialog.py       # Settings dialog (providers, API keys, refresh)
-└── server_launcher.py     # HTTP server detection and auto-start
+├── tray_app.py          # QSystemTrayIcon lifecycle
+├── usage_panel.py       # Provider cards
+├── upstream.py          # Parse official JSON only
+├── server_launcher.py   # codexbar serve only
+├── icon_updater.py      # Painted tray meter
+└── config_dialog.py     # Thin settings (shared config file path)
 ```
 
-## Data Flow
+## Out of scope
 
-```
-User clicks tray icon
-    ↓
-UsagePanel opens → fetches GET /usage from HTTP server
-    ↓
-Server responds with JSON array of provider snapshots
-    ↓
-ProviderRow widgets rendered in menu
-    ↓
-Tray icon updated (if usage changed significantly)
-```
+- Reimplementing providers, OAuth, cookies, pace math
+- Python `dev-ai-codexbar-usage` as the GUI data plane
+- macOS menu-bar pixel parity (Merge Icons, widgets, Sparkle)
 
-## Installation
-
-Built as part of the `dev-ai-codexbar-gui` module in the aipc project.
+## Tests
 
 ```sh
-# From the project root — builds the container image with the GUI module.
-tools/aipc render bootc
-
-# Or validate the ansible render.
-tools/aipc render ansible --check
+QT_QPA_PLATFORM=offscreen \
+PYTHONPATH=modules/dev-ai-codexbar-gui/files/usr/lib/codexbar-gui \
+  python3 -m pytest modules/dev-ai-codexbar-gui/tests/ -q
 ```
-
-Once the image is running:
-
-```sh
-# Preferred aipc entrypoint
-aipc usage gui
-
-# Direct launchers
-codexbar-gui &
-python -m codexbar_gui
-```
-
-## Usage
-
-```sh
-# Start the application (runs in background).
-aipc usage gui
-# or: codexbar-gui
-
-# The app auto-starts the HTTP server on port 8080 if not running.
-# Right-click the tray icon to see usage data.
-# Double-click the tray icon to open the menu.
-# Right-click → Settings to configure providers.
-
-# Optional: keep the HTTP server as a user service
-systemctl --user enable --now aipc-usage.service
-```
-
-## Configuration
-
-Two configuration locations:
-
-1. **Module defaults** — `files/etc/aipc/codexbar-gui/config.yaml` (module-level)
-2. **User config** — `~/.config/codexbar/config.json` (shared with `aipc-usage`)
-
-The user config manages provider enable/disable and API keys. The module config
-controls server host/port and refresh interval.
-
-## Dependencies
-
-- **PySide6** (Qt6) — installed via `packages.txt`
-- **codexbar-usage** — HTTP server (`aipc-usage serve`)
-- **X11/Wayland** — system tray integration
-
-## Verification
-
-```sh
-# Run the module verification script.
-./verify.sh
-```
-
-## Module Integration
-
-- **Bootc**: `Containerfile` COPY + `post-install.sh` pip-installs into the
-  aipc venv. PySide6 is installed via `packages.txt` (system packages).
-- **Ansible**: `modules/dev-ai-codexbar-gui/` is referenced from the playbook;
-  renders identically to the bootc target.
-- **Verify**: `verify.sh` checks the package is importable and all modules load.
-
-## Linux Support
-
-- **KDE Plasma**: Full support via StatusNotifier (native system tray)
-- **GNOME**: Partial support via statusNotifierItem extension
-- **X11**: Full support via XEmbed system tray
-- **Wayland**: Requires StatusNotifier protocol (Plasma) or extension
-
-## See Also
-
-- `modules/dev-ai-codexbar-usage/` — the HTTP server and provider registry
-- [CodexBar](https://github.com/steipete/CodexBar) — original Swift implementation
-

@@ -1,14 +1,12 @@
-"""Upstream CodexBar CLI / serve adapter.
+"""Official CodexBar CLI / serve adapter (core logic stays upstream).
 
-The Python ``aipc-usage`` port is **not** the source of truth for real quotas.
-On this machine the official Linux binary (``codexbar``) already returns OAuth
-session/weekly windows, pace, and credits. The GUI must speak that JSON.
+Scope of this repo's GUI module: **display only**.
+All quotas/OAuth/provider fetch live in the official Linux ``codexbar`` binary
+(https://github.com/steipete/CodexBar). We only parse its JSON.
 
-Prefer (in order):
-1. HTTP ``GET /usage`` from an already-running ``codexbar serve`` (or any
-   server that returns upstream-shaped JSON)
+Fetch order:
+1. HTTP ``GET /usage`` if ``codexbar serve`` is already up
 2. Subprocess ``codexbar usage --format json``
-3. Fall back to ``aipc-usage`` / broken port only if official binary missing
 """
 
 from __future__ import annotations
@@ -271,40 +269,22 @@ def fetch_usage_views(
     port: int = DEFAULT_PORT,
     prefer_cli: bool = False,
 ) -> List[ProviderView]:
-    """High-level fetch for GUI / tools.
+    """Fetch from official codexbar only (serve HTTP and/or CLI)."""
+    if not find_codexbar_binary():
+        logger.error("codexbar binary not found — install official Linux CLI")
+        return []
 
-    Default: try HTTP (serve) first for speed, then official CLI for truth.
-    Set prefer_cli=True to skip stale HTTP cache of wrong server.
-    """
     if not prefer_cli:
         http = fetch_from_http(host, port)
-        # Accept HTTP only if it looks like real upstream (has usage. or pace)
-        if http and _looks_upstream(http):
+        if http is not None:
             return http
-        if http and not find_codexbar_binary():
-            return http  # only port available
 
     cli = fetch_from_cli()
-    if cli:
+    if cli is not None:
         return cli
 
-    # Last resort: whatever is on HTTP even if port-shaped
-    http = fetch_from_http(host, port)
-    return http or []
-
-
-def _looks_upstream(views: List[ProviderView]) -> bool:
-    for v in views:
-        if v.ok and v.source in {"oauth", "cli", "api", "web", "auto", "cookie"}:
-            return True
-        if v.ok and v.primary and v.raw.get("usage"):
-            return True
-        if v.pace_summary:
-            return True
-        # Official error shape still counts as upstream
-        if v.error and v.raw.get("error"):
-            return True
-    return False
+    # One more HTTP attempt (serve may have just come up)
+    return fetch_from_http(host, port) or []
 
 
 def health_check(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:

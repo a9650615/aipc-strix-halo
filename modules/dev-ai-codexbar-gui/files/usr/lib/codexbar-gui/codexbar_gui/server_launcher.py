@@ -1,18 +1,17 @@
-"""Start official ``codexbar serve`` (preferred) or aipc-usage fallback."""
+"""Start official ``codexbar serve`` only.
+
+This GUI does **not** use the Python aipc-usage port for core logic.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
 import os
-import shutil
-import socket
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import Optional, Tuple
 
 from codexbar_gui.upstream import find_codexbar_binary
@@ -27,13 +26,9 @@ POLL_INTERVAL = 0.4
 _server_proc: Optional[subprocess.Popen] = None
 
 
-def _health_url(host: str, port: int) -> str:
-    return f"http://{host}:{port}/health"
-
-
 def check_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:
     try:
-        req = urllib.request.Request(_health_url(host, port), method="GET")
+        req = urllib.request.Request(f"http://{host}:{port}/health", method="GET")
         with urllib.request.urlopen(req, timeout=2) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data.get("status") == "ok"
@@ -49,36 +44,25 @@ def wait_for_server(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if check_server(host, port):
-            logger.info("Server ready http://%s:%s", host, port)
+            logger.info("codexbar serve ready http://%s:%s", host, port)
             return True
         time.sleep(POLL_INTERVAL)
     return False
 
 
 def _find_cli() -> list[str]:
-    """Return argv prefix for usage tooling (tests + callers)."""
+    """Return [codexbar_binary] for tests / diagnostics."""
     binary = find_codexbar_binary()
-    if binary:
-        return [binary]
-    for path in (
-        Path("/usr/bin/aipc-usage"),
-        Path("/usr/lib/aipc/tools/.venv/bin/aipc-usage"),
-    ):
-        if path.is_file():
-            return [str(path)]
-    which = shutil.which("aipc-usage")
-    if which:
-        return [which]
-    return [sys.executable, "-m", "codexbar_usage"]
+    if not binary:
+        return []
+    return [binary]
 
 
 def _serve_cmd(port: int) -> Optional[list[str]]:
-    base = _find_cli()
     binary = find_codexbar_binary()
-    if binary:
-        return [binary, "serve", "--port", str(port)]
-    # Fallback only — incomplete data for real quotas
-    return base + ["serve", "--port", str(port)]
+    if not binary:
+        return None
+    return [binary, "serve", "--port", str(port)]
 
 
 def start_server(
@@ -87,6 +71,7 @@ def start_server(
     wait: bool = True,
     timeout: float = MAX_WAIT_SECONDS,
 ) -> Tuple[bool, Optional[subprocess.Popen]]:
+    """Start official ``codexbar serve`` if nothing is listening."""
     global _server_proc
 
     if check_server(host, port):
@@ -95,23 +80,14 @@ def start_server(
 
     cmd = _serve_cmd(port)
     if not cmd:
+        logger.error(
+            "Official codexbar binary not found. Install the Linux CLI from "
+            "https://github.com/steipete/CodexBar/releases — GUI does not reimplement core."
+        )
         return False, None
-    logger.info("Starting server: %s", " ".join(cmd))
 
+    logger.info("Starting: %s", " ".join(cmd))
     env = os.environ.copy()
-    env.setdefault("PYTHONUNBUFFERED", "1")
-    modules_root = Path(__file__).resolve().parents[6]
-    repo_usage = (
-        modules_root
-        / "dev-ai-codexbar-usage"
-        / "files"
-        / "usr"
-        / "lib"
-        / "aipc-codexbar-usage"
-    )
-    if repo_usage.is_dir() and "codexbar_usage" in " ".join(cmd):
-        env["PYTHONPATH"] = f"{repo_usage}{os.pathsep}{env.get('PYTHONPATH', '')}"
-
     try:
         proc = subprocess.Popen(
             cmd,
@@ -121,27 +97,26 @@ def start_server(
             start_new_session=True,
         )
     except OSError as exc:
-        logger.error("Failed to start server: %s", exc)
+        logger.error("Failed to start codexbar serve: %s", exc)
         return False, None
 
     _server_proc = proc
-    if wait:
-        if not wait_for_server(host, port, timeout):
-            logger.warning("Server did not become ready")
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            _server_proc = None
-            return False, None
+    if wait and not wait_for_server(host, port, timeout):
+        logger.warning("codexbar serve did not become ready")
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        _server_proc = None
+        return False, None
     return True, proc
 
 
 def kill_server() -> None:
     global _server_proc
     if _server_proc and _server_proc.poll() is None:
-        logger.info("Stopping server pid=%s", _server_proc.pid)
+        logger.info("Stopping codexbar serve pid=%s", _server_proc.pid)
         try:
             _server_proc.terminate()
             _server_proc.wait(timeout=10)
