@@ -14,6 +14,9 @@ def test_matches_open_portal_intent_zh_en() -> None:
     assert portal.matches_open_portal_intent("open portal")
     assert portal.matches_open_portal_intent("Open the dashboard please")
     assert portal.matches_open_portal_intent("dashboard")
+    # Real SenseVoice slip from hardware: double "ash"
+    assert portal.matches_open_portal_intent("打开 dashashboard。")
+    assert portal.matches_open_portal_intent("打开dashbord")
     assert not portal.matches_open_portal_intent("今天天气怎么样")
     assert not portal.matches_open_portal_intent("remember my birthday")
 

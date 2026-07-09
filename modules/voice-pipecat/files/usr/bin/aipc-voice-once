@@ -181,7 +181,11 @@ def show(reply):
 
 
 def _matches_open_portal(text: str) -> bool:
-    """Local keyword intent — open AIPC portal/dashboard without LLM."""
+    """Local keyword intent — open AIPC portal/dashboard without LLM.
+
+    Must tolerate STT slurs (e.g. 'dashashboard') so we never fall through
+    to aggregator/chat for this action.
+    """
     # Prefer shared implementation when tools package is available.
     try:
         from aipc_lib.portal import matches_open_portal_intent
@@ -189,22 +193,37 @@ def _matches_open_portal(text: str) -> bool:
         return matches_open_portal_intent(text)
     except Exception:
         pass
+    import difflib
+    import re
+
     raw = (text or "").strip().lower()
+    for ch in "。.!！?？,，、；;:：\"'“”‘’":
+        raw = raw.replace(ch, "")
     compact = "".join(raw.split())
     nouns = (
         "dashboard", "portal", "仪表板", "儀表板", "管理界面", "管理介面",
         "控制台", "面板", "首页", "首頁",
     )
     verbs = ("open", "show", "launch", "打开", "打開", "开启", "開啟", "显示", "顯示")
-    if compact.rstrip("。.!！?") in {
+    if compact in {
         "dashboard", "portal", "打开dashboard", "打開dashboard",
         "打开portal", "打開portal", "opendashboard", "openportal",
         "打开面板", "打開面板",
     }:
         return True
-    return any(n in raw or n in compact for n in nouns) and any(
-        v in raw or v in compact for v in verbs
-    )
+    has_noun = any(n in raw or n in compact for n in nouns)
+    if not has_noun and "dash" in compact and "board" in compact:
+        has_noun = True
+    if not has_noun:
+        for tok in re.findall(r"[a-z]+", compact):
+            if difflib.SequenceMatcher(None, tok, "dashboard").ratio() >= 0.72:
+                has_noun = True
+                break
+            if difflib.SequenceMatcher(None, tok, "portal").ratio() >= 0.85:
+                has_noun = True
+                break
+    has_verb = any(v in raw or v in compact for v in verbs)
+    return bool(has_noun and (has_verb or len(compact) <= 24))
 
 
 def _open_portal_local() -> str:
@@ -249,6 +268,7 @@ def _self_test():
     assert USE_AGGREGATOR in (True, False)
     assert callable(chat_via_aggregator)
     assert _matches_open_portal("打开 dashboard")
+    assert _matches_open_portal("打开 dashashboard。")  # real STT slip
     assert _matches_open_portal("open portal")
     assert _matches_open_portal("打開管理介面")
     assert not _matches_open_portal("今天天气怎么样")

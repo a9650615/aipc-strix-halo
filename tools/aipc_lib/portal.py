@@ -362,12 +362,38 @@ _OPEN_PORTAL_VERBS = (
 )
 
 
+def _normalize_intent_text(text: str) -> str:
+    raw = (text or "").strip().lower()
+    for ch in "。.!！?？,，、；;:：\"'“”‘’·…":
+        raw = raw.replace(ch, "")
+    return "".join(raw.split())
+
+
+def _has_portal_noun(compact: str, raw: str) -> bool:
+    """Exact nouns + STT-slur tolerance (e.g. 'dashashboard')."""
+    import difflib
+    import re
+
+    for n in _OPEN_PORTAL_NOUNS:
+        if n in raw or n.replace(" ", "") in compact:
+            return True
+    # Common SenseVoice slips: insert/drop letters inside dashboard/portal.
+    if "dash" in compact and "board" in compact:
+        return True
+    for tok in re.findall(r"[a-z]+", compact):
+        if difflib.SequenceMatcher(None, tok, "dashboard").ratio() >= 0.72:
+            return True
+        if difflib.SequenceMatcher(None, tok, "portal").ratio() >= 0.85:
+            return True
+    return False
+
+
 def matches_open_portal_intent(text: str) -> bool:
     """True when the user is asking to open the AIPC portal / dashboard."""
     raw = (text or "").strip().lower()
     if not raw:
         return False
-    compact = "".join(raw.split())
+    compact = _normalize_intent_text(raw)
     # Short command forms (STT often drops verbs or adds punctuation).
     for exact in (
         "dashboard",
@@ -385,11 +411,14 @@ def matches_open_portal_intent(text: str) -> bool:
         "打开管理界面",
         "打開管理介面",
     ):
-        if compact == exact or compact.rstrip("。.!！?") == exact:
+        if compact == exact:
             return True
-    has_noun = any(n in raw or n.replace(" ", "") in compact for n in _OPEN_PORTAL_NOUNS)
+    has_noun = _has_portal_noun(compact, raw)
     has_verb = any(v in raw or v in compact for v in _OPEN_PORTAL_VERBS)
-    return has_noun and has_verb
+    # Noun alone is enough for very short STT (just "dashboard").
+    if has_noun and (has_verb or len(compact) <= 24):
+        return True
+    return False
 
 
 def start_portal_background(
