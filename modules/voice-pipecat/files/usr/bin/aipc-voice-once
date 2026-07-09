@@ -276,7 +276,11 @@ def _self_test():
     ns = build_parser().parse_args(["--seconds", "3"])
     assert ns.seconds == 3
     assert os.environ.get("AIPC_VOICE_TTS", "1") in ("0", "1")
-    assert USE_AGGREGATOR in (True, False)
+    # Closed-loop product default: direct /chat, aggregator opt-in only.
+    assert os.environ.get("AIPC_VOICE_USE_AGGREGATOR", "0") != "1" or USE_AGGREGATOR is True
+    assert USE_AGGREGATOR is False or os.environ.get("AIPC_VOICE_USE_AGGREGATOR") == "1"
+    if "AIPC_VOICE_USE_AGGREGATOR" not in os.environ:
+        assert USE_AGGREGATOR is False
     assert callable(chat_via_aggregator)
     assert _matches_open_portal("打开 dashboard")
     assert _matches_open_portal("打开 dashashboard。")  # real STT slip
