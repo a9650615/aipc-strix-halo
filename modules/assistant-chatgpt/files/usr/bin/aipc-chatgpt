@@ -69,6 +69,14 @@ def main(argv: list[str] | None = None) -> int:
     sp_sites.add_argument("sites_cmd", nargs="?", default="list", choices=("list", "plan"))
     sp_sites.add_argument("--site", default="", help="site id for plan")
 
+    sp_up = sub.add_parser("upload", help="attach a local file on the active site")
+    sp_up.add_argument("path", help="file path")
+    sp_up.add_argument("--site", default="")
+
+    sp_cap = sub.add_parser("capture", help="screenshot then attach (if site supports upload)")
+    sp_cap.add_argument("--region", action="store_true", help="interactive region")
+    sp_cap.add_argument("--site", default="")
+
     p.add_argument("--site", default="", help="default site id for this invocation")
     p.add_argument("--self-test", action="store_true")
 
@@ -76,7 +84,17 @@ def main(argv: list[str] | None = None) -> int:
         argv = sys.argv[1:]
     if "--self-test" in argv and not any(
         a in argv
-        for a in ("inject", "turn", "session", "voice", "status", "auth", "sites")
+        for a in (
+            "inject",
+            "turn",
+            "session",
+            "voice",
+            "status",
+            "auth",
+            "sites",
+            "upload",
+            "capture",
+        )
     ):
         return _self_test()
 
@@ -113,6 +131,34 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(json.dumps({"sites": rows, "default": site_registry.default_site_id(cfg)}, ensure_ascii=False, indent=2))
         return 0
+
+    if args.cmd == "upload":
+        from aipc_chatgpt.sites import upload as upload_mod
+
+        try:
+            page = be._eng()._page_ready()  # noqa: SLF001 — CLI convenience
+            print(upload_mod.attach_file(page, args.path))
+            return 0
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    if args.cmd == "capture":
+        from aipc_chatgpt.sites import capture as capture_mod
+        from aipc_chatgpt.sites import upload as upload_mod
+
+        try:
+            path = (
+                capture_mod.capture_region()
+                if args.region
+                else capture_mod.capture_fullscreen()
+            )
+            page = be._eng()._page_ready()  # noqa: SLF001
+            print(upload_mod.attach_file(page, str(path)))
+            return 0
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
 
     if args.cmd == "auth":
         try:

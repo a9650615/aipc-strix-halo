@@ -24,3 +24,8 @@ build/
 .idea/
 .vscode/
 *.swp
+
+# aipc multi-site web engine local profiles / sessions
+**/.local/share/aipc-web/
+**/aipc-chatgpt/profile/
+**/storage_state.json
