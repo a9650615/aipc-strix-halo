@@ -327,13 +327,19 @@ def is_official_serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> boo
         req = urllib.request.Request(f"http://{host}:{port}/usage", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             body = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        # health ok + non-0.1.0 version is enough if usage is slow
-        return True
+    except Exception as exc:
+        logger.debug("usage probe failed on :%s: %s", port, exc)
+        # Without a version we refuse to trust health-only.
+        return bool(ver) and not ver.startswith("0.1")
     if not isinstance(body, list) or not body:
-        return True
+        return bool(ver) and not ver.startswith("0.1")
     sample = body[0] if isinstance(body[0], dict) else {}
     if "snapshot" in sample and "usage" not in sample:
         logger.warning("port %s returns aipc-usage snapshot shape — ignoring", port)
         return False
-    return True
+    # Official items typically have "usage" and/or "source" / "pace"
+    if "usage" in sample or "source" in sample or "pace" in sample:
+        return True
+    if "error" in sample and "provider" in sample:
+        return True
+    return False

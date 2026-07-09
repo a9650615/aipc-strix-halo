@@ -78,11 +78,11 @@ def start_server(
         return True, None
 
     if not _port_free(host, port):
-        logger.error(
-            "Port %s is in use but is NOT official codexbar serve "
-            "(often: python -m codexbar_usage.cli serve). "
-            "Kill it: ss -ltnp | grep %s   then   kill <pid>. "
-            "GUI will use `codexbar usage` CLI directly instead.",
+        # Critical: do not log "Server already running" for fake/foreign listeners.
+        logger.warning(
+            "Port %s is busy but not official codexbar (e.g. python aipc-usage). "
+            "Not using it. Free the port or ignore — GUI uses `codexbar usage` CLI. "
+            "Check: ss -ltnp | grep %s",
             port,
             port,
         )
