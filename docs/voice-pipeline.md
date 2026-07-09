@@ -114,6 +114,22 @@ cat /etc/aipc/voice/persona.yaml
 The CosyVoice module may still ship `.disabled` until hardware-verified; until
 then the client falls through to Kokoro automatically.
 
+## Always-on baseline (not torn down by model presets)
+
+Standing decision (2026-07-10): these stay resident unless a better combo
+is hardware-proven and explicitly adopted:
+
+| Piece | Role |
+|---|---|
+| **resident-small** | NPU/FLM small LLM (via Lemonade) |
+| **SenseVoice** | STT (`aipc-voice-stt-sensevoice`, :9001) |
+| **Kokoro** | Neural TTS (`aipc-kokoro`, :8880) until CosyVoice clone is ready |
+| **mem0** | Local memory (`aipc-mem0`) |
+
+`aipc models use agent|122b|free` only switches **heavy role LLMs**. It must
+not stop SenseVoice / Kokoro / mem0. 122B vs agent Vulkan is exclusive at
+the **role** layer only; baseline coexists with either.
+
 ## Where each stage runs (Strix Halo / Linux)
 
 | Stage | Desired | Reality on this host (2026-07-10) |
