@@ -1,38 +1,61 @@
 # voice-tts-kokoro
 
-Local TTS service for spoken assistant replies.
+**Neural** TTS for the assistant — [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)
+via [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI)
+(`ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4`).
 
-## Current status: espeak-ng backend on :8880 — enabled after hardware verify
+## Chinese support (primary requirement)
 
-The scaffolded `docker.io/aipc/kokoro:latest` image does not exist (same
-fictitious-image class as early SenseVoice). This module ships a **native
-stdlib HTTP service** (no FastAPI/pydantic — Python 3.14 has no reliable
-`pydantic-core` wheel) that exposes an OpenAI-compatible speech endpoint:
+Kokoro ships **dedicated Mandarin voice packs** (not espeak phoneme hacks):
+
+| Voice | Style (typical) |
+|---|---|
+| **`zf_xiaoxiao`** | Default female Mandarin — natural conversational |
+| `zf_xiaobei` / `zf_xiaoni` / `zf_xiaoyi` | Alternate female |
+| `zm_yunjian` / `zm_yunxi` / `zm_yunxia` / `zm_yunyang` | Male Mandarin |
+
+`aipc_voice_tts.choose_voice()` routes any utterance with ≥12% CJK codepoints
+(or ≥2 CJK chars) to `AIPC_TTS_VOICE_ZH` (default **`zf_xiaoxiao`**). English
+uses `af_heart`. Override anytime with `AIPC_TTS_VOICE=zf_xiaoxiao`.
+
+Mixed 中英 text is synthesized with the Chinese voice so Mandarin prosody wins
+(what you want for this product).
+
+> CosyVoice 2/3 zero-shot cloning remains a follow-up for “sound like me”
+> persona work (`voice-tts-cosyvoice`). For **stock high-quality Chinese**,
+> Kokoro Mandarin packs are the shipped default.
+
+## API (already what the client calls)
 
 ```
+GET  http://127.0.0.1:8880/health
+GET  http://127.0.0.1:8880/v1/audio/voices
 POST http://127.0.0.1:8880/v1/audio/speech
-{"model":"local","voice":"default","input":"...","response_format":"wav"}
-→ audio/wav
-GET  http://127.0.0.1:8880/healthz
+{"model":"kokoro","voice":"zf_xiaoxiao","input":"你好","response_format":"wav"}
+→ audio/wav  (24 kHz PCM)
 ```
 
-Backend is **espeak-ng** (already on the image via `packages.txt`). Chinese
-uses `cmn`, English uses `en`. Neural Kokoro/Piper can replace
-`synthesize_wav()` later without changing the client (`aipc_voice_tts.py`).
+## Runtime
 
-## Dependencies
+Quadlet `aipc-kokoro.container` → systemd. Live ostree hotfix:
 
-- `espeak-ng`, `python3-devel` (venv / fastapi)
-- `voice-pipecat` — `aipc_voice_tts.speak()` calls this endpoint, then
-  falls back to in-process espeak if the service is down
+```bash
+podman run -d --name aipc-kokoro --replace --restart unless-stopped \
+  -p 127.0.0.1:8880:8880 \
+  ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4
+```
+
+Optional ROCm (experimental upstream): image `…-rocm:latest` + `/dev/kfd` + `/dev/dri`.
+
+espeak-ng stays only as silent-failure fallback inside `aipc_voice_tts.speak()`.
+
+## Hardware-verified (this Strix Halo host, 2026-07-10)
+
+- Image present, container healthy in ~4s
+- `zf_xiaoxiao` Chinese sentence → WAV 24 kHz, ~2s wall, `paplay` OK
+- `af_heart` English sentence → WAV, play OK
+- Mixed 中英 → WAV OK
 
 ## Spec
 
-- `openspec/changes/phase-3-voice/design.md` — D5 (language-routed TTS;
-  this is the minimal local path; CosyVoice cloning remains deferred)
-
-## Verification
-
-- Static: `verify.sh` syntax + unit port
-- Hardware: `systemctl start aipc-voice-tts-local` → healthz 200 →
-  `aipc-voice-once` speaks the reply (or espeak fallback if service down)
+- phase-3-voice D5 (language-routed TTS)

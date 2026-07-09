@@ -1,4 +1,8 @@
-"""Local TTS router: HTTP services first, espeak-ng fallback, always play audio."""
+"""TTS router: Kokoro-82M neural (zh+en) first, espeak only as last resort.
+
+Chinese defaults to zf_xiaoxiao (natural Mandarin). English uses af_heart.
+OpenAI-compatible endpoint: POST :8880/v1/audio/speech
+"""
 
 from __future__ import annotations
 
@@ -13,28 +17,53 @@ import urllib.request
 
 COSYVOICE_URL = os.environ.get("AIPC_COSYVOICE_URL", "http://127.0.0.1:9880/tts")
 KOKORO_URL = os.environ.get("AIPC_KOKORO_URL", "http://127.0.0.1:8880/v1/audio/speech")
-LOCAL_TTS_URL = os.environ.get("AIPC_LOCAL_TTS_URL", "http://127.0.0.1:8880/v1/audio/speech")
-TTS_TIMEOUT = float(os.environ.get("AIPC_TTS_TIMEOUT", "20"))
+LOCAL_TTS_URL = os.environ.get("AIPC_LOCAL_TTS_URL", KOKORO_URL)
+TTS_TIMEOUT = float(os.environ.get("AIPC_TTS_TIMEOUT", "90"))
+
+# Kokoro voice packs (see GET /v1/audio/voices). zf_* / zm_* = Mandarin.
+VOICE_EN = os.environ.get("AIPC_TTS_VOICE_EN", "af_heart")
+VOICE_ZH = os.environ.get("AIPC_TTS_VOICE_ZH", "zf_xiaoxiao")
+MODEL = os.environ.get("AIPC_TTS_MODEL", "kokoro")
 
 _CJK_RE = re.compile(r"[㐀-鿿豈-﫿]")
+# Dense CJK: if ≥15% of letters are CJK, treat as Chinese utterance.
+_LETTER_RE = re.compile(r"[\w㐀-鿿豈-﫿]", re.UNICODE)
+
+
+def is_cjk(text: str) -> bool:
+    if _CJK_RE.search(text) is None:
+        return False
+    letters = _LETTER_RE.findall(text)
+    if not letters:
+        return False
+    cjk = sum(1 for ch in letters if _CJK_RE.match(ch))
+    return (cjk / len(letters)) >= 0.12 or cjk >= 2
+
+
+def choose_voice(text: str) -> str:
+    override = os.environ.get("AIPC_TTS_VOICE", "").strip()
+    if override:
+        return override
+    return VOICE_ZH if is_cjk(text) else VOICE_EN
 
 
 def choose_tts_url(text: str) -> str:
-    """Prefer local OpenAI-speech compatible service; CosyVoice for CJK when set."""
-    if _CJK_RE.search(text) and os.environ.get("AIPC_PREFER_COSYVOICE", "0") == "1":
+    # CosyVoice only when explicitly preferred and CJK (clone / higher fidelity).
+    if is_cjk(text) and os.environ.get("AIPC_PREFER_COSYVOICE", "0") == "1":
         return COSYVOICE_URL
     return LOCAL_TTS_URL or KOKORO_URL
 
 
 def build_payload(text: str, url: str) -> tuple[bytes, str]:
-    if "audio/speech" in url or url == KOKORO_URL or url == LOCAL_TTS_URL:
+    if "audio/speech" in url or url in (KOKORO_URL, LOCAL_TTS_URL):
         return (
             json.dumps(
                 {
-                    "model": os.environ.get("AIPC_TTS_MODEL", "local"),
-                    "voice": os.environ.get("AIPC_TTS_VOICE", "default"),
+                    "model": MODEL,
+                    "voice": choose_voice(text),
                     "input": text,
                     "response_format": "wav",
+                    "speed": float(os.environ.get("AIPC_TTS_SPEED", "1.0")),
                 }
             ).encode(),
             "application/json",
@@ -42,26 +71,36 @@ def build_payload(text: str, url: str) -> tuple[bytes, str]:
     return json.dumps({"text": text}).encode(), "application/json"
 
 
-def _play_wav_bytes(audio: bytes) -> bool:
+def _play_audio_bytes(audio: bytes, suffix: str = ".wav") -> bool:
     if not audio:
         return False
-    player = shutil.which("paplay") or shutil.which("aplay")
-    if not player:
+    players: list[list[str]] = []
+    if suffix in (".wav", ".flac"):
+        if shutil.which("paplay"):
+            players.append(["paplay", "{path}"])
+        if shutil.which("aplay"):
+            players.append(["aplay", "-q", "{path}"])
+    if shutil.which("ffplay"):
+        players.append(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "{path}"])
+    if shutil.which("mpv"):
+        players.append(["mpv", "--no-video", "--really-quiet", "{path}"])
+    if not players and shutil.which("paplay"):
+        players.append(["paplay", "{path}"])
+    if not players:
         return False
-    fd, path = tempfile.mkstemp(suffix=".wav", prefix="aipc-tts-")
+
+    fd, path = tempfile.mkstemp(suffix=suffix, prefix="aipc-tts-")
     os.close(fd)
     try:
         with open(path, "wb") as f:
             f.write(audio)
-        # basename check: "paplay".endswith("aplay") is True — do not use endswith.
-        base = os.path.basename(player)
-        if base == "aplay":
-            cmd = [player, "-q", path]
-        else:
-            cmd = [player, path]
-        subprocess.run(cmd, check=True, capture_output=True, timeout=120)
-        return True
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        for tmpl in players:
+            cmd = [c.format(path=path) for c in tmpl]
+            try:
+                subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+                return True
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                continue
         return False
     finally:
         try:
@@ -71,7 +110,7 @@ def _play_wav_bytes(audio: bytes) -> bool:
 
 
 def _espeak_voice(text: str) -> str:
-    if _CJK_RE.search(text):
+    if is_cjk(text):
         return os.environ.get("AIPC_ESPEAK_VOICE_ZH", "cmn")
     return os.environ.get("AIPC_ESPEAK_VOICE_EN", "en")
 
@@ -90,7 +129,7 @@ def speak_espeak(text: str) -> bool:
             timeout=60,
         )
         with open(path, "rb") as f:
-            return _play_wav_bytes(f.read())
+            return _play_audio_bytes(f.read(), ".wav")
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False
     finally:
@@ -111,15 +150,21 @@ def speak_http(text: str, opener=urllib.request.urlopen) -> bool:
             audio = resp.read()
             content = (resp.headers.get("Content-Type") or "").lower()
         if "json" in content:
-            # some services wrap base64; treat as failure and fall through
             return False
-        return _play_wav_bytes(audio)
+        if "mpeg" in content or "mp3" in content:
+            suffix = ".mp3"
+        elif "opus" in content:
+            suffix = ".opus"
+        elif "flac" in content:
+            suffix = ".flac"
+        else:
+            suffix = ".wav"
+        return _play_audio_bytes(audio, suffix)
     except (OSError, urllib.error.URLError, TimeoutError):
         return False
 
 
 def speak(text: str, opener=urllib.request.urlopen) -> bool:
-    """Speak `text`. Prefer local HTTP TTS; fall back to espeak-ng."""
     if not text or not str(text).strip():
         return False
     if os.environ.get("AIPC_VOICE_TTS", "1") == "0":
@@ -131,11 +176,15 @@ def speak(text: str, opener=urllib.request.urlopen) -> bool:
 
 def _self_test() -> int:
     assert choose_tts_url("hello") == LOCAL_TTS_URL
-    body, content_type = build_payload("hello", LOCAL_TTS_URL)
+    assert choose_voice("hello") == VOICE_EN
+    assert choose_voice("你好世界") == VOICE_ZH
+    assert choose_voice("OK，我知道了") == VOICE_ZH  # mixed, still CJK-led
+    body, content_type = build_payload("你好", LOCAL_TTS_URL)
     assert content_type == "application/json"
-    assert json.loads(body.decode())["input"] == "hello"
-    assert _espeak_voice("你好") == os.environ.get("AIPC_ESPEAK_VOICE_ZH", "cmn")
-    assert _espeak_voice("hello") == os.environ.get("AIPC_ESPEAK_VOICE_EN", "en")
+    payload = json.loads(body.decode())
+    assert payload["model"] == "kokoro"
+    assert payload["voice"] == VOICE_ZH
+    assert payload["response_format"] == "wav"
     assert speak("") is False
     print("aipc_voice_tts: self-test OK")
     return 0

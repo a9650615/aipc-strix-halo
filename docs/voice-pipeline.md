@@ -36,17 +36,28 @@ aipc-voice-bind-hotkey --shortcut F20
 
 If KDE global-shortcut tools are missing or no desktop session is active, the helper prints the commands it would run and exits optional.
 
-## Stage 2: TTS output
+## Stage 2: TTS output (Kokoro-82M neural)
 
-Local TTS service (`aipc-voice-tts-local`, port **8880**) synthesizes via
-**espeak-ng** and returns `audio/wav`. `aipc_voice_tts.speak()` plays the
-audio with `paplay`/`aplay`. If the service is down it falls back to
-in-process espeak-ng. `notify-send` text remains always-on so a TTS failure
-never loses the reply.
+**Backend:** `aipc-kokoro` container — `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4`
+on **:8880** (OpenAI `/v1/audio/speech`).
+
+**Chinese (default):** voice `zf_xiaoxiao` (override `AIPC_TTS_VOICE_ZH`).
+Other Mandarin packs: `zf_xiaobei`, `zf_xiaoni`, `zf_xiaoyi`, `zm_yunjian`, …
+**English:** `af_heart` (`AIPC_TTS_VOICE_EN`).
+
+`aipc_voice_tts.speak()` routes by CJK density, requests WAV, plays with
+`paplay`. espeak-ng is **last-resort only** if Kokoro is down.
+`notify-send` still always shows text.
 
 ```bash
-curl -sS http://127.0.0.1:8880/healthz
-aipc-voice-once --seconds 5   # should print "spoke reply via TTS"
+curl -sS http://127.0.0.1:8880/health
+curl -sS http://127.0.0.1:8880/v1/audio/voices | head
+# Chinese sample
+curl -sS -X POST http://127.0.0.1:8880/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"kokoro","voice":"zf_xiaoxiao","input":"你好","response_format":"wav"}' \
+  -o /tmp/zh.wav && paplay /tmp/zh.wav
+aipc-voice-once --seconds 5
 ```
 
 ## Stage 3: Wake + mute + hotkey

@@ -2,34 +2,28 @@
 set -eu
 this_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-server="$this_dir/files/usr/lib/aipc-voice/aipc_tts_local/server.py"
-[ -f "$server" ] || {
-  echo "voice-tts-kokoro: missing server.py" >&2
+quadlet="$this_dir/quadlet/aipc-kokoro.container"
+[ -f "$quadlet" ] || {
+  echo "voice-tts-kokoro: missing quadlet" >&2
   exit 1
 }
-python3 -c "import ast; ast.parse(open('$server').read())" || {
-  echo "voice-tts-kokoro: server.py syntax error" >&2
+grep -q 'ghcr.io/remsky/kokoro-fastapi' "$quadlet" || {
+  echo "voice-tts-kokoro: quadlet must pin Kokoro-FastAPI image" >&2
   exit 1
 }
-unit="$this_dir/files/etc/systemd/system/aipc-voice-tts-local.service"
-[ -f "$unit" ] || {
-  echo "voice-tts-kokoro: missing systemd unit" >&2
+grep -q '8880' "$quadlet" || {
+  echo "voice-tts-kokoro: must publish 8880" >&2
   exit 1
 }
-grep -Eq '8880|AIPC_TTS_PORT' "$unit" || {
-  echo "voice-tts-kokoro: unit must publish 8880" >&2
-  exit 1
-}
-server_py="$this_dir/files/usr/lib/aipc-voice/aipc_tts_local/server.py"
-python3 "$server_py" --help >/dev/null 2>&1 || true
-python3 -c "import ast; ast.parse(open('$server_py').read())"
-# Runtime optional: if live service is up, require healthz.
+# Live optional
 if command -v curl >/dev/null 2>&1; then
-  code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:8880/healthz 2>/dev/null || true)
-  if [ "$code" = "200" ]; then
-    echo "voice-tts-kokoro: static OK + live healthz 200"
+  code=$(curl -s -m 3 -o /tmp/kokoro-hz -w '%{http_code}' http://127.0.0.1:8880/health 2>/dev/null || true)
+  code2=$(curl -s -m 3 -o /tmp/kokoro-hz2 -w '%{http_code}' http://127.0.0.1:8880/healthz 2>/dev/null || true)
+  if [ "$code" = "200" ] || [ "$code2" = "200" ]; then
+    body=$(cat /tmp/kokoro-hz /tmp/kokoro-hz2 2>/dev/null | head -c 200)
+    echo "voice-tts-kokoro: static OK + live health ($body)"
     exit 0
   fi
 fi
-echo "voice-tts-kokoro: static OK (live healthz optional)"
+echo "voice-tts-kokoro: static OK (live Kokoro optional)"
 exit 0
