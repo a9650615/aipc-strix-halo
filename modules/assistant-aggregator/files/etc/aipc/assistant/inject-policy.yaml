@@ -1,0 +1,17 @@
+session_bundle:
+  - persona
+  - datetime
+  - mem0_top_k: 5
+
+timeouts:
+  idle_stop_s: 90
+  max_session_s: 1800
+
+privacy:
+  remember_to_mem0: false
+  redact:
+    - password
+    - api_key
+
+audio:
+  system_share: off   # off | ask | on — pack system_audio

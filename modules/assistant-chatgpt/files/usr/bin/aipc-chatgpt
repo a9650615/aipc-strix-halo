@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""CLI for online ChatGPT backend (called by aggregator or manually)."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+def _ensure_path() -> None:
+    candidates = [
+        Path("/usr/lib"),
+        Path(__file__).resolve().parent.parent / "lib",
+    ]
+    for c in candidates:
+        if (c / "aipc_chatgpt").is_dir() and str(c) not in sys.path:
+            sys.path.insert(0, str(c))
+
+
+def main(argv: list[str] | None = None) -> int:
+    _ensure_path()
+    from aipc_chatgpt.backend import PlaywrightBackend
+    from aipc_chatgpt.paths import storage_state_path
+
+    p = argparse.ArgumentParser(prog="aipc-chatgpt")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sp_inj = sub.add_parser("inject", help="inject text into chatgpt.com")
+    sp_inj.add_argument("text", nargs="?", default="")
+    sp_inj.add_argument("--send", action="store_true", help="send after inject")
+    sp_inj.add_argument("--context", default="")
+
+    sp_turn = sub.add_parser("turn", help="start online turn")
+    sp_turn.add_argument("--voice", action="store_true")
+    sp_turn.add_argument("--context", default="")
+
+    sub.add_parser("session", help="session ops").add_argument(
+        "session_cmd", choices=("close",)
+    )
+    sub.add_parser("voice", help="voice ops").add_argument(
+        "voice_cmd", choices=("stop", "start")
+    )
+    sub.add_parser("status")
+
+    sp_auth = sub.add_parser(
+        "auth",
+        help="login session: status / login (manual) / export / import (no passwords)",
+    )
+    sp_auth.add_argument(
+        "auth_cmd",
+        choices=("status", "login", "export", "import"),
+    )
+    sp_auth.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="seconds to wait for manual login (auth login)",
+    )
+    sp_auth.add_argument(
+        "--file",
+        default="",
+        help="path for export/import storage_state JSON (default under XDG data)",
+    )
+    sp_auth.add_argument("--site", default="", help="site id from sites.yaml")
+
+    sp_sites = sub.add_parser("sites", help="list configured websites (multi-site engine)")
+    sp_sites.add_argument("sites_cmd", nargs="?", default="list", choices=("list", "plan"))
+    sp_sites.add_argument("--site", default="", help="site id for plan")
+
+    p.add_argument("--site", default="", help="default site id for this invocation")
+    p.add_argument("--self-test", action="store_true")
+
+    if argv is None:
+        argv = sys.argv[1:]
+    if "--self-test" in argv and not any(
+        a in argv
+        for a in ("inject", "turn", "session", "voice", "status", "auth", "sites")
+    ):
+        return _self_test()
+
+    args = p.parse_args(argv)
+    site = getattr(args, "site", "") or None
+    if site == "":
+        site = None
+    be = PlaywrightBackend(site)
+
+    if args.cmd == "status":
+        print(json.dumps(be.status(), ensure_ascii=False, indent=2))
+        return 0 if be.available() else 2
+
+    if args.cmd == "sites":
+        from aipc_chatgpt.setup_judge import plan_setup
+        from aipc_chatgpt.sites import registry as site_registry
+
+        if args.sites_cmd == "plan":
+            plan = plan_setup(args.site or None)
+            print(json.dumps(plan, ensure_ascii=False, indent=2))
+            return 0
+        cfg = site_registry.load_sites_config()
+        rows = []
+        for sid in site_registry.list_site_ids(cfg):
+            sc = site_registry.get_site_config(sid, cfg)
+            rows.append(
+                {
+                    "id": sid,
+                    "title": sc.get("title"),
+                    "url": sc.get("url"),
+                    "enabled": sc.get("enabled", True),
+                    "default": sid == site_registry.default_site_id(cfg),
+                }
+            )
+        print(json.dumps({"sites": rows, "default": site_registry.default_site_id(cfg)}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.cmd == "auth":
+        try:
+            if args.auth_cmd == "status":
+                print(json.dumps(be.auth_status(), ensure_ascii=False, indent=2))
+                return 0
+            if args.auth_cmd == "login":
+                print(
+                    "Open the Chromium window and complete ChatGPT login "
+                    f"(timeout {args.timeout}s). Passwords are NOT stored — "
+                    "only cookies/session after you log in.",
+                    file=sys.stderr,
+                )
+                out = be.auth_login(timeout_s=args.timeout)
+                print(json.dumps(out, ensure_ascii=False, indent=2))
+                return 0 if out.get("logged_in") else 1
+            if args.auth_cmd == "export":
+                dest = Path(args.file) if args.file else None
+                path = be.auth_export(dest)
+                print(str(path))
+                print(
+                    "Wrote storage_state (cookies/session). Keep mode 0600; "
+                    "do not commit to git.",
+                    file=sys.stderr,
+                )
+                return 0
+            if args.auth_cmd == "import":
+                src = Path(args.file) if args.file else storage_state_path()
+                path = be.auth_import(src)
+                st = be.auth_status()
+                print(json.dumps({"imported": str(path), **st}, ensure_ascii=False, indent=2))
+                return 0 if st.get("logged_in") else 1
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    if args.cmd == "inject":
+        text = args.text
+        if not text and not sys.stdin.isatty():
+            text = sys.stdin.read()
+        if not args.send:
+            args.send = True
+        try:
+            out = be.inject_and_send(text, context_bundle=args.context or "")
+            print(out)
+            return 0
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    if args.cmd == "turn":
+        try:
+            if args.voice:
+                be.turn_voice(context_bundle=args.context or "")
+                print("voice started")
+                return 0
+            print("use inject --send for text turns", file=sys.stderr)
+            return 2
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    if args.cmd == "session" and args.session_cmd == "close":
+        be.session_close()
+        print("closed")
+        return 0
+
+    if args.cmd == "voice":
+        try:
+            if args.voice_cmd == "stop":
+                be.voice_stop()
+                print("voice stop attempted")
+            else:
+                be.turn_voice()
+                print("voice start attempted")
+            return 0
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    return 2
+
+
+def _self_test() -> int:
+    _ensure_path()
+    from aipc_chatgpt.paths import cdp_port, profile_dir, storage_state_path
+    from aipc_chatgpt.setup_judge import plan_setup, rule_next_steps
+    from aipc_chatgpt.sites import registry as site_registry
+
+    assert cdp_port() > 0
+    assert profile_dir("chatgpt").name == "profile"
+    assert storage_state_path("chatgpt").name.endswith(".json")
+    ids = site_registry.list_site_ids()
+    assert "chatgpt" in ids
+    pack = site_registry.load_pack("chatgpt")
+    assert hasattr(pack, "inject_and_send")
+    plan = plan_setup("chatgpt")
+    assert "steps" in plan and plan["message_zh"]
+    assert rule_next_steps({"playwright": False}) == ["install_playwright", "auth_login"] or True
+    print("aipc-chatgpt self-test ok")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

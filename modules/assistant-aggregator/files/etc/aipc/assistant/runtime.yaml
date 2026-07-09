@@ -1,0 +1,37 @@
+# NPU-first runtime: prefer always-on Lemonade FLM model via LiteLLM.
+# Does NOT require loading Vulkan 35B models for the assistant hub path.
+#
+# resident-small = gemma4-it-e4b-FLM on NPU (models.yaml / litellm).
+
+npu_first: true
+
+# Local chat fulfillment when mode=local
+local_backend:
+  # npu  = LiteLLM chat with model below only (strict NPU)
+  # agent = agent-orchestrator :4100 (may pull ornith-35b / tools)
+  # auto  = NPU first, fall back to agent if LiteLLM/NPU errors (default UX)
+  mode: auto
+  model: resident-small
+  litellm_base: http://127.0.0.1:4000/v1
+  timeout_s: 60
+  # System prompt kept short for small NPU models
+  system_prompt: >
+    You are the aipc on-device assistant running on a local NPU model.
+    Be concise and helpful. Reply in the user's language.
+  agent_url: http://127.0.0.1:4100/chat
+
+# Control plane (intent → allow-listed actions) — must stay NPU-cheap
+control:
+  model: resident-small
+  # Prefer JSON in message content; avoid tools/function-calling API on NPU
+  prompt_style: json_content
+  # Never use cloud or large Vulkan models for control by default
+  allow_models:
+    - resident-small
+
+# Multi-site setup judge (sites.yaml) should use the same NPU model
+setup:
+  model: resident-small
+
+# Online mode uses subscription web UI (no local LLM for the chat itself).
+# Only control/setup use NPU when online.

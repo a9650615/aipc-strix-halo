@@ -1,0 +1,2 @@
+# Runtime: playwright + browsers installed via post-install (not dnf).
+# python3-pip optional for image builds that use pip.
