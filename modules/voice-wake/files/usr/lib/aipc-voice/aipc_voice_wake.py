@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import array
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -39,14 +40,68 @@ def muted() -> bool:
     return MUTE_FLAG.exists()
 
 
-def trigger_once() -> None:
+def _desktop_user_env() -> dict[str, str]:
+    """Inject the active graphical session so TTS/notify/hotkey path works.
+
+    System-unit wake has no DISPLAY/Pulse; without this, aipc-voice-once
+    records but cannot play audio or notify on the desktop.
+    """
+    import pwd
+
     env = os.environ.copy()
-    # Wake already listened; one-shot should still speak if TTS available.
+    run_user = Path("/run/user")
+    if not run_user.is_dir():
+        return env
+    for entry in sorted(run_user.iterdir(), key=lambda p: p.name):
+        if not entry.name.isdigit():
+            continue
+        bus = entry / "bus"
+        if not bus.exists():
+            continue
+        uid = int(entry.name)
+        try:
+            pw = pwd.getpwuid(uid)
+        except KeyError:
+            continue
+        if pw.pw_name in ("root", "nobody"):
+            continue
+        env["DISPLAY"] = env.get("DISPLAY") or ":0"
+        env["XDG_RUNTIME_DIR"] = str(entry)
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
+        env["HOME"] = pw.pw_dir
+        env["USER"] = pw.pw_name
+        env["LOGNAME"] = pw.pw_name
+        env["AIPC_WAKE_AS_USER"] = pw.pw_name
+        # Prefer user-local voice-once if system path is stale/RO.
+        local_once = Path(pw.pw_dir) / ".local/bin/aipc-voice-once"
+        if local_once.is_file() and os.access(local_once, os.X_OK):
+            env["AIPC_VOICE_ONCE_RESOLVED"] = str(local_once)
+        return env
+    env.setdefault("DISPLAY", ":0")
+    return env
+
+
+def trigger_once() -> None:
+    env = _desktop_user_env()
+    cmd = env.pop("AIPC_VOICE_ONCE_RESOLVED", None) or ONCE_CMD
+    if not Path(cmd).is_file() and shutil.which(cmd):
+        cmd = shutil.which(cmd) or cmd
+    as_user = env.get("AIPC_WAKE_AS_USER")
+    argv = [cmd, "--seconds", str(RECORD_SECONDS)]
+    # Drop root so Pulse/paplay use the desktop session.
+    if as_user and os.geteuid() == 0 and as_user != "root":
+        argv = ["runuser", "-u", as_user, "--", *argv]
+    log = Path("/tmp/aipc-voice-once-from-wake.log")
+    try:
+        log_f = open(log, "ab", buffering=0)  # noqa: SIM115
+    except OSError:
+        log_f = subprocess.DEVNULL
+    print(f"aipc-voice-wake: spawn {' '.join(argv)}", flush=True)
     subprocess.Popen(
-        [ONCE_CMD, "--seconds", str(RECORD_SECONDS)],
+        argv,
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_f,
+        stderr=log_f,
         start_new_session=True,
     )
 

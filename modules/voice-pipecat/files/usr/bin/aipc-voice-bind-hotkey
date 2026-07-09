@@ -39,11 +39,58 @@ def _desktop_entry_text(command: str) -> str:
 
 
 def _qdbus_bin() -> str | None:
-    return shutil.which("qdbus6") or shutil.which("qdbus")
+    return (
+        shutil.which("qdbus6")
+        or shutil.which("qdbus-qt6")
+        or shutil.which("qdbus")
+    )
+
+
+def _qt_key_for_shortcut(shortcut: str) -> int | None:
+    """Map common shortcuts to Qt key codes for KGlobalAccel.setShortcut."""
+    s = shortcut.strip()
+    if s.upper().startswith("F") and s[1:].isdigit():
+        n = int(s[1:])
+        if 1 <= n <= 35:
+            return 0x01000030 + (n - 1)  # Qt::Key_F1 …
+    if s in ("Meta+Space", "Super+Space"):
+        return 0x20 | 0x08000000  # Key_Space | MetaModifier
+    return None
+
+
+def _register_shortcut_dbus(shortcut: str) -> bool:
+    """Plasma 6: reloadConfig is gone — register via setShortcut on session bus."""
+    key = _qt_key_for_shortcut(shortcut)
+    if key is None:
+        return False
+    try:
+        import dbus  # type: ignore
+    except ImportError:
+        return False
+    try:
+        bus = dbus.SessionBus()
+        obj = bus.get_object("org.kde.kglobalaccel", "/kglobalaccel")
+        iface = dbus.Interface(obj, "org.kde.KGlobalAccel")
+        action_id = dbus.Array(
+            [
+                dbus.String("services"),
+                dbus.String("aipc-voice-once.desktop"),
+                dbus.String(""),
+                dbus.String(""),
+            ],
+            signature="s",
+        )
+        iface.doRegister(action_id)
+        keys = dbus.Array([dbus.Int32(key)], signature="i")
+        iface.setShortcut(action_id, keys, dbus.UInt32(0))
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-voice-bind-hotkey: dbus setShortcut failed: {exc}", file=sys.stderr)
+        return False
 
 
 def _shortcut_commands(shortcut: str) -> list[list[str]]:
-    cmds: list[list[str]] = [
+    return [
         [
             "kwriteconfig6",
             "--file",
@@ -55,23 +102,6 @@ def _shortcut_commands(shortcut: str) -> list[list[str]]:
             f"{shortcut},none,AIPC Voice Assistant",
         ],
     ]
-    qdbus = _qdbus_bin()
-    if qdbus:
-        cmds.append(
-            [qdbus, "org.kde.kglobalaccel", "/kglobalaccel", "org.kde.KGlobalAccel.reloadConfig"]
-        )
-    else:
-        # Fallback when qdbus is absent: ask systemd user session / dbus-send.
-        cmds.append(
-            [
-                "dbus-send",
-                "--type=method_call",
-                "--dest=org.kde.kglobalaccel",
-                "/kglobalaccel",
-                "org.kde.KGlobalAccel.reloadConfig",
-            ]
-        )
-    return cmds
 
 
 def _shortcut_from_file(path: Path) -> str | None:
@@ -109,8 +139,6 @@ def _missing_tools() -> list[str]:
     missing: list[str] = []
     if shutil.which("kwriteconfig6") is None:
         missing.append("kwriteconfig6")
-    if _qdbus_bin() is None and shutil.which("dbus-send") is None:
-        missing.append("qdbus6|qdbus|dbus-send")
     return missing
 
 
@@ -134,8 +162,7 @@ def _self_test() -> int:
         assert cmds[0][0] == "kwriteconfig6"
         assert "aipc-voice-once.desktop" in cmds[0]
         assert "F20" in cmds[0][-1]
-        reload_bin = os.path.basename(cmds[1][0])
-        assert reload_bin in ("qdbus6", "qdbus", "dbus-send")
+        assert _qt_key_for_shortcut("F20") == 0x01000030 + 19
 
     print("aipc-voice-bind-hotkey: self-test OK")
     return 0
@@ -173,23 +200,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     _write_desktop_file(DESKTOP_FILE, desktop_text)
-    # Write the shortcut first (required). Reload is best-effort — KDE's
-    # qdbus method name has varied across Plasma 5/6 and may be absent.
     try:
         subprocess.run(cmds[0], check=True)
     except subprocess.CalledProcessError as exc:
         print(f"aipc-voice-bind-hotkey: desktop binding failed: {exc}", file=sys.stderr)
         return 2
-    if len(cmds) > 1:
-        reload = subprocess.run(cmds[1], check=False, capture_output=True, text=True)
-        if reload.returncode != 0:
-            print(
-                "aipc-voice-bind-hotkey: shortcut written; KDE reload skipped "
-                f"({reload.stderr.strip() or reload.stdout.strip() or 'no reload method'}). "
-                "Log out/in or re-open System Settings → Shortcuts if it does not take effect.",
-                file=sys.stderr,
-            )
-    print(f"aipc-voice-bind-hotkey: bound {selected_shortcut} to {args.command}")
+    # Apply live without logout (Plasma 6 KGlobalAccel).
+    if _register_shortcut_dbus(selected_shortcut):
+        print(f"aipc-voice-bind-hotkey: bound {selected_shortcut} to {args.command} (live)")
+    else:
+        print(
+            f"aipc-voice-bind-hotkey: wrote {selected_shortcut} → {args.command}; "
+            "if inactive, re-run inside the desktop session or check System Settings → Shortcuts",
+            file=sys.stderr,
+        )
     return 0
 
 
