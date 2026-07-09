@@ -41,13 +41,13 @@ If KDE global-shortcut tools are missing or no desktop session is active, the he
 **Backend:** `aipc-kokoro` container — `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4`
 on **:8880** (OpenAI `/v1/audio/speech`).
 
-**Chinese (default):** voice `zf_xiaoyi` (override `AIPC_TTS_VOICE_ZH`).
-Other Mandarin packs: `zf_xiaoxiao`, `zf_xiaobei`, `zf_xiaoni`, `zm_yunjian`, …
-(All mainland Mandarin; not Taiwanese accent.)
+**Chinese (Kokoro pack):** voice `zf_xiaoyi` (override `AIPC_TTS_VOICE_ZH` or
+`/etc/aipc/voice/tts-zh-voice`). Other Mandarin packs: `zf_xiaoxiao`,
+`zf_xiaobei`, `zf_xiaoni`, `zm_yunjian`, … (mainland Mandarin; not Taiwanese).
 **English:** `af_heart` (`AIPC_TTS_VOICE_EN`).
 
-`aipc_voice_tts.speak()` routes by CJK density, requests WAV, plays with
-`paplay`. espeak-ng is **last-resort only** if Kokoro is down.
+Kokoro is the **neural fallback** for Chinese when CosyVoice is unavailable,
+and the primary path for English. espeak-ng is **last-resort only**.
 `notify-send` still always shows text.
 
 ```bash
@@ -61,6 +61,59 @@ curl -sS -X POST http://127.0.0.1:8880/v1/audio/speech \
 aipc-voice-once --seconds 5
 ```
 
+## Stage 2b: CosyVoice clone TTS (preferred Chinese)
+
+**Backend:** `aipc-voice-tts-cosyvoice` on **127.0.0.1:9880**
+(`GET /healthz`, `POST /tts`). CosyVoice 2 zero-shot cloning is the preferred
+Chinese TTS when the service and model are present.
+
+**Clone sample path:** `/var/lib/aipc-voice/persona/clone.wav`
+
+**How the sample was produced (this host):** extract a short clean speech
+segment from a personal video (ffmpeg audio demux), then apply mild denoise
+and normalize before writing the mono WAV reference used for zero-shot clone.
+Longer / noisier clips degrade clone quality — aim for ~5–10 s of clear speech
+with little background music.
+
+**Persona config:** `/etc/aipc/voice/persona.yaml` (module ships a skeleton;
+`name` is filled at firstboot). Fields:
+
+| Key | Meaning |
+|---|---|
+| `name` | Assistant name (empty until firstboot) |
+| `clone_wav` | Reference WAV for CosyVoice zero-shot |
+| `tts_prefer` | `cosyvoice` or `kokoro` |
+| `kokoro_voice_zh` | Kokoro Mandarin pack when falling back |
+
+**TTS fallback chain (Chinese / CJK-dense replies):**
+
+```text
+CosyVoice :9880/tts  (clone.wav reference)
+        │ fail / degraded / not installed
+        ▼
+Kokoro :8880/v1/audio/speech  (voice zf_xiaoyi)
+        │ fail
+        ▼
+espeak-ng  (last resort)
+```
+
+English replies stay on Kokoro → espeak (CosyVoice skipped unless forced).
+
+```bash
+# CosyVoice health + clone synth (when service is up)
+curl -sS http://127.0.0.1:9880/healthz
+curl -sS -X POST http://127.0.0.1:9880/tts \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"你好，我是你的语音助手"}' \
+  -o /tmp/cosy.wav && paplay /tmp/cosy.wav
+# Confirm clone sample exists
+ls -l /var/lib/aipc-voice/persona/clone.wav
+cat /etc/aipc/voice/persona.yaml
+```
+
+The CosyVoice module may still ship `.disabled` until hardware-verified; until
+then the client falls through to Kokoro automatically.
+
 ## Where each stage runs (Strix Halo / Linux)
 
 | Stage | Desired | Reality on this host (2026-07-10) |
@@ -68,7 +121,8 @@ aipc-voice-once --seconds 5
 | Wake (always-on) | **NPU** ~100 mW | Energy VAD on CPU today; openWakeWord→NPU is future |
 | STT (SenseVoice) | NPU or iGPU | **CPU** (ROCm `cuda:0` segfaults SenseVoice — known ceiling) |
 | LLM (chat) | NPU small + iGPU large | Lemonade **FLM on NPU** (`gemma4-it-e4b-FLM`) + Vulkan iGPU for big models |
-| **TTS (Kokoro)** | ideally NPU | **CPU container** — no Linux NPU TTS path yet |
+| **TTS (CosyVoice clone)** | ideally NPU | **CPU** on :9880 — no Linux NPU TTS path yet |
+| **TTS (Kokoro fallback)** | ideally NPU | **CPU container** on :8880 — same NPU gap |
 
 ### Why TTS is not on the NPU (yet)
 
@@ -79,11 +133,13 @@ aipc-voice-once --seconds 5
    `whisper-v3:turbo` and chat models, **no TTS tag**.
 3. **AMD Vitis AI ONNX EP** for custom ONNX TTS on Ryzen AI is **Windows-first**;
    Linux x86 NPU offload is incomplete (community: missing `voe` / EP).
+4. **CosyVoice 2** runs as a native Python service on **CPU** for the same
+   reason — there is no shipped NPU backend for clone TTS on Linux yet.
 
 So the correct placement today is: **keep NPU free for always-on / small LLM /
-future STT**, and run **neural Kokoro TTS on CPU** (already ~1–2 s for a short
-sentence; does not fight the LLM for VRAM). When AMD/Lemonade ship NPU TTS on
-Linux, swap the backend URL only — client stays OpenAI speech-shaped.
+future STT**, and run **CosyVoice (preferred zh clone) + Kokoro (fallback / en)
+on CPU**. Neither TTS path uses the NPU. When AMD/Lemonade ship NPU TTS on
+Linux, swap the backend URL only — client stays speech-shaped.
 
 ## Stage 3: Wake + mute + hotkey
 

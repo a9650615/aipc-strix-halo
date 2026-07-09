@@ -1,0 +1,4 @@
+name: ""  # set at firstboot
+clone_wav: /var/lib/aipc-voice/persona/clone.wav
+tts_prefer: cosyvoice  # cosyvoice|kokoro
+kokoro_voice_zh: zf_xiaoyi
