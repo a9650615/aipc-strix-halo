@@ -35,6 +35,7 @@ HELPERS: dict[str, str] = {
     "record-clone": "aipc-voice-record-clone",
     "status-script": "aipc-voice-status",
     "krunner-install": "aipc-krunner-install",
+    "overlay": "aipc-voice-overlay",
 }
 
 
@@ -188,6 +189,15 @@ def collect_baseline_status(
         rows.append(Probe("clone.wav", f"present size={clone.stat().st_size}", True))
     else:
         rows.append(Probe("clone.wav", "missing (optional until Cosy clone)", True))
+
+    # Shared UX / overlay / wake (Siri-like surface — aipc_lib.voice_ux contract)
+    try:
+        from aipc_lib import voice_ux as voice_ux_mod
+
+        for name, detail, ok in voice_ux_mod.collect_ux_probes(unit_active=unit_active):
+            rows.append(Probe(name, detail, ok))
+    except Exception as exc:  # noqa: BLE001
+        rows.append(Probe("ux-state", f"unavailable: {exc}", True))
 
     return rows
 

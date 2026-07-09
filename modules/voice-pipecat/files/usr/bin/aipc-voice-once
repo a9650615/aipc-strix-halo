@@ -27,19 +27,24 @@ agent-orchestrator's /chat contract (port 4100) is real and hardware-verified
 {"text": ..., "task_id": ...} out.
 """
 import argparse
+import re
+import array
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
+import wave
 from pathlib import Path
 
 for _p in (
     Path("/usr/lib/aipc-voice"),
     Path("/var/lib/aipc-voice/lib"),
+    Path.home() / ".local/lib/aipc-voice",
     Path(__file__).resolve().parents[1] / "lib/aipc-voice",
 ):
     if _p.is_dir():
@@ -48,11 +53,30 @@ try:
     import aipc_voice_tts
 except Exception:
     aipc_voice_tts = None
+try:
+    import aipc_voice_ux as voice_ux
+except Exception:
+    voice_ux = None
+
+def _ux(state, detail="", **kw):
+    if voice_ux is None:
+        return
+    try:
+        voice_ux.announce(state, detail, **kw)
+    except Exception:
+        pass
 
 STT_URL = os.environ.get("AIPC_VOICE_STT_URL", "http://127.0.0.1:9001/transcribe")
 CHAT_URL = os.environ.get("AIPC_VOICE_CHAT_URL", "http://127.0.0.1:4100/chat")
 RECORD_SECONDS = int(os.environ.get("AIPC_VOICE_RECORD_SECONDS", "5"))
-SESSION_ID = os.environ.get("AIPC_VOICE_SESSION_ID", "voice-pipecat-dev")
+MAX_SECONDS = int(os.environ.get("AIPC_VOICE_MAX_SECONDS", "20"))
+VAD_DEFAULT = os.environ.get("AIPC_VOICE_VAD", "1") != "0"
+VAD_ENERGY = float(os.environ.get("AIPC_VOICE_VAD_ENERGY", "1800"))
+END_SILENCE_MS = int(os.environ.get("AIPC_VOICE_END_SILENCE_MS", "800"))
+START_TIMEOUT_S = float(os.environ.get("AIPC_VOICE_START_TIMEOUT", "3"))
+SAMPLE_RATE = 16000
+FRAME_MS = 30
+SESSION_ID = os.environ.get("AIPC_VOICE_SESSION_ID", "voice-assistant")
 CHAT_TIMEOUT = float(os.environ.get("AIPC_VOICE_CHAT_TIMEOUT", "180"))
 # Closed loop default: direct orchestrator /chat (resident-small). Aggregator
 # is optional (mode routing / online) — opt in with AIPC_VOICE_USE_AGGREGATOR=1.
@@ -60,11 +84,55 @@ CHAT_TIMEOUT = float(os.environ.get("AIPC_VOICE_CHAT_TIMEOUT", "180"))
 USE_AGGREGATOR = os.environ.get("AIPC_VOICE_USE_AGGREGATOR", "0") == "1"
 
 
+
+def _capture_env():
+    env = os.environ.copy()
+    try:
+        from aipc_lib.voice_audio import capture_env, ensure_denoise_source
+        ensure_denoise_source()
+        return capture_env(env)
+    except Exception:
+        pass
+    try:
+        import voice_audio
+        voice_audio.ensure_denoise_source()
+        return voice_audio.capture_env(env)
+    except Exception:
+        pass
+    env.setdefault("PULSE_SOURCE", "aipc_denoise_out.monitor")
+    return env
+
 def build_parser():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
-        "--seconds", type=int, default=RECORD_SECONDS,
-        help="recording duration in seconds (default: $AIPC_VOICE_RECORD_SECONDS or 5)",
+        "--seconds",
+        type=int,
+        default=None,
+        help="with --no-vad: fixed duration; with VAD: max seconds "
+        f"(default max={MAX_SECONDS}, fixed={RECORD_SECONDS})",
+    )
+    ap.add_argument(
+        "--vad",
+        action=argparse.BooleanOptionalAction,
+        default=VAD_DEFAULT,
+        help="end recording after silence (default: on; --no-vad = fixed length)",
+    )
+    ap.add_argument(
+        "--end-silence-ms",
+        type=int,
+        default=END_SILENCE_MS,
+        help="silence after speech that ends VAD capture (default 800)",
+    )
+    ap.add_argument(
+        "--vad-energy",
+        type=float,
+        default=VAD_ENERGY,
+        help="RMS threshold for speech vs silence (default 1800)",
+    )
+    ap.add_argument(
+        "--wav",
+        default=None,
+        help="use existing WAV (skip mic record) — for wake pipeline handoff",
     )
     ap.add_argument("--session-id", default=SESSION_ID, help="agent-orchestrator session id")
     ap.add_argument(
@@ -74,8 +142,30 @@ def build_parser():
     return ap
 
 
+def _rms(frame: bytes) -> float:
+    if len(frame) < 2:
+        return 0.0
+    n = len(frame) // 2
+    samples = array.array("h")
+    samples.frombytes(frame[: n * 2])
+    if not samples:
+        return 0.0
+    acc = 0
+    for s in samples:
+        acc += s * s
+    return (acc / len(samples)) ** 0.5
+
+
+def _write_wav(path: str, pcm: bytes, rate: int = SAMPLE_RATE) -> None:
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+
+
 def record_wav(path, seconds):
-    """Record `seconds` of audio from the default ALSA input via arecord.
+    """Record fixed `seconds` of audio from the default ALSA input via arecord.
 
     16 kHz mono S16_LE — a common STT input format, matching the assumed
     voice-stt-sensevoice contract above.
@@ -84,7 +174,114 @@ def record_wav(path, seconds):
         ["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", str(seconds), path],
         check=True,
         capture_output=True,
+        env=_capture_env(),
     )
+
+
+def record_wav_vad(
+    path: str,
+    *,
+    max_seconds: int = MAX_SECONDS,
+    energy: float = VAD_ENERGY,
+    end_silence_ms: int = END_SILENCE_MS,
+    start_timeout_s: float = START_TIMEOUT_S,
+) -> dict:
+    """Record until end-of-speech (silence after speech) or max_seconds."""
+    frame_bytes = SAMPLE_RATE * FRAME_MS // 1000 * 2
+    end_need = max(1, end_silence_ms // FRAME_MS)
+    preroll_n = max(1, 300 // FRAME_MS)
+    max_frames = max(1, int(max_seconds * 1000 // FRAME_MS))
+
+    proc = subprocess.Popen(
+        [
+            "arecord",
+            "-f",
+            "S16_LE",
+            "-r",
+            str(SAMPLE_RATE),
+            "-c",
+            "1",
+            "-t",
+            "raw",
+            "-q",
+            "-",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_capture_env(),
+    )
+    assert proc.stdout is not None
+    pcm = bytearray()
+    preroll: list[bytes] = []
+    speech = False
+    silent_run = 0
+    speech_run = 0
+    frames = 0
+    t0 = time.monotonic()
+    reason = "max"
+    try:
+        while frames < max_frames:
+            data = proc.stdout.read(frame_bytes)
+            if not data:
+                reason = "eof"
+                break
+            if len(data) < frame_bytes:
+                data = data + b"\x00" * (frame_bytes - len(data))
+            frames += 1
+            rms = _rms(data)
+            loud = rms >= energy
+
+            if not speech:
+                preroll.append(data)
+                if len(preroll) > preroll_n:
+                    preroll.pop(0)
+                if loud:
+                    speech_run += 1
+                else:
+                    speech_run = 0
+                if speech_run >= 3:
+                    speech = True
+                    for f in preroll:
+                        pcm.extend(f)
+                    preroll.clear()
+                    silent_run = 0
+                elif (time.monotonic() - t0) >= start_timeout_s:
+                    reason = "no_speech"
+                    break
+                continue
+
+            pcm.extend(data)
+            if loud:
+                silent_run = 0
+            else:
+                silent_run += 1
+                if silent_run >= end_need:
+                    reason = "end_silence"
+                    break
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=1)
+
+    if not speech and preroll:
+        for f in preroll:
+            pcm.extend(f)
+
+    if not pcm:
+        raise RuntimeError("arecord produced no audio")
+
+    _write_wav(path, bytes(pcm))
+    duration_s = len(pcm) / 2 / SAMPLE_RATE
+    return {
+        "speech_detected": speech,
+        "duration_s": duration_s,
+        "reason": reason,
+        "energy": energy,
+        "end_silence_ms": end_silence_ms,
+    }
 
 
 def _parse_text_field(raw: bytes) -> str:
@@ -96,8 +293,12 @@ def _parse_text_field(raw: bytes) -> str:
 def transcribe(wav_path):
     with open(wav_path, "rb") as f:
         data = f.read()
+    url = STT_URL
+    lang = os.environ.get("AIPC_VOICE_STT_LANG", "zh")
+    if lang and "language=" not in url:
+        url = f"{url}{'&' if '?' in url else '?'}language={lang}"
     req = urllib.request.Request(
-        STT_URL, data=data, method="POST", headers={"Content-Type": "audio/wav"}
+        url, data=data, method="POST", headers={"Content-Type": "audio/wav"}
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         return _parse_text_field(resp.read())
@@ -166,6 +367,7 @@ def chat_via_aggregator(text, session_id):
 
 
 def show(reply):
+    _ux("speaking", (reply or "")[:80], force=True)
     """Speak the reply when TTS is ready; always keep text notification too."""
     spoke = False
     if os.environ.get("AIPC_VOICE_TTS", "1") == "0":
@@ -178,7 +380,7 @@ def show(reply):
         )
     else:
         try:
-            spoke = bool(aipc_voice_tts.speak(reply))
+            spoke = bool(aipc_voice_tts.speak(compress_for_speech(reply)))
         except Exception as exc:  # noqa: BLE001 — never fail the round trip on TTS
             print(f"aipc-voice-once: TTS error: {exc}", file=sys.stderr)
     if spoke:
@@ -273,8 +475,15 @@ def _self_test():
     assert STT_URL.startswith("http://127.0.0.1:9001")
     assert CHAT_URL.startswith("http://127.0.0.1:4100")
     assert _parse_text_field(b'{"text": "hello"}') == "hello"
-    ns = build_parser().parse_args(["--seconds", "3"])
+    ns = build_parser().parse_args(["--seconds", "3", "--no-vad"])
     assert ns.seconds == 3
+    assert ns.vad is False
+    ns2 = build_parser().parse_args([])
+    assert ns2.vad is True
+    # synthetic PCM: loud then silence → end_silence path (no mic)
+    assert _rms(b"\x00\x00" * 160) == 0.0
+    loud = array.array("h", [8000] * 480).tobytes()
+    assert _rms(loud) > 1000
     assert os.environ.get("AIPC_VOICE_TTS", "1") in ("0", "1")
     # Closed-loop product default: direct /chat, aggregator opt-in only.
     assert os.environ.get("AIPC_VOICE_USE_AGGREGATOR", "0") != "1" or USE_AGGREGATOR is True
@@ -287,35 +496,136 @@ def _self_test():
     assert _matches_open_portal("open portal")
     assert _matches_open_portal("打開管理介面")
     assert not _matches_open_portal("今天天气怎么样")
+    assert not usable_transcript("。")
+    assert not usable_transcript("我")
+    assert usable_transcript("今天天气如何")
+    assert len(compress_for_speech("第一句。第二句。第三句很长" * 5)) <= 85
     print("aipc-voice-once: self-test OK")
     return 0
 
+
+
+def usable_transcript(text: str) -> bool:
+    """Reject STT noise that would waste a LLM turn and confuse the user."""
+    if not text:
+        return False
+    s = text.strip()
+    # drop emoji for length check
+    s2 = re.sub(r"[\U0001F300-\U0001FAFF\U00002700-\U000027BF]+", "", s)
+    s2 = re.sub(r"[\s\W_]+", "", s2, flags=re.UNICODE)
+    if len(s2) < 2:
+        return False
+    # pure punctuation / single particle
+    if s2 in ("我", "嗯", "啊", "呃", "哦", "喔", "呀", "的", "了", "吗", "呢"):
+        return False
+    return True
+
+
+def compress_for_speech(text: str, max_chars: int = 80) -> str:
+    """Keep TTS short and speakable; full text still goes to notify."""
+    if not text:
+        return ""
+    s = re.sub(r"[`*_#>]+", "", text)
+    s = re.sub(r"\s+", " ", s).strip()
+    # Prefer first 1–2 sentences
+    parts = re.split(r"(?<=[。！？.!?])\s*", s)
+    parts = [p for p in parts if p.strip()]
+    out = ""
+    for p in parts[:2]:
+        if len(out) + len(p) > max_chars and out:
+            break
+        out = (out + p).strip()
+    if not out:
+        out = s
+    if len(out) > max_chars:
+        out = out[: max_chars - 1].rstrip("，,、;； ") + "。"
+    return out
+
+
+def unclear_prompt() -> str:
+    return "没听清楚，请再说一次。"
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
     if args.self_test:
         return _self_test()
 
-    if not shutil.which("arecord"):
-        print("aipc-voice-once: arecord not found (alsa-utils not installed)", file=sys.stderr)
-        return 1
-
-    fd, wav_path = tempfile.mkstemp(suffix=".wav", prefix="aipc-voice-")
-    os.close(fd)
-    try:
-        print(f"aipc-voice-once: recording {args.seconds}s...")
+    unlink_wav = False
+    if args.wav:
+        wav_path = args.wav
+        if not Path(wav_path).is_file():
+            print(f"aipc-voice-once: --wav not found: {wav_path}", file=sys.stderr)
+            return 1
+        print(f"aipc-voice-once: using provided wav {wav_path}", flush=True)
+        _ux("thinking", "處理指令", force=True)
+    else:
+        if not shutil.which("arecord"):
+            print("aipc-voice-once: arecord not found (alsa-utils not installed)", file=sys.stderr)
+            return 1
+        fd, wav_path = tempfile.mkstemp(suffix=".wav", prefix="aipc-voice-")
+        os.close(fd)
+        unlink_wav = True
         try:
-            record_wav(wav_path, args.seconds)
+            if args.vad:
+                max_s = args.seconds if args.seconds is not None else MAX_SECONDS
+                print(
+                    f"aipc-voice-once: recording until silence "                    f"(max {max_s}s, end_silence={args.end_silence_ms}ms)...",
+                    flush=True,
+                )
+                _ux("recording", force=True)
+                stats = record_wav_vad(
+                    wav_path,
+                    max_seconds=max_s,
+                    energy=args.vad_energy,
+                    end_silence_ms=args.end_silence_ms,
+                )
+                print(
+                    f"aipc-voice-once: captured {stats['duration_s']:.2f}s "
+                    f"reason={stats['reason']} speech={stats['speech_detected']}",
+                    flush=True,
+                )
+                if not stats["speech_detected"]:
+                    print("aipc-voice-once: no speech detected", file=sys.stderr)
+                    return 1
+            else:
+                secs = args.seconds if args.seconds is not None else RECORD_SECONDS
+                print(f"aipc-voice-once: recording {secs}s (fixed)...")
+                record_wav(wav_path, secs)
         except subprocess.CalledProcessError as exc:
-            print(f"aipc-voice-once: arecord failed: {exc.stderr.decode(errors='replace')}", file=sys.stderr)
+            err = (exc.stderr or b"").decode(errors="replace")
+            print(f"aipc-voice-once: arecord failed: {err}", file=sys.stderr)
+            if unlink_wav:
+                try:
+                    os.unlink(wav_path)
+                except OSError:
+                    pass
+            return 1
+        except RuntimeError as exc:
+            print(f"aipc-voice-once: record failed: {exc}", file=sys.stderr)
+            if unlink_wav:
+                try:
+                    os.unlink(wav_path)
+                except OSError:
+                    pass
             return 1
 
+    try:
+        _ux("thinking", force=True)
         try:
             text = transcribe(wav_path)
         except (urllib.error.URLError, OSError) as exc:
             print(f"aipc-voice-once: STT service unreachable at {STT_URL}: {exc}", file=sys.stderr)
             return 1
         print(f"aipc-voice-once: you said: {text}")
+        _ux("thinking", (text or "")[:40], force=True)
+
+        if not usable_transcript(text):
+            reply = unclear_prompt()
+            print(f"aipc-voice-once: unusable transcript → {reply}", flush=True)
+            _ux("no_speech", text or "", force=True)
+            show(reply)
+            _ux("done", force=True)
+            return 0
 
         # Local intents (dashboard open) run in this process so DISPLAY/session
         # from push-to-talk is preserved; skip the LLM for these phrases.
@@ -343,10 +653,15 @@ def main(argv=None):
             print(f"aipc-voice-once: agent-orchestrator unreachable at {CHAT_URL}: {exc}", file=sys.stderr)
             return 1
     finally:
-        os.unlink(wav_path)
+        if unlink_wav:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
 
     print(f"aipc-voice-once: assistant: {reply}")
     show(reply)
+    _ux("done", force=True)
     return 0
 
 

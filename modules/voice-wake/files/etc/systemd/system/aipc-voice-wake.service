@@ -1,20 +1,42 @@
 [Unit]
-Description=aipc voice wake listener (openWakeWord or energy VAD)
-After=sound.target network-online.target
-# Pause when mute target is active (start mute → stop wake).
+Description=aipc voice wake (custom phrase / openWakeWord / energy)
+After=sound.target
+# Desktop PipeWire must exist for the mic (system root cannot open it).
+Requires=user@1000.service
+After=user@1000.service
 Conflicts=aipc-voice-mute.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/lib/aipc-voice/aipc_voice_wake.py --mode auto
-Environment=AIPC_VOICE_ONCE=/usr/bin/aipc-voice-once
+# MUST run as the graphical user — arecord → PipeWire is session-scoped.
+User=birdyo
+Group=birdyo
+Environment=HOME=/var/home/birdyo
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
+# phrase = custom wake words via STT (fast start, low false positive)
+ExecStart=/usr/bin/python3 /var/lib/aipc-voice/lib/aipc_voice_wake.py --mode phrase
+Environment=AIPC_VOICE_ONCE=/var/home/birdyo/.local/bin/aipc-voice-once
 Environment=AIPC_VOICE_MUTE_FLAG=/run/aipc/voice-mute
-Environment=AIPC_WAKE_MODEL=/var/lib/aipc-voice/wake/user-model.onnx
+Environment=AIPC_WAKE_PHRASES_FILE=/etc/aipc/wake/phrases
+# Ambient ~700 RMS; speech often 3k–20k. 2000 gates noise without deafness.
+Environment=AIPC_WAKE_ENERGY=1500
+Environment=AIPC_WAKE_ENERGY_FRAMES=4
+Environment=AIPC_WAKE_CAPTURE_S=1.8
+Environment=AIPC_WAKE_COOLDOWN=8
+Environment=AIPC_VOICE_STT_URL=http://127.0.0.1:9001/transcribe
+Environment=AIPC_VOICE_DUCK=1
+Environment=AIPC_VOICE_DENOISE=1
+Environment=AIPC_VOICE_DUCK_FACTOR=0.30
+Environment=AIPC_VOICE_UX_NOTIFY=auto
+Environment=PYTHONPATH=/var/lib/aipc-voice/lib
+Environment=AIPC_VOICE_UX_NOTIFY=auto
+Environment=AIPC_VOICE_UX_CUE=0
+Environment=PYTHONPATH=/var/lib/aipc-voice/lib
 Restart=on-failure
 RestartSec=2
-# Recreate after mute target drops (Conflicts stopped us).
-# Companion path unit / user can systemctl start this again; also:
-ExecStartPre=/bin/mkdir -p /var/lib/aipc-voice/wake /run/aipc
+ExecStartPre=/bin/mkdir -p /var/lib/aipc-voice/wake /run/aipc /etc/aipc/wake
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

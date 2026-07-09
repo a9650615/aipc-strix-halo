@@ -1,2 +1,5 @@
-# Wake-word model path — user-trained at firstboot, NOT shipped.
-model_path: /var/lib/aipc/wake/user-model.onnx
+# Wake listener config notes (runtime uses env + phrases file primarily).
+# Mode: phrase (default) | openwakeword | energy
+# Phrases: /etc/aipc/wake/phrases
+mode: phrase
+model_path: /var/lib/aipc-voice/wake/user-model.onnx

@@ -51,11 +51,15 @@ async def transcribe(request: Request):
     audio = await request.body()
     if not audio:
         return JSONResponse(status_code=400, content={"error": {"code": "empty_body", "message": "no audio bytes"}})
+    # language=zh|en|yue|auto — wake path forces zh for better 嘿助理 recall
+    language = (request.query_params.get("language") or "auto").strip() or "auto"
+    if language not in ("auto", "zh", "en", "yue", "ja", "ko"):
+        language = "auto"
     with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
         tmp.write(audio)
         tmp.flush()
         try:
-            result = _model.generate(input=tmp.name, language="auto", use_itn=True)
+            result = _model.generate(input=tmp.name, language=language, use_itn=True)
         except Exception as exc:
             return JSONResponse(status_code=502, content={"error": {"code": "inference_error", "message": str(exc)}})
     raw_text = result[0]["text"] if result else ""

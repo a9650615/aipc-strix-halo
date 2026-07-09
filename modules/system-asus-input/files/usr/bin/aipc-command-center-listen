@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Watch GZ302 控制中心 after InputPlumber remap; launch aipc-voice-once.
+"""Watch GZ302 控制中心 as an independent keyboard key; launch aipc-voice-once.
 
-Hardware: ASUS ROG Flow Z13 Command Center key is eaten by InputPlumber and
-appears on the virtual "Microsoft X-Box One Elite 2 pad" as:
+InputPlumber still owns Asus WMI hotkeys (device grab), but flw1 maps nothing:
+KeyProg3 passes through on virtual "InputPlumber Keyboard" as KEY_PROG3 (202).
 
-  KEY 316 = BTN_MODE   (Guide / QuickAccess — primary)
-  KEY 304 = BTN_SOUTH  (A — sometimes co-fired)
-
-This listener debounces presses and runs the voice assistant as the desktop user.
+No gamepad QuickAccess, no KeyMute, no volume keys.
 """
 from __future__ import annotations
 
@@ -15,6 +12,7 @@ import argparse
 import os
 import pwd
 import select
+import socket
 import struct
 import subprocess
 import sys
@@ -23,24 +21,26 @@ from pathlib import Path
 
 EV_KEY = 0x01
 EVENT_SIZE = 24
-# BTN_MODE (Xbox guide) and BTN_SOUTH (A) as reported in user capture
-CODES = {316, 304}
+# Linux KEY_PROG3 — chassis 控制中心 when flw1 has empty mapping (passthrough)
+KEY_PROG3 = 202
+CODES = {KEY_PROG3}
 COOLDOWN_S = float(os.environ.get("AIPC_CC_COOLDOWN", "3"))
 ONCE = os.environ.get(
     "AIPC_VOICE_ONCE",
     "/home/birdyo/.local/bin/aipc-voice-once",
 )
-RECORD_SECONDS = os.environ.get("AIPC_VOICE_RECORD_SECONDS", "5")
-PAD_NAME = "Microsoft X-Box One Elite 2 pad"
+KB_NAMES = (
+    "InputPlumber Keyboard",
+)
 
 
-def find_pad() -> str | None:
+def find_keyboard() -> str | None:
     for d in Path("/dev/input").glob("event*"):
         try:
             name = (Path("/sys/class/input") / d.name / "device/name").read_text().strip()
         except OSError:
             continue
-        if name == PAD_NAME or "X-Box One Elite" in name:
+        if name in KB_NAMES:
             return str(d)
     return None
 
@@ -77,10 +77,37 @@ def desktop_env() -> dict[str, str]:
     return env
 
 
+def _wake_ptt(env: dict[str, str]) -> bool:
+    """Ask wake service to start command capture on its single mic stream."""
+    xdg = env.get("XDG_RUNTIME_DIR", "/run/user/1000")
+    socks = [
+        Path(xdg) / "aipc-wake.sock",
+        Path(f"/tmp/aipc-wake-{os.geteuid()}.sock"),
+        Path("/tmp/aipc-wake-1000.sock"),
+    ]
+    for sp in socks:
+        if not sp.exists():
+            continue
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            s.connect(str(sp))
+            s.sendall(b"ptt\n")
+            s.close()
+            print(f"aipc-command-center: ptt → wake sock {sp}", flush=True)
+            return True
+        except OSError as exc:
+            print(f"aipc-command-center: wake sock {sp} fail: {exc}", flush=True)
+    return False
+
+
 def trigger() -> None:
     env = desktop_env()
+    # Prefer wake pipeline (async single-mic); no second arecord.
+    if _wake_ptt(env):
+        return
     cmd = env.pop("AIPC_VOICE_ONCE_RESOLVED", None) or ONCE
-    argv = [cmd, "--seconds", str(RECORD_SECONDS)]
+    argv = [cmd, "--vad"]
     as_user = env.get("AIPC_CC_AS")
     if as_user and os.geteuid() == 0 and as_user != "root":
         argv = ["runuser", "-u", as_user, "--", *argv]
@@ -89,12 +116,14 @@ def trigger() -> None:
         lf = open(log, "ab", buffering=0)  # noqa: SIM115
     except OSError:
         lf = subprocess.DEVNULL
-    print(f"aipc-command-center: spawn {' '.join(argv)}", flush=True)
+    print(f"aipc-command-center: wake offline; spawn {' '.join(argv)}", flush=True)
     subprocess.Popen(argv, env=env, stdout=lf, stderr=lf, start_new_session=True)
 
-
 def loop(path: str) -> int:
-    print(f"aipc-command-center: watching {path} for BTN_MODE/BTN_SOUTH (316/304)", flush=True)
+    print(
+        f"aipc-command-center: watching {path} for KEY_PROG3 ({KEY_PROG3}) only",
+        flush=True,
+    )
     f = open(path, "rb")
     poll = select.poll()
     poll.register(f.fileno(), select.POLLIN)
@@ -102,7 +131,6 @@ def loop(path: str) -> int:
     try:
         while True:
             if not poll.poll(1000):
-                # device may vanish on inputplumber restart
                 if not Path(path).exists():
                     print("aipc-command-center: device gone, exit for restart", flush=True)
                     return 1
@@ -119,7 +147,7 @@ def loop(path: str) -> int:
             if now - last < COOLDOWN_S:
                 continue
             last = now
-            print(f"aipc-command-center: key {code} pressed → voice", flush=True)
+            print(f"aipc-command-center: KEY_PROG3 pressed → voice", flush=True)
             trigger()
     except KeyboardInterrupt:
         return 0
@@ -132,12 +160,15 @@ def main() -> int:
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
     if args.self_test:
-        assert 316 in CODES and 304 in CODES
+        assert CODES == {KEY_PROG3}
         print("aipc-command-center-listen: self-test OK")
         return 0
-    path = find_pad()
+    path = find_keyboard()
     if not path:
-        print("aipc-command-center: Xbox Elite pad not found (is inputplumber up?)", file=sys.stderr)
+        print(
+            "aipc-command-center: InputPlumber Keyboard not found (is inputplumber up?)",
+            file=sys.stderr,
+        )
         return 2
     return loop(path)
 

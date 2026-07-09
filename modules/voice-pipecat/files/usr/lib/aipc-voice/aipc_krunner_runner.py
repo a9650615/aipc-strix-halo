@@ -22,6 +22,22 @@ DBusGMainLoop(set_as_default=True)
 
 SERVICE = "org.kde.aipc_assistant"
 OBJPATH = "/runner"
+
+def _ux(state: str, detail: str = "") -> None:
+    """Best-effort shared UX (overlay/status) — never fail the runner."""
+    try:
+        from aipc_lib.voice_ux import announce
+        announce(state, detail, force=True, cue=False)
+        return
+    except Exception:
+        pass
+    try:
+        import aipc_voice_ux as voice_ux  # type: ignore
+        voice_ux.announce(state, detail, force=True, cue=False)
+    except Exception:
+        pass
+
+
 IFACE = "org.kde.krunner1"
 
 CHAT_URL = os.environ.get("AIPC_VOICE_CHAT_URL", "http://127.0.0.1:4100/chat")

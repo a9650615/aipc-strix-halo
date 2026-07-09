@@ -29,6 +29,24 @@ def _unit(name: str) -> str:
         return (exc.output or "inactive").strip() or "inactive"
 
 
+def voice_state_row():
+    import json, os
+    from pathlib import Path
+    cands = []
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        cands.append(Path(xdg) / "aipc-voice-state.json")
+    cands.append(Path.home() / ".cache/aipc/voice-state.json")
+    for c in cands:
+        if c.is_file():
+            try:
+                d = json.loads(c.read_text())
+                return ("ux_state", f"{d.get('label','')} | {d.get('state')} | {d.get('detail','')}")
+            except Exception as e:
+                return ("ux_state", f"error: {e}")
+    return ("ux_state", "n/a")
+
+
 def main() -> int:
     rows = []
     rows.append(("mic_default", subprocess.getoutput("pactl get-default-source 2>/dev/null") or "n/a"))

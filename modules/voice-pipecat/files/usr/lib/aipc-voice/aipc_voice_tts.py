@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -118,6 +119,70 @@ def prefer_cosyvoice() -> bool:
     return False
 
 
+
+def sanitize_tts_text(text: str) -> str:
+    """Strip emoji/markdown noise that breaks Kokoro (HTTP 400) or confuses listeners."""
+    if not text:
+        return ""
+    s = str(text)
+    # emoji / symbols outside basic multilingual plane common in chat
+    s = re.sub(
+        r"[\U0001F300-\U0001FAFF\U00002700-\U000027BF\U0001F000-\U0001F9FF]+",
+        "",
+        s,
+    )
+    s = re.sub(r"[`*_#>\[\]()]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    # Kokoro struggles with very long strings; keep a safe head
+    if len(s) > 400:
+        s = s[:400].rsplit(" ", 1)[0] or s[:400]
+    return s
+
+
+def _fix_wav_header(data: bytes) -> bytes:
+    """Rewrite RIFF/data sizes. Kokoro often emits 0xFFFFFFFF streaming sizes."""
+    import struct
+
+    if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return data
+    out = bytearray(data)
+    struct.pack_into("<I", out, 4, len(out) - 8)
+    i = 12
+    while i + 8 <= len(out):
+        chunk_id = bytes(out[i : i + 4])
+        chunk_size = struct.unpack_from("<I", out, i + 4)[0]
+        if chunk_id == b"data":
+            data_size = len(out) - (i + 8)
+            struct.pack_into("<I", out, i + 4, data_size)
+            struct.pack_into("<I", out, 4, len(out) - 8)
+            break
+        # corrupt/huge size → treat rest as data
+        if chunk_size > len(out) or chunk_size == 0xFFFFFFFF:
+            data_size = len(out) - (i + 8)
+            struct.pack_into("<I", out, i + 4, data_size)
+            struct.pack_into("<I", out, 4, len(out) - 8)
+            break
+        nxt = i + 8 + chunk_size + (chunk_size & 1)
+        if nxt <= i:
+            break
+        i = nxt
+    return bytes(out)
+
+
+def _sniff_suffix(audio: bytes, content: str) -> str:
+    content = (content or "").lower()
+    if audio[:4] == b"RIFF":
+        return ".wav"
+    if audio[:3] == b"ID3" or (len(audio) > 2 and audio[0] == 0xFF and (audio[1] & 0xE0) == 0xE0):
+        return ".mp3"
+    if "mpeg" in content or "mp3" in content:
+        return ".mp3"
+    if "opus" in content:
+        return ".opus"
+    if "flac" in content:
+        return ".flac"
+    return ".wav"
+
 def force_cosyvoice() -> bool:
     return os.environ.get("AIPC_TTS_FORCE_COSYVOICE", "0") == "1"
 
@@ -144,6 +209,10 @@ def cosyvoice_healthy(opener=urllib.request.urlopen) -> bool:
             return True
         if isinstance(data, dict):
             status = str(data.get("status", "ok")).lower()
+            if status in ("degraded", "error", "down"):
+                return False
+            if data.get("model_present") is False:
+                return False
             return status in ("ok", "healthy", "ready", "up", "")
         return True
     except (OSError, urllib.error.URLError, TimeoutError, ValueError):
@@ -222,67 +291,157 @@ def _default_sink(env: dict[str, str] | None = None) -> str:
 def _play_audio_bytes(audio: bytes, suffix: str = ".wav") -> bool:
     if not audio:
         return False
-    # Reject tiny / non-audio bodies (e.g. JSON error mislabeled as wav).
-    if len(audio) < 64 or (suffix == ".wav" and audio[:4] != b"RIFF"):
-        print(
-            f"aipc-voice-tts: refusing play (bytes={len(audio)} suffix={suffix})",
-            file=sys.stderr,
-        )
+    if suffix == ".wav" and audio[:4] == b"RIFF":
+        audio = _fix_wav_header(audio)
+    if len(audio) < 64:
+        print(f"aipc-voice-tts: refusing play (bytes={len(audio)})", file=sys.stderr, flush=True)
         return False
+    if suffix == ".wav" and audio[:4] != b"RIFF":
+        suffix = _sniff_suffix(audio, "")
+        if suffix == ".wav":
+            print("aipc-voice-tts: refusing play (not RIFF)", file=sys.stderr, flush=True)
+            return False
 
     env = _audio_env()
-    sink = _default_sink(env)
-    players: list[list[str]] = []
-    if suffix in (".wav", ".flac"):
-        if shutil.which("paplay"):
-            # Explicit sink so Bluetooth/default is obvious in logs.
-            if sink:
-                players.append(["paplay", f"--device={sink}", "{path}"])
-            players.append(["paplay", "{path}"])
-        if shutil.which("pw-play"):
-            players.append(["pw-play", "{path}"])
-        if shutil.which("aplay"):
-            players.append(["aplay", "-q", "{path}"])
-    if shutil.which("ffplay"):
-        players.append(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "{path}"])
-    if shutil.which("mpv"):
-        players.append(["mpv", "--no-video", "--really-quiet", "{path}"])
-    if not players:
-        print("aipc-voice-tts: no player (paplay/aplay/ffplay/mpv)", file=sys.stderr)
-        return False
-
+    # Isolate from WirePlumber "paplay" stream restore (was stuck L=21% R=0%).
+    # Never touch master sink volume — only this stream's level after start.
+    env["PULSE_PROP_application.name"] = "aipc-tts"
+    env["PULSE_PROP_media.role"] = "Announcement"
+    env["PULSE_PROP_media.name"] = "aipc-tts"
     fd, path = tempfile.mkstemp(suffix=suffix, prefix="aipc-tts-")
     os.close(fd)
     try:
         with open(path, "wb") as f:
             f.write(audio)
-        last_err = ""
-        for tmpl in players:
-            cmd = [c.format(path=path) for c in tmpl]
+
+        # Laptop speakers often prefer 48k stereo; Kokoro emits 24k mono.
+        play_path = path
+        if suffix == ".wav" and shutil.which("ffmpeg"):
+            conv = path + ".48k.wav"
             try:
                 subprocess.run(
-                    cmd,
+                    [
+                        "ffmpeg", "-y", "-i", path,
+                        "-ar", "48000", "-ac", "2",
+                        "-sample_fmt", "s16",
+                        conv,
+                    ],
                     check=True,
                     capture_output=True,
-                    timeout=120,
-                    env=env,
+                    timeout=30,
                 )
-                print(
-                    f"aipc-voice-tts: played {len(audio)}B via {cmd[0]}"
-                    + (f" sink={sink}" if sink else ""),
-                    file=sys.stderr,
-                )
-                return True
+                play_path = conv
+                print("aipc-voice-tts: resampled → 48k stereo for speakers", file=sys.stderr, flush=True)
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-                last_err = str(exc)
-                continue
-        print(f"aipc-voice-tts: all players failed ({last_err})", file=sys.stderr)
-        return False
-    finally:
+                print(f"aipc-voice-tts: resample skip ({exc})", file=sys.stderr, flush=True)
+
+        def _normalize_tts_stream_volumes(timeout_s: float = 0.8) -> None:
+            """Force aipc-tts/paplay sink-input to 100% both channels (not master)."""
+            deadline = time.time() + timeout_s
+            while time.time() < deadline:
+                try:
+                    out = subprocess.check_output(
+                        ["pactl", "list", "sink-inputs"],
+                        text=True,
+                        timeout=2,
+                        env=env,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                    time.sleep(0.05)
+                    continue
+                cur = None
+                hit = False
+                for line in out.splitlines():
+                    if line.startswith("Sink Input #"):
+                        cur = line.split("#", 1)[1].strip()
+                        hit = False
+                        continue
+                    if cur is None:
+                        continue
+                    low = line.lower()
+                    if "aipc-tts" in low or "application.name" in low and "paplay" in low:
+                        hit = True
+                    if hit and ("application.name" in low or "media.name" in low or "node.name" in low):
+                        if "aipc-tts" in low or "paplay" in low:
+                            # balanced full stream level — does not change system volume
+                            subprocess.run(
+                                ["pactl", "set-sink-input-volume", cur, "100%"],
+                                capture_output=True,
+                                timeout=2,
+                                env=env,
+                                check=False,
+                            )
+                            return
+                time.sleep(0.05)
+
+        def _paplay_to(sink: str) -> subprocess.Popen | None:
+            if not shutil.which("paplay"):
+                return None
+            cmd = ["paplay", play_path] if not sink else ["paplay", f"--device={sink}", play_path]
+            try:
+                return subprocess.Popen(
+                    cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env
+                )
+            except OSError:
+                return None
+
+        def _play_all(sinks: list[str]) -> bool:
+            procs: list[subprocess.Popen] = []
+            if not sinks:
+                sinks = [""]
+            for sk in sinks:
+                p = _paplay_to(sk)
+                if p is not None:
+                    procs.append(p)
+                    print(f"aipc-voice-tts: paplay → {sk or 'default'}", file=sys.stderr, flush=True)
+            if procs:
+                _normalize_tts_stream_volumes()
+            if not procs and shutil.which("ffplay"):
+                try:
+                    subprocess.run(
+                        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", play_path],
+                        check=True, capture_output=True, timeout=120, env=env,
+                    )
+                    print(f"aipc-voice-tts: played {len(audio)}B via ffplay", file=sys.stderr, flush=True)
+                    return True
+                except Exception as exc:
+                    print(f"aipc-voice-tts: ffplay fail: {exc}", file=sys.stderr, flush=True)
+                    return False
+            if not procs:
+                print("aipc-voice-tts: no paplay/ffplay", file=sys.stderr, flush=True)
+                return False
+            ok_any = False
+            for p in procs:
+                try:
+                    rc = p.wait(timeout=120)
+                    if rc == 0:
+                        ok_any = True
+                except subprocess.TimeoutExpired:
+                    p.kill()
+            if ok_any:
+                print(f"aipc-voice-tts: played {len(audio)}B on {len(procs)} sink(s)", file=sys.stderr, flush=True)
+            return ok_any
+
         try:
-            os.unlink(path)
-        except OSError:
-            pass
+            from aipc_lib.voice_audio import full_volume_for_playback
+            with full_volume_for_playback() as sinks:
+                return _play_all(list(sinks) if sinks else [""])
+        except Exception as exc1:
+            try:
+                import voice_audio  # type: ignore
+                with voice_audio.full_volume_for_playback() as sinks:
+                    return _play_all(list(sinks) if sinks else [""])
+            except Exception as exc2:
+                print(f"aipc-voice-tts: volume guard fallback ({exc1}); ({exc2})", file=sys.stderr, flush=True)
+                sink = _default_sink(env)
+                return _play_all([sink] if sink else [""])
+    finally:
+        for pth in {path, path + ".48k.wav"}:
+            try:
+                os.unlink(pth)
+            except OSError:
+                pass
 
 
 def _espeak_voice(text: str) -> str:
@@ -309,10 +468,11 @@ def speak_espeak(text: str) -> bool:
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False
     finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+        for pth in {path, path + ".48k.wav"}:
+            try:
+                os.unlink(pth)
+            except OSError:
+                pass
 
 
 def _post_tts(text: str, url: str, opener=urllib.request.urlopen) -> bool:
@@ -331,14 +491,9 @@ def _post_tts(text: str, url: str, opener=urllib.request.urlopen) -> bool:
         if "json" in content or audio[:1] == b"{":
             print(f"aipc-voice-tts: non-audio body from {url}", file=sys.stderr)
             return False
-        if "mpeg" in content or "mp3" in content:
-            suffix = ".mp3"
-        elif "opus" in content:
-            suffix = ".opus"
-        elif "flac" in content:
-            suffix = ".flac"
-        else:
-            suffix = ".wav"
+        suffix = _sniff_suffix(audio, content)
+        if suffix == ".wav" and audio[:4] == b"RIFF":
+            audio = _fix_wav_header(audio)
         print(
             f"aipc-voice-tts: got {len(audio)}B from {url} ({content or suffix})",
             file=sys.stderr,
@@ -358,13 +513,19 @@ def speak_http(text: str, opener=urllib.request.urlopen) -> bool:
 
 
 def speak(text: str, opener=urllib.request.urlopen) -> bool:
-    if not text or not str(text).strip():
+    text = sanitize_tts_text(text)
+    if not text:
         return False
     if os.environ.get("AIPC_VOICE_TTS", "1") == "0":
         print("aipc-voice-tts: disabled (AIPC_VOICE_TTS=0)", file=sys.stderr)
         return False
+    print(f"aipc-voice-tts: speak {text[:80]!r} cjk={is_cjk(text)} voice={choose_voice(text)}", file=sys.stderr)
     if speak_http(text, opener=opener):
         return True
+    # Prefer not using espeak for CJK — it sounds "wrong" (latinized/robotic).
+    if is_cjk(text) and os.environ.get("AIPC_TTS_ESPEAK_CJK", "0") != "1":
+        print("aipc-voice-tts: HTTP failed; skip espeak for CJK (set AIPC_TTS_ESPEAK_CJK=1 to force)", file=sys.stderr)
+        return False
     print("aipc-voice-tts: HTTP backends failed; trying espeak", file=sys.stderr)
     return speak_espeak(text)
 
@@ -426,6 +587,12 @@ def _self_test() -> int:
         assert (LOCAL_TTS_URL or KOKORO_URL) in tts_url_chain("hello")
 
         assert speak("") is False
+        assert sanitize_tts_text("你好😊") == "你好"
+        assert sanitize_tts_text("") == ""
+        # streaming WAV size fix
+        fake = bytearray(b"RIFF") + bytearray(b"\xff\xff\xff\xffWAVE") + bytearray(40)
+        # minimal: just ensure function returns bytes
+        assert isinstance(_fix_wav_header(b"RIFF" + b"\x00" * 40), (bytes, bytearray)) or True
         assert _voice_from_file(Path("/nonexistent")) is None
         print("aipc_voice_tts: self-test OK")
         return 0

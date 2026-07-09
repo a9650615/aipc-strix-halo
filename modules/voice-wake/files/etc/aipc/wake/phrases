@@ -1,0 +1,7 @@
+# Custom wake phrases (one per line). Matched via short STT after energy gate.
+# Edit this file, then: sudo systemctl restart aipc-voice-wake
+# Prefer multi-syllable phrases to reduce false triggers.
+嘿助理
+嘿 助理
+你好助理
+hey assistant

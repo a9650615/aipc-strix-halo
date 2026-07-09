@@ -2,16 +2,43 @@
 
 Always-on wake listener that triggers `aipc-voice-once`.
 
-## Current status: energy VAD + optional openWakeWord — enabled after hardware verify
+## Current status: **phrase (custom)** default — fast start, low false positive
 
-Full openWakeWord custom-ONNX training (firstboot 3–5 samples) is staged
-as `aipc-voice-train-wake` (v0 writes a marker; real fit is follow-up).
-Runtime modes:
+| Mode | When | Notes |
+|---|---|---|
+| **`phrase` (default)** | SenseVoice STT healthy | Energy gate → ~1.6s clip → STT → match `/etc/aipc/wake/phrases` |
+| `openwakeword` | venv + ONNX models | Pretrained e.g. `hey_jarvis` (English); not free-form Chinese custom |
+| `energy` | Last resort | Loudness only — more false triggers |
 
-| Mode | When |
-|---|---|
-| `openwakeword` | `openwakeword` importable; pretrained `hey_jarvis` or user ONNX |
-| `energy` | Default fallback — RMS threshold on 16 kHz mic frames |
+Edit custom phrases (no model training):
+
+```bash
+sudo nano /etc/aipc/wake/phrases   # one phrase per line
+sudo systemctl restart aipc-voice-wake
+```
+
+Prefer multi-syllable phrases (「嘿助理」) over single short words to cut false hits.
+
+## Single-mic async (no mutual blocking)
+
+One continuous `arecord` stream owns the mic:
+
+| Stage | Who holds mic | What runs |
+|---|---|---|
+| Listen / wake STT | wake service | energy + short STT phrase check |
+| Command after wake/PTT | **same stream** | end-of-speech VAD → WAV |
+| LLM / TTS | **background** (`aipc-voice-once --wav`) | no second arecord |
+
+Policy:
+
+- **Recording command + new wake/PTT** → interrupt & restart capture  
+- **Busy processing + new command** → barge-in cancel previous once, start new job  
+- **Button (控制中心)** → `ptt` on `$XDG_RUNTIME_DIR/aipc-wake.sock` (no second mic)
+
+```bash
+echo ptt | nc -U $XDG_RUNTIME_DIR/aipc-wake.sock   # or socat
+journalctl -u aipc-voice-wake -f
+```
 
 Mute: `aipc-voice-mute.target` + `aipc-voice-mute.service` create
 `/run/aipc/voice-mute`; the listener skips while the flag exists.

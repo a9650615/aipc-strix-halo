@@ -40,6 +40,32 @@ Bind the push-to-talk shortcut from a desktop session:
 aipc-voice-bind-hotkey
 ```
 
+### Siri-like partial overlay + shared UX (aipc)
+
+**Contract owner:** `tools/aipc_lib/voice_ux.py` (import `aipc_lib.voice_ux`).
+
+All surfaces share one status file and state vocabulary:
+
+| Field | Meaning |
+|---|---|
+| `state` | `listening` / `wake` / `recording` / `thinking` / `speaking` / `done` / … |
+| `detail` / `partial` | transcript or reply snippet for overlay |
+| path | `$XDG_RUNTIME_DIR/aipc-voice-state.json` |
+
+Consumers: voice-wake, voice-once, **aipc-voice-overlay**, KRunner, portal helpers, any script that calls `aipc voice ux set …`.
+
+```bash
+aipc voice status          # includes ux-state + overlay + wake
+aipc voice ux              # current UX line + probes
+aipc voice ux set thinking "demo"
+aipc voice ptt             # same as 控制中心 (wake sock)
+aipc voice overlay start   # user unit aipc-voice-overlay
+```
+
+`aipc-voice-overlay` (user session, PySide6) watches the status file and shows
+a bottom-center glass card (pulsing orb + state + detail). Esc hides the panel
+only — does not cancel the pipeline.
+
 The helper reads `/etc/aipc/voice/hotkey` by default; the repo ships `F20` as
 the default shortcut. KDE autostart runs the binder inside the login session,
 and manual rebinding is available with `aipc-voice-bind-hotkey --shortcut F20`.

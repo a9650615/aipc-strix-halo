@@ -47,6 +47,16 @@ SUPERVISOR_SYSTEM_PROMPT = (
     "You cannot control the screen or browse the web yourself — say so plainly if asked."
 )
 
+# Appended when session_id looks like voice (aipc-voice-once / wake pipeline).
+VOICE_SYSTEM_PROMPT_EXTRA = (
+    "VOICE MODE: The user is speaking and will hear your reply via TTS. "
+    "Reply in at most TWO short spoken sentences (ideally one). "
+    "No markdown, no bullet lists, no code fences, no English filler. "
+    "Match the user's language (Chinese if they spoke Chinese). "
+    "If the message is empty, punctuation-only, or pure noise, reply exactly: "
+    "没听清楚，请再说一次。"
+)
+
 # ponytail: keyword match, not intent classification — good enough to reach
 # the Daily Assistant sub-graph today; replace with real routing once a
 # second sub-agent (2.3-2.5) makes a keyword list unworkable.
@@ -65,9 +75,12 @@ class SupervisorState(TypedDict):
     session_id: str
 
 
-def _chat_model(model: str) -> ChatLiteLLM:
-    # resident-small is short-form voice; heavy reasoning models need more.
-    max_tokens = 512 if model == "resident-small" else 2048
+def _chat_model(model: str, *, voice: bool = False) -> ChatLiteLLM:
+    # Voice: keep replies short enough to speak; text can be longer.
+    if voice:
+        max_tokens = 96 if model == "resident-small" else 256
+    else:
+        max_tokens = 512 if model == "resident-small" else 2048
     return ChatLiteLLM(
         model=model,
         api_base=LITELLM_BASE_URL,
@@ -75,6 +88,11 @@ def _chat_model(model: str) -> ChatLiteLLM:
         api_key="aipc-local",
         max_tokens=max_tokens,
     )
+
+
+def _is_voice_session(session_id: str) -> bool:
+    s = (session_id or "").lower()
+    return any(k in s for k in ("voice", "wake", "ptt", "aipc-voice"))
 
 
 def _memory_messages(state: SupervisorState) -> list[SystemMessage]:
@@ -85,8 +103,16 @@ def _memory_messages(state: SupervisorState) -> list[SystemMessage]:
 
 
 def _respond(state: SupervisorState) -> SupervisorState:
-    messages = [SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT), *_memory_messages(state), HumanMessage(content=state["text"])]
-    reply = _chat_model(SUPERVISOR_MODEL).invoke(messages)
+    voice = _is_voice_session(state.get("session_id") or "")
+    system = SUPERVISOR_SYSTEM_PROMPT
+    if voice:
+        system = SUPERVISOR_SYSTEM_PROMPT + " " + VOICE_SYSTEM_PROMPT_EXTRA
+    messages = [
+        SystemMessage(content=system),
+        *_memory_messages(state),
+        HumanMessage(content=state["text"]),
+    ]
+    reply = _chat_model(SUPERVISOR_MODEL, voice=voice).invoke(messages)
     text = text_of(reply.content)
     memory.remember(f"User: {state['text']}\nAssistant: {text}", state["session_id"])
     return {"text": text, "session_id": state["session_id"]}

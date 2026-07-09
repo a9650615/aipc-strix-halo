@@ -32,6 +32,7 @@ from aipc_lib import storage_reclaim as storage_reclaim_mod
 from aipc_lib import tools_menu as tools_menu_mod
 from aipc_lib import portal as portal_mod
 from aipc_lib import voice_ops as voice_ops_mod
+from aipc_lib import voice_ux as voice_ux_mod
 from aipc_lib.codexbar_usage import usage_cli
 from aipc_lib.modules import discover
 from aipc_lib.render_bootc import render as render_bootc
@@ -1311,6 +1312,99 @@ def voice_record_clone(args: tuple[str, ...]) -> None:
         click.echo("aipc-voice-record-clone not found; enable voice-pipecat.", err=True)
         sys.exit(1)
     raise SystemExit(subprocess.call([str(helper), *args]))
+
+
+@voice_cmd.group("ux", invoke_without_command=True)
+@click.pass_context
+def voice_ux_cmd(ctx: click.Context) -> None:
+    """Shared voice UX (status file + overlay + notify).
+
+    Schema: $XDG_RUNTIME_DIR/aipc-voice-state.json — same contract used by
+    voice-wake, voice-once, aipc-voice-overlay, and other aipc callers.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    click.echo(voice_ux_mod.format_ux_line())
+    for name, detail, ok in voice_ux_mod.collect_ux_probes():
+        mark = "ok" if ok else "!!"
+        click.echo(f"{mark}  {name:<10}  {detail}")
+
+
+@voice_ux_cmd.command("set")
+@click.argument("state")
+@click.argument("detail", required=False, default="")
+@click.option("--no-notify", is_flag=True, help="Write status only (no desktop notify).")
+@click.option("--no-cue", is_flag=True, help="Skip short espeak cue.")
+def voice_ux_set(state: str, detail: str, no_notify: bool, no_cue: bool) -> None:
+    """Publish a UX state for overlay/notify (any aipc-integrated surface)."""
+    if state not in voice_ux_mod.KNOWN_STATES:
+        click.echo(
+            f"unknown state {state!r}; known: {', '.join(sorted(voice_ux_mod.KNOWN_STATES))}",
+            err=True,
+        )
+        sys.exit(2)
+    st = voice_ux_mod.announce(
+        state,
+        detail,
+        notify=False if no_notify else None,  # None = auto (anti-spam)
+        cue=not no_cue,
+        force=True,
+    )
+    click.echo(voice_ux_mod.format_ux_line(st))
+
+
+@voice_ux_cmd.command("get")
+def voice_ux_get() -> None:
+    """Print current shared UX status JSON path + fields."""
+    st = voice_ux_mod.read_status()
+    click.echo(voice_ux_mod.format_ux_line(st))
+
+
+@voice_cmd.command("ptt")
+def voice_ptt() -> None:
+    """Push-to-talk via wake single-mic path (same as 控制中心)."""
+    ok, msg = voice_ux_mod.request_ptt()
+    if not ok:
+        click.echo(msg, err=True)
+        sys.exit(1)
+    voice_ux_mod.announce("wake", "aipc voice ptt", force=True)
+    voice_ux_mod.announce("recording", force=True)
+    click.echo(f"ptt → {msg}")
+
+
+@voice_cmd.group("overlay", invoke_without_command=True)
+@click.pass_context
+def voice_overlay_cmd(ctx: click.Context) -> None:
+    """Siri-like partial overlay (user session unit aipc-voice-overlay)."""
+    if ctx.invoked_subcommand is not None:
+        return
+    code, msg = voice_ux_mod.overlay_control("status")
+    click.echo(f"aipc-voice-overlay: {msg}")
+    if code != 0:
+        sys.exit(code)
+
+
+@voice_overlay_cmd.command("start")
+def voice_overlay_start() -> None:
+    """Enable+start the user overlay service."""
+    subprocess.call(["systemctl", "--user", "enable", "aipc-voice-overlay.service"])
+    code, msg = voice_ux_mod.overlay_control("restart")
+    click.echo(msg or "started")
+    raise SystemExit(code)
+
+
+@voice_overlay_cmd.command("stop")
+def voice_overlay_stop() -> None:
+    code, msg = voice_ux_mod.overlay_control("stop")
+    click.echo(msg or "stopped")
+    raise SystemExit(code)
+
+
+@voice_overlay_cmd.command("status")
+def voice_overlay_status() -> None:
+    code, msg = voice_ux_mod.overlay_control("status")
+    click.echo(f"aipc-voice-overlay: {msg}")
+    raise SystemExit(code)
 
 
 @main.group("portal", invoke_without_command=True)
