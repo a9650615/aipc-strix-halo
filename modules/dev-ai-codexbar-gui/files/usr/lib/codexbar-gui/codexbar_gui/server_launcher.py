@@ -55,21 +55,30 @@ def wait_for_server(
     return False
 
 
-def _serve_cmd(port: int) -> Optional[list[str]]:
+def _find_cli() -> list[str]:
+    """Return argv prefix for usage tooling (tests + callers)."""
     binary = find_codexbar_binary()
     if binary:
-        return [binary, "serve", "--port", str(port)]
-    # Fallback only — wrong data for real quotas
+        return [binary]
     for path in (
         Path("/usr/bin/aipc-usage"),
         Path("/usr/lib/aipc/tools/.venv/bin/aipc-usage"),
     ):
         if path.is_file():
-            return [str(path), "serve", "--port", str(port)]
+            return [str(path)]
     which = shutil.which("aipc-usage")
     if which:
-        return [which, "serve", "--port", str(port)]
-    return [sys.executable, "-m", "codexbar_usage", "serve", "--port", str(port)]
+        return [which]
+    return [sys.executable, "-m", "codexbar_usage"]
+
+
+def _serve_cmd(port: int) -> Optional[list[str]]:
+    base = _find_cli()
+    binary = find_codexbar_binary()
+    if binary:
+        return [binary, "serve", "--port", str(port)]
+    # Fallback only — incomplete data for real quotas
+    return base + ["serve", "--port", str(port)]
 
 
 def start_server(
