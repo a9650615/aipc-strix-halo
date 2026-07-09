@@ -267,14 +267,19 @@ def fetch_from_cli(
 def fetch_usage_views(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
-    prefer_cli: bool = False,
+    prefer_cli: bool = True,
 ) -> List[ProviderView]:
-    """Fetch from official codexbar only (serve HTTP and/or CLI)."""
+    """Fetch from official codexbar only.
+
+    Default **prefer_cli=True**: always call ``codexbar usage --format json``
+    so a stale Python server on :8080 cannot poison the tray. HTTP is only
+    used when it is verified official serve *and* prefer_cli is False.
+    """
     if not find_codexbar_binary():
         logger.error("codexbar binary not found — install official Linux CLI")
         return []
 
-    if not prefer_cli:
+    if not prefer_cli and is_official_serve(host, port):
         http = fetch_from_http(host, port)
         if http is not None:
             return http
@@ -283,15 +288,52 @@ def fetch_usage_views(
     if cli is not None:
         return cli
 
-    # One more HTTP attempt (serve may have just come up)
-    return fetch_from_http(host, port) or []
+    if is_official_serve(host, port):
+        return fetch_from_http(host, port) or []
+    return []
 
 
 def health_check(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:
+    """True only if an *official* codexbar serve is healthy.
+
+    The broken Python ``aipc-usage`` / ``codexbar_usage`` port also answers
+    ``/health`` with ``status=ok`` and ``version=0.1.0`` on :8080 — that must
+    not be treated as success (it returns fake no-api-key usage).
+    """
+    return is_official_serve(host, port)
+
+
+def is_official_serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:
     try:
         req = urllib.request.Request(f"http://{host}:{port}/health", method="GET")
         with urllib.request.urlopen(req, timeout=2) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data.get("status") == "ok"
+            health = json.loads(resp.read().decode("utf-8"))
     except Exception:
         return False
+    if health.get("status") != "ok":
+        return False
+    ver = str(health.get("version") or "")
+    # Python port ships 0.1.0; official CLI is 0.40.x etc.
+    if ver in {"0.1.0", "0.1", "aipc"} or ver.startswith("0.1."):
+        logger.warning(
+            "port %s looks like aipc-usage Python port (version=%s), not official codexbar",
+            port,
+            ver,
+        )
+        return False
+
+    # Probe usage shape: official items use top-level "usage" / "source"
+    try:
+        req = urllib.request.Request(f"http://{host}:{port}/usage", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        # health ok + non-0.1.0 version is enough if usage is slow
+        return True
+    if not isinstance(body, list) or not body:
+        return True
+    sample = body[0] if isinstance(body[0], dict) else {}
+    if "snapshot" in sample and "usage" not in sample:
+        logger.warning("port %s returns aipc-usage snapshot shape — ignoring", port)
+        return False
+    return True

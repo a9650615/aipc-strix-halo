@@ -92,9 +92,13 @@ class CodexBarApp:
             if ok:
                 self._server_proc = proc
                 return True
-            # CLI path still works without serve
+            # Port may be occupied by fake aipc-usage — CLI still works.
             if find_codexbar_binary():
-                logger.info("serve failed; GUI will call codexbar CLI directly")
+                logger.warning(
+                    "official serve not on :%s (wrong process or missing); "
+                    "GUI uses `codexbar usage` CLI for real data",
+                    self._port,
+                )
                 return True
             self._set_icon(error=True)
             QTimer.singleShot(400, self._show_server_error)
@@ -107,16 +111,16 @@ class CodexBarApp:
         QMessageBox.warning(
             None,
             "CodexBar",
-            "Could not start usage server and no codexbar CLI found.\n"
-            "Install: https://github.com/steipete/CodexBar/releases\n"
-            "Then: codexbar serve --port 8080",
+            "No official codexbar CLI found.\n"
+            "Install: https://github.com/steipete/CodexBar/releases\n\n"
+            "Note: default port is 8080 (not 8000).\n"
+            "If 8080 is taken by `python -m codexbar_usage`, kill that process.",
         )
 
     def _refresh_data(self) -> None:
         try:
-            views = fetch_usage_views(
-                self._host, self._port, prefer_cli=bool(find_codexbar_binary())
-            )
+            # Always CLI when binary present — never trust a random :8080.
+            views = fetch_usage_views(self._host, self._port, prefer_cli=True)
             used, tip = summary_from_views(views)
             self._current_used = used
             self._set_icon(percent=used, error=not views or all(not v.ok for v in views))

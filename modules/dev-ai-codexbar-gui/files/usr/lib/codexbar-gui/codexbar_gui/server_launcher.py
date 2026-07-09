@@ -1,20 +1,15 @@
-"""Start official ``codexbar serve`` only.
-
-This GUI does **not** use the Python aipc-usage port for core logic.
-"""
+"""Start official ``codexbar serve`` only; reject fake aipc-usage on the port."""
 
 from __future__ import annotations
 
-import json
 import logging
 import os
+import socket
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from typing import Optional, Tuple
 
-from codexbar_gui.upstream import find_codexbar_binary
+from codexbar_gui.upstream import find_codexbar_binary, is_official_serve
 
 logger = logging.getLogger("codexbar_gui.server_launcher")
 
@@ -27,13 +22,7 @@ _server_proc: Optional[subprocess.Popen] = None
 
 
 def check_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:
-    try:
-        req = urllib.request.Request(f"http://{host}:{port}/health", method="GET")
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data.get("status") == "ok"
-    except Exception:
-        return False
+    return is_official_serve(host, port)
 
 
 def wait_for_server(
@@ -44,18 +33,24 @@ def wait_for_server(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if check_server(host, port):
-            logger.info("codexbar serve ready http://%s:%s", host, port)
+            logger.info("official codexbar serve ready http://%s:%s", host, port)
             return True
         time.sleep(POLL_INTERVAL)
     return False
 
 
 def _find_cli() -> list[str]:
-    """Return [codexbar_binary] for tests / diagnostics."""
     binary = find_codexbar_binary()
-    if not binary:
-        return []
-    return [binary]
+    return [binary] if binary else []
+
+
+def _port_free(host: str, port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            return sock.connect_ex((host, port)) != 0
+    except OSError:
+        return False
 
 
 def _serve_cmd(port: int) -> Optional[list[str]]:
@@ -71,29 +66,43 @@ def start_server(
     wait: bool = True,
     timeout: float = MAX_WAIT_SECONDS,
 ) -> Tuple[bool, Optional[subprocess.Popen]]:
-    """Start official ``codexbar serve`` if nothing is listening."""
+    """Start official serve, or no-op if already official.
+
+    If the port is occupied by the Python aipc-usage fake server, do **not**
+    treat it as success — return False so the GUI falls back to CLI fetch.
+    """
     global _server_proc
 
     if check_server(host, port):
-        logger.info("Server already running")
+        logger.info("Official codexbar serve already on :%s", port)
         return True, None
+
+    if not _port_free(host, port):
+        logger.error(
+            "Port %s is in use but is NOT official codexbar serve "
+            "(often: python -m codexbar_usage.cli serve). "
+            "Kill it: ss -ltnp | grep %s   then   kill <pid>. "
+            "GUI will use `codexbar usage` CLI directly instead.",
+            port,
+            port,
+        )
+        return False, None
 
     cmd = _serve_cmd(port)
     if not cmd:
         logger.error(
-            "Official codexbar binary not found. Install the Linux CLI from "
-            "https://github.com/steipete/CodexBar/releases — GUI does not reimplement core."
+            "Official codexbar binary not found. "
+            "Install from https://github.com/steipete/CodexBar/releases"
         )
         return False, None
 
     logger.info("Starting: %s", " ".join(cmd))
-    env = os.environ.copy()
     try:
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            env=env,
+            env=os.environ.copy(),
             start_new_session=True,
         )
     except OSError as exc:
