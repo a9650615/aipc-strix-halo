@@ -54,16 +54,35 @@ Do not treat render-verified as hardware-verified for microphone, TTS, wake word
 
 ## Hardware handoff
 
-Current status on 2026-07-08: static and render verification passed for the staged v0/PTT, doctor, docs, and opportunistic TTS fallback work. Physical Strix Halo hardware verification was not run in this session.
+**2026-07-09 live status (this Strix Halo host):**
 
-Run these on the AI PC after deploying the image:
+| Piece | State |
+|---|---|
+| `aipc-agent-orchestrator` `/chat` | Running; hardware round-trip OK (≈90s wall for short reply under load) |
+| LiteLLM + Lemonade | Running |
+| `aipc-mem0` | Running |
+| `aipc-voice-stt-sensevoice` | Live unit under `/var/lib/aipc-voice` (ostree `/usr` RO). Fixed SELinux `bin_t` on `venv/bin` after 203/EXEC crash-loop. First start may download ~936 MB `model.pt` into `MODELSCOPE_CACHE`. |
+| Mic default source | Must be real `alsa_input…`, not `…monitor` |
+| Wake / TTS / full Pipecat | Still deferred (Stage 3) |
+
+Run these on the AI PC:
 
 ```bash
 systemctl is-active aipc-voice-stt-sensevoice.service
+curl -sS http://127.0.0.1:9001/healthz
 aipc-asus-side-button-discover --timeout 20
 aipc-voice-bind-hotkey --shortcut F20
 aipc-voice-once --seconds 5
 aipc doctor
 ```
 
-Only mark hardware tasks complete after the matching command path is exercised on the physical AI PC. Wake word, listen-off triggers, firstboot voice screens, and full command/chat routing remain pending.
+If SenseVoice dies with `203/EXEC`, relabel and restart:
+
+```bash
+sudo chcon -R -t bin_t /var/lib/aipc-voice/venv/bin   # live-hotfix path
+# or, after a real image deploy:
+sudo restorecon -R /usr/lib/aipc-voice/venv/bin
+sudo systemctl restart aipc-voice-stt-sensevoice.service
+```
+
+Only mark OpenSpec hardware tasks complete after the matching command path is exercised. Wake word, listen-off triggers, firstboot voice screens, and full command/chat routing remain pending.
