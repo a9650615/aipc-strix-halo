@@ -38,11 +38,27 @@ If KDE global-shortcut tools are missing or no desktop session is active, the he
 
 ## Stage 2: TTS output
 
-When TTS services are available, `aipc-voice-once` may speak the assistant reply. Text notification remains the fallback so a TTS failure does not break the assistant.
+Local TTS service (`aipc-voice-tts-local`, port **8880**) synthesizes via
+**espeak-ng** and returns `audio/wav`. `aipc_voice_tts.speak()` plays the
+audio with `paplay`/`aplay`. If the service is down it falls back to
+in-process espeak-ng. `notify-send` text remains always-on so a TTS failure
+never loses the reply.
 
-## Stage 3: Full Phase 3
+```bash
+curl -sS http://127.0.0.1:8880/healthz
+aipc-voice-once --seconds 5   # should print "spoke reply via TTS"
+```
 
-Full Phase 3 adds wake-word inference, listen-off mute triggers, command-vs-chat routing, firstboot persona/wake screens, and hardware verification on the Strix Halo machine.
+## Stage 3: Wake + mute + hotkey
+
+- **Hotkey**: `aipc-voice-bind-hotkey` (default config `/etc/aipc/voice/hotkey` = `F20`).
+  Accepts `qdbus` when `qdbus6` is missing. KDE globalaccel reload is best-effort.
+- **Side button**: `aipc-asus-side-button-discover` lists Asus WMI / GZ302 keyboard nodes;
+  hwdb template remaps MSC_SCAN → F20.
+- **Wake**: `aipc-voice-wake.service` (energy VAD by default; openWakeWord when installed).
+  Triggers `aipc-voice-once`. `aipc-voice-mute.target` + flag `/run/aipc/voice-mute`
+  pause listening; screen-lock autostart helper starts the mute target.
+- **Train**: `aipc-voice-train-wake --samples DIR --label NAME` (v0 marker; ONNX fit later).
 
 ## Verification tiers
 

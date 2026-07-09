@@ -1,24 +1,30 @@
 # voice-wake
 
-Always-on wake-word detection via openWakeWord, inference on NPU.
+Always-on wake listener that triggers `aipc-voice-once`.
 
-## What it does
+## Current status: energy VAD + optional openWakeWord — enabled after hardware verify
 
-- Loads a user-trained ONNX model from `/var/lib/aipc/wake/user-model.onnx`.
-- Model is trained at firstboot from 3–5 user-recorded samples (D2).
-- Runs always-on at ~100 mW (NPU only); STT/LLM/TTS never run idle.
-- `BindsTo=!aipc-voice-mute.target` pauses inference on screen-lock / mute / DND (D7).
+Full openWakeWord custom-ONNX training (firstboot 3–5 samples) is staged
+as `aipc-voice-train-wake` (v0 writes a marker; real fit is follow-up).
+Runtime modes:
 
-## Dependencies
+| Mode | When |
+|---|---|
+| `openwakeword` | `openwakeword` importable; pretrained `hey_jarvis` or user ONNX |
+| `energy` | Default fallback — RMS threshold on 16 kHz mic frames |
 
-- `voice-pipecat` — sends wake events to the pipeline.
-- NPU device (`/dev/accel/accel0`).
+Mute: `aipc-voice-mute.target` + `aipc-voice-mute.service` create
+`/run/aipc/voice-mute`; the listener skips while the flag exists.
+`Conflicts=aipc-voice-mute.target` also stops the unit when mute is
+started. Screen-lock helper: `aipc-voice-mute-screenlock` (session
+autostart).
+
+## NPU note
+
+Design targets XDNA NPU (~100 mW). openWakeWord on this host uses ONNX
+Runtime CPU EP today — same honesty as SenseVoice's CPU default. Flip to
+NPU EP when an onnxruntime EP for `/dev/accel/accel0` is validated.
 
 ## Spec
 
-- `openspec/changes/phase-3-voice/design.md` — D2, D7.
-- Tasks 1.2, 2.1–2.4, 7.5.
-
-## Hardware
-
-- AMD XDNA 2 NPU (`/dev/accel/accel0`).
+- phase-3-voice D2, D7; tasks 1.2, 2.1–2.4, 7.2, 7.5

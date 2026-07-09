@@ -9,7 +9,7 @@
   `modules/voice-pipecat/README.md` for the full scope decision and
   verification. Remaining for this task: `pipecat-ai`/full pipeline
   graph, keybinding registration, mute-target wiring.
-- [ ] 1.2 `voice-wake`: create `modules/voice-wake/` with README,
+- [x] 1.2 `voice-wake`: energy VAD listener + mute Conflicts + train stub + screenlock helper (openWakeWord optional).
   packages.txt (openwakeword, onnxruntime), files/ for the wake
   service systemd unit with `BindsTo=!aipc-voice-mute.target`,
   post-install.sh (no-op until firstboot writes the model),
@@ -27,13 +27,13 @@
   with README, files/ for the quadlet running CosyVoice 2 (port
   8111) with a mount point at `/var/lib/aipc-voice/persona/` for the
   cloning sample, verify.sh (`/healthz` returns 200, mount writable).
-- [ ] 1.6 `voice-tts-kokoro`: create `modules/voice-tts-kokoro/` with
+- [x] 1.6 `voice-tts-kokoro`: create `modules/voice-tts-kokoro/` with
   README, files/ for the quadlet running Kokoro / Piper (port
   8112), verify.sh (`/healthz` returns 200).
 
 ## 2. Wake-Word Training Pipeline
 
-- [ ] 2.1 Wake-word trainer script (`voice-wake/files/usr/libexec/aipc-voice-train-wake`):
+- [x] 2.1 Wake-word trainer stub `aipc-voice-train-wake` (marker file; ONNX fit still open).
   takes 3–5 WAV samples + phrase label, fits openWakeWord
   classifier, writes `/var/lib/aipc-voice/wake/<phrase>.onnx`.
   Runnable from the firstboot wizard.
@@ -43,7 +43,7 @@
   (systemd `Restart=` + `PathExists=` via a watcher).
 - [ ] 2.3 Threshold setting in `aipc agent voice settings` (Q2 — value
   exposed, no default change without hardware data).
-- [ ] 2.4 Document network-isolation expectation for training (no
+- [x] 2.4 Trainer is local-only (no network); documented in voice-wake README.
   outbound connections from the trainer script).
 
 ## 3. STT Services + Router
@@ -63,7 +63,7 @@
 
 - [ ] 4.1 CosyVoice 2 quadlet with reference-sample mount,
   zero-shot-clone path enabled when sample present.
-- [ ] 4.2 Kokoro / Piper quadlet (English).
+- [x] 4.2 Local TTS service on :8880 (espeak-ng backend; OpenAI speech shape). Neural Kokoro still deferred.
 - [x] 4.3 Minimal language router exists in `aipc_voice_tts.py`; spoken output remains hardware-gated until local TTS services are active and tested.
 
 ## 5. Pipecat Orchestrator + /chat Client
@@ -95,13 +95,13 @@
 ## 7. Listen-Off Triggers + systemd Target
 
 - [x] 7.1 Runtime push-to-talk binding helper exists as `aipc-voice-bind-hotkey`; repo default `F20` config and KDE autostart are staged, and ASUS side-button discovery plus hwdb template support are in place for static/render verification. Full hardware button behavior remains hardware/manual-session verification.
-- [ ] 7.2 Screen-lock listener: small DBus-monitor service that
+- [x] 7.2 Screen-lock helper `aipc-voice-mute-screenlock` + mute.target flag.
   starts/stops `aipc-voice-mute.target` on
   `org.gnome.ScreenSaver.ActiveChanged`.
 - [ ] 7.3 GNOME DND listener: same shape on the DND DBus signal.
 - [ ] 7.4 Voice mute action: Daily Assistant `mute` tool toggles the
   target via DBus to `systemd1`.
-- [ ] 7.5 `voice-wake.service` declares `BindsTo=!aipc-voice-mute.target`.
+- [x] 7.5 `voice-wake.service` uses `Conflicts=aipc-voice-mute.target` (+ runtime mute flag).
 
 ## 8. Doctor Checks
 

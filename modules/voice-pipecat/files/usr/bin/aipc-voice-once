@@ -37,7 +37,13 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib/aipc-voice"))
+for _p in (
+    Path("/usr/lib/aipc-voice"),
+    Path("/var/lib/aipc-voice/lib"),
+    Path(__file__).resolve().parents[1] / "lib/aipc-voice",
+):
+    if _p.is_dir():
+        sys.path.insert(0, str(_p))
 try:
     import aipc_voice_tts
 except Exception:
@@ -47,6 +53,7 @@ STT_URL = os.environ.get("AIPC_VOICE_STT_URL", "http://127.0.0.1:9001/transcribe
 CHAT_URL = os.environ.get("AIPC_VOICE_CHAT_URL", "http://127.0.0.1:4100/chat")
 RECORD_SECONDS = int(os.environ.get("AIPC_VOICE_RECORD_SECONDS", "5"))
 SESSION_ID = os.environ.get("AIPC_VOICE_SESSION_ID", "voice-pipecat-dev")
+CHAT_TIMEOUT = float(os.environ.get("AIPC_VOICE_CHAT_TIMEOUT", "180"))
 
 
 def build_parser():
@@ -97,18 +104,23 @@ def chat(text, session_id):
     req = urllib.request.Request(
         CHAT_URL, data=payload, method="POST", headers={"Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with urllib.request.urlopen(req, timeout=CHAT_TIMEOUT) as resp:
         return _parse_text_field(resp.read())
 
 
 def show(reply):
-    """Speak the reply when TTS is ready; always keep text fallback."""
+    """Speak the reply when TTS is ready; always keep text notification too."""
+    spoke = False
     if os.environ.get("AIPC_VOICE_TTS", "1") != "0" and aipc_voice_tts is not None:
-        if aipc_voice_tts.speak(reply):
-            return
+        try:
+            spoke = bool(aipc_voice_tts.speak(reply))
+        except Exception as exc:  # noqa: BLE001 — never fail the round trip on TTS
+            print(f"aipc-voice-once: TTS error: {exc}", file=sys.stderr)
+    if spoke:
+        print("aipc-voice-once: spoke reply via TTS")
     if shutil.which("notify-send"):
         subprocess.run(["notify-send", "AIPC Assistant", reply], check=False)
-    else:
+    elif not spoke:
         print(f"aipc-voice-once: (notify-send unavailable) reply: {reply}")
 
 

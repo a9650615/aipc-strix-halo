@@ -1,2 +1,3 @@
 alsa-utils
 libnotify
+espeak-ng

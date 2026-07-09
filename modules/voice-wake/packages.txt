@@ -1,1 +1,2 @@
-# openWakeWord ONNX runs on NPU
+alsa-utils
+python3

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=AIPC Voice Mute on Screen Lock
+Exec=/usr/libexec/aipc-voice-mute-screenlock
+X-KDE-autostart-phase=1
+Terminal=false
