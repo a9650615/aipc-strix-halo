@@ -8,19 +8,17 @@ that reflect usage levels at a glance.
 
 ## Features
 
-- **System tray icon** with dynamic SVG that changes color based on usage:
-  - Green (<50%): healthy usage
-  - Yellow (50-80%): approaching limit
-  - Red (>80%): near or over limit
-- **Right-click context menu** showing all configured providers with:
-  - Usage percentage and progress bars
-  - Reset countdown descriptions
-  - Status indicators (configured / no-api-key / error)
-  - Expand/collapse for detailed information
-- **Auto-start HTTP server** — launches `aipc-usage serve` if not running
-- **Periodic refresh** — polls the server every 60 seconds (configurable)
-- **Configuration dialog** — enable/disable providers, set API keys, adjust refresh interval
-- **KDE StatusNotifier compatible** — integrates with Plasma's system tray
+- **System tray meter icon** (painted QPixmap — reliable on Plasma StatusNotifier):
+  - Green (&lt;50%) / yellow (50–80%) / red (&gt;80%) / gray (no data)
+  - Tooltip lists per-provider usage; icon uses **max** usage across providers
+- **Context menu** (refreshes on every open):
+  - Progress bars, % , reset text, status (`ok` / `no key` / `error` / …)
+  - Sorted by urgency (high usage first)
+  - **Show details** expands secondary windows / errors / identity
+- **Left-click or double-click** opens the menu
+- **Auto-start** `aipc-usage serve` if health check fails
+- **Settings** dialog writes `~/.config/codexbar/config.json` (`apiKey` camelCase)
+- Prefer `aipc usage gui` as the human entrypoint
 
 ## Architecture
 

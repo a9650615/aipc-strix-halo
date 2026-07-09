@@ -1,3 +1,3 @@
-"""CodexBar GUI — system tray application for AI coding usage tracking."""
+"""CodexBar system tray GUI."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

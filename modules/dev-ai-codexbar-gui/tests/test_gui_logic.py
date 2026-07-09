@@ -1,129 +1,103 @@
 #!/usr/bin/env python3
-"""Test script to verify CodexBar GUI logic without running actual GUI.
+"""Headless logic tests for CodexBar GUI (no tray required)."""
 
-This script tests:
-- Module imports
-- Server communication
-- Data fetching
-- Icon generation
-- Config loading
-"""
+from __future__ import annotations
 
+import os
 import sys
-import json
-import urllib.request
 from pathlib import Path
 
-# Add GUI directory to path
-GUI_DIR = Path(__file__).parent
+import pytest
+
+GUI_DIR = Path(__file__).resolve().parents[1] / "files" / "usr" / "lib" / "codexbar-gui"
 sys.path.insert(0, str(GUI_DIR))
 
-
-def test_imports():
-    """Test that all GUI modules can be imported."""
-    print("Testing imports...")
-    try:
-        from codexbar_gui.tray_app import CodexBarApp
-        from codexbar_gui.usage_panel import UsagePanel
-        from codexbar_gui.icon_updater import generate_svg, get_color_for_percent
-        from codexbar_gui.config_dialog import ConfigDialog
-        from codexbar_gui.server_launcher import check_server, start_server
-        from codexbar_gui.config import load_config
-        print("✓ All modules imported successfully")
-        return True
-    except Exception as e:
-        print(f"✗ Import failed: {e}")
-        return False
+# Allow painting without a display.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
-def test_server():
-    """Test HTTP server communication."""
-    print("\nTesting server communication...")
-    try:
-        # Try to connect to server
-        response = urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=5)
-        data = json.loads(response.read())
-        print(f"✓ Server healthy: {data.get('status')}")
-        
-        # Fetch usage data
-        response = urllib.request.urlopen("http://127.0.0.1:8080/usage", timeout=10)
-        data = json.loads(response.read())
-        print(f"✓ Fetched {len(data)} providers")
-        return True
-    except Exception as e:
-        print(f"✗ Server test failed: {e}")
-        print("  (Server may not be running - this is OK for testing)")
-        return False
+def test_imports() -> None:
+    from codexbar_gui.tray_app import CodexBarApp
+    from codexbar_gui.usage_panel import UsagePanel, summary_from_data
+    from codexbar_gui.icon_updater import generate_svg, get_color_for_percent, paint_usage_pixmap
+    from codexbar_gui.config_dialog import ConfigDialog
+    from codexbar_gui.server_launcher import check_server, start_server
+
+    assert CodexBarApp is not None
+    assert UsagePanel is not None
+    assert summary_from_data is not None
+    assert callable(generate_svg)
+    assert callable(get_color_for_percent)
+    assert callable(paint_usage_pixmap)
+    assert ConfigDialog is not None
+    assert callable(check_server)
+    assert callable(start_server)
 
 
-def test_config():
-    """Test config loading."""
-    print("\nTesting config...")
-    try:
-        from codexbar_gui.config import load_config
-        config = load_config()
-        print(f"✓ Config loaded: refresh_interval={config.refresh_interval}, icon_size={config.icon_size}")
-        return True
-    except Exception as e:
-        print(f"✗ Config test failed: {e}")
-        return False
+def test_color_thresholds() -> None:
+    from codexbar_gui.icon_updater import get_color_for_percent
+
+    assert get_color_for_percent(0) == "#27ae60"
+    assert get_color_for_percent(49) == "#27ae60"
+    assert get_color_for_percent(51) == "#f39c12"
+    assert get_color_for_percent(81) == "#e74c3c"
 
 
-def test_icon_generation():
-    """Test SVG icon generation."""
-    print("\nTesting icon generation...")
-    try:
-        from codexbar_gui.icon_updater import generate_svg, get_color_for_percent
-        
-        # Test color for different usage levels
-        colors = [
-            (0, "green"),
-            (50, "yellow"),
-            (80, "red"),
-            (100, "red"),
-        ]
-        
-        for percent, expected_color in colors:
-            color = get_color_for_percent(percent)
-            print(f"  {percent}%: {color}")
-        
-        # Generate SVG
-        svg = generate_svg(0.5)
-        print(f"✓ SVG generated ({len(svg)} bytes)")
-        return True
-    except Exception as e:
-        print(f"✗ Icon test failed: {e}")
-        return False
+def test_svg_and_paint() -> None:
+    from PySide6.QtWidgets import QApplication
+
+    from codexbar_gui.icon_updater import generate_svg, paint_usage_pixmap
+
+    app = QApplication.instance() or QApplication([])
+    del app
+    svg = generate_svg(42.0)
+    assert "svg" in svg
+    pm = paint_usage_pixmap(percent=42.0, error=False, size=24)
+    assert not pm.isNull()
+    err = paint_usage_pixmap(error=True, size=24)
+    assert not err.isNull()
 
 
-def main():
-    """Run all tests."""
-    print("=" * 60)
-    print("CodexBar GUI - Logic Tests")
-    print("=" * 60)
-    
-    results = []
-    results.append(("Imports", test_imports()))
-    results.append(("Server", test_server()))
-    results.append(("Config", test_config()))
-    results.append(("Icons", test_icon_generation()))
-    
-    print("\n" + "=" * 60)
-    print("Results:")
-    print("=" * 60)
-    for name, passed in results:
-        status = "PASS" if passed else "FAIL"
-        print(f"  {name}: {status}")
-    
-    all_passed = all(r[1] for r in results)
-    print("=" * 60)
-    if all_passed:
-        print("All tests passed! ✓")
-        return 0
-    else:
-        print("Some tests failed. ✗")
-        return 1
+def test_summary_from_data() -> None:
+    from codexbar_gui.usage_panel import summary_from_data
+
+    data = [
+        {
+            "provider": "claude",
+            "snapshot": {
+                "status": "ok",
+                "primary": {"used_percent": 42.0, "reset_description": "in 3h"},
+            },
+        },
+        {
+            "provider": "openai",
+            "snapshot": {"status": "no-api-key", "primary": None},
+        },
+        {
+            "provider": "codex",
+            "snapshot": {
+                "status": "ok",
+                "primary": {"used_percent": 0.9},  # fraction → 90%
+            },
+        },
+    ]
+    max_pct, tip = summary_from_data(data)
+    assert max_pct == 90.0
+    assert "claude" in tip
+    assert "CodexBar" in tip
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def test_detail_text() -> None:
+    from codexbar_gui.usage_panel import UsagePanel
+
+    text = UsagePanel._detail_text(
+        "claude",
+        {
+            "status": "ok",
+            "primary": {"used_percent": 10, "reset_description": "soon"},
+            "error": None,
+            "identity": {"account_email": "a@b.c"},
+        },
+    )
+    assert "claude" in text
+    assert "10%" in text or "soon" in text

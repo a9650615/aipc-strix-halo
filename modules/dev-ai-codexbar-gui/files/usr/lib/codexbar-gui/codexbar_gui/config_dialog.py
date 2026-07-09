@@ -238,7 +238,7 @@ class ConfigDialog(QDialog):
         for prov in providers:
             provider_id = prov.get("id", "unknown")
             enabled = prov.get("enabled", True)
-            api_key = prov.get("api_key", "")
+            api_key = prov.get("api_key") or prov.get("apiKey") or ""
 
             widget = ProviderConfigWidget(
                 provider_id=provider_id,
@@ -255,17 +255,26 @@ class ConfigDialog(QDialog):
         # Preserve existing API keys for providers not in the UI
         existing_keys = {}
         for prov in self._config.get("providers", []):
-            if prov.get("api_key"):
-                existing_keys[prov["id"]] = prov["api_key"]
+            key = prov.get("api_key") or prov.get("apiKey")
+            if key:
+                existing_keys[prov["id"]] = key
 
-        # Merge with existing keys
+        # Merge with existing keys; store camelCase apiKey for CodexBar CLI compat
+        out_providers = []
         for prov in providers:
-            if prov["id"] in existing_keys and not prov["api_key"]:
-                prov["api_key"] = existing_keys[prov["id"]]
+            pid = prov["id"]
+            key = prov.get("api_key") or existing_keys.get(pid) or ""
+            out_providers.append(
+                {
+                    "id": pid,
+                    "enabled": bool(prov.get("enabled", True)),
+                    "apiKey": key,
+                }
+            )
 
         config_data = {
             "version": self._config.get("version", 1),
-            "providers": providers,
+            "providers": out_providers,
         }
 
         # Write config file

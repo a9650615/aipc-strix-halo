@@ -46,15 +46,18 @@ def _find_cli() -> list[str]:
     """Return the command to invoke the ``aipc-usage`` CLI as a list.
 
     Search order:
-    1. ``/usr/bin/aipc-usage`` (installed by the module)
-    2. ``python -m codexbar_usage`` as fallback
+    1. ``/usr/bin/aipc-usage`` (image install)
+    2. ``aipc-usage`` on PATH (user pipx / ~/.local)
+    3. ``python -m codexbar_usage`` (dev tree / venv)
     """
-    direct = Path("/usr/bin/aipc-usage")
-    if direct.exists():
-        return [str(direct)]
+    import shutil
 
-    # Fallback: invoke via the Python module directly.
-    # This works when running from the development tree or inside the aipc venv.
+    for candidate in (Path("/usr/bin/aipc-usage"), Path("/usr/lib/aipc/tools/.venv/bin/aipc-usage")):
+        if candidate.is_file():
+            return [str(candidate)]
+    which = shutil.which("aipc-usage")
+    if which:
+        return [which]
     return [sys.executable, "-m", "codexbar_usage"]
 
 
@@ -130,6 +133,21 @@ def start_server(
 
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
+    # Dev checkout: modules/dev-ai-codexbar-gui/files/usr/lib/codexbar-gui/codexbar_gui/
+    # parents[6] == modules/
+    modules_root = Path(__file__).resolve().parents[6]
+    repo_usage = (
+        modules_root
+        / "dev-ai-codexbar-usage"
+        / "files"
+        / "usr"
+        / "lib"
+        / "aipc-codexbar-usage"
+    )
+    for pkg in (Path("/usr/lib/aipc-codexbar-usage"), repo_usage):
+        if pkg.is_dir():
+            env["PYTHONPATH"] = f"{pkg}{os.pathsep}{env.get('PYTHONPATH', '')}"
+            break
 
     try:
         proc = subprocess.Popen(
