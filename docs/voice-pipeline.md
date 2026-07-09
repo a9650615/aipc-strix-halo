@@ -35,6 +35,22 @@ complete without leaving the loop:
 `AIPC_SUPERVISOR_MODEL` can override `/chat` (e.g. `ornith-35b` after
 `aipc models use agent`); the standing default is **resident-small**.
 
+**Voice path defaults (2026-07-10):**
+
+- `aipc-voice-once` → **direct** `:4100/chat` (not aggregator).  
+  Opt-in hub: `AIPC_VOICE_USE_AGGREGATOR=1`.
+- Local intents (open dashboard / portal) run **before** chat; STT slurs
+  like `dashashboard` still match.
+- TTS plays via Kokoro/`paplay` on the **current** default sink — it must
+  **not** change system volume.
+- No live weather/web in the offline loop (model will say it cannot fetch
+  realtime data unless a search/online path is enabled).
+- **122B** is optional and memory-heavy; when disabled:  
+  `sudo systemctl stop ollama.service && sudo systemctl disable ollama.service`  
+  (see `/etc/aipc/models/122b.disabled` and `modules/llm-ollama/README.md`).  
+  Re-enable: `sudo systemctl enable --now ollama.service && aipc models use 122b`.  
+  Prefer `aipc models use free` so only NPU `resident-small` stays warm.
+
 ## Stage 1: v0 push-to-talk text-out
 
 ```text
@@ -152,8 +168,11 @@ then the client falls through to Kokoro automatically.
 
 Phase/change: OpenSpec `assistant-chatgpt-online`.
 
+**Not the default for push-to-talk.** `aipc-voice-once` uses direct `/chat`
+unless `AIPC_VOICE_USE_AGGREGATOR=1`. Text entry still uses `aipc-assistant`.
+
 ```text
-aipc-assistant / aipc-voice-once
+aipc-assistant  (or aipc-voice-once with AIPC_VOICE_USE_AGGREGATOR=1)
         │
         ▼
   assistant-aggregator (NPU-first: resident-small control + local chat)
