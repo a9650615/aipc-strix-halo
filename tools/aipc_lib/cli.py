@@ -1283,6 +1283,23 @@ def voice_bind_hotkey(args: tuple[str, ...]) -> None:
     raise SystemExit(subprocess.call([str(helper), *args]))
 
 
+@voice_cmd.command("krunner-install")
+def voice_krunner_install() -> None:
+    """Install KRunner (KDE global search) plugin for Spotlight-style AIPC."""
+    candidates = [
+        Path.home() / ".local/bin/aipc-krunner-install",
+        Path("/usr/bin/aipc-krunner-install"),
+        Path("/usr/local/bin/aipc-krunner-install"),
+        REPO_ROOT
+        / "modules/voice-pipecat/files/usr/bin/aipc-krunner-install",
+    ]
+    helper = next((p for p in candidates if p.is_file()), None)
+    if helper is None:
+        click.echo("aipc-krunner-install not found", err=True)
+        sys.exit(1)
+    raise SystemExit(subprocess.call([sys.executable, str(helper)]))
+
+
 @voice_cmd.command("record-clone")
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
 def voice_record_clone(args: tuple[str, ...]) -> None:

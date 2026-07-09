@@ -58,6 +58,7 @@ layer) — never as a substitute for baseline `/chat`.
 | Trigger | How |
 |---|---|
 | **Keyboard** | **F20** (ASUS side button often remaps here) — bound via `aipc voice bind-hotkey` / `aipc-voice-bind-hotkey --shortcut F20` |
+| **KRunner (Spotlight)** | `aipc voice krunner-install` once, then **Alt+Space** (or Meta+Space) and type `aipc 你好` / `助理 问题` / `aipc` for voice/portal actions. Local closed-loop chat + optional TTS; does not change system volume. |
 | **Voice (always-on)** | `aipc-voice-wake.service` energy VAD: sustained speech energy → spawns `aipc-voice-once` as the desktop user (TTS/notify work). openWakeWord / custom wake phrase is future when models are installed. |
 | **CLI** | `aipc-voice-once --seconds 5` |
 

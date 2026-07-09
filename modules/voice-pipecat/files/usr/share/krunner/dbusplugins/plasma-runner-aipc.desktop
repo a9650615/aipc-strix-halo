@@ -1,0 +1,19 @@
+[Desktop Entry]
+Name=AIPC Assistant
+Name[zh_CN]=AIPC 助理
+Name[zh_TW]=AIPC 助理
+Comment=Local AI assistant (Spotlight-style) — aipc / 助理
+Comment[zh_CN]=本机 AI 助理 · 在 KRunner 输入 aipc 或 助理
+Comment[zh_TW]=本機 AI 助理 · 在 KRunner 輸入 aipc 或 助理
+Type=Service
+Icon=dialog-messages
+X-KDE-PluginInfo-Author=AIPC
+X-KDE-PluginInfo-Name=aipc_assistant
+X-KDE-PluginInfo-Version=1.0
+X-KDE-PluginInfo-License=MIT
+X-KDE-PluginInfo-EnabledByDefault=true
+X-Plasma-API=DBus
+X-Plasma-DBusRunner-Service=org.kde.aipc_assistant
+X-Plasma-DBusRunner-Path=/runner
+X-Plasma-Request-Actions-Once=true
+X-Plasma-Runner-Min-Letter-Count=2

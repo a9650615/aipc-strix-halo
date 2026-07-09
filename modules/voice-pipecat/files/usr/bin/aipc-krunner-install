@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Install AIPC KRunner plugin into the current user session (Spotlight-style)."""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_RUNNER = Path(__file__).resolve().parents[1] / "lib/aipc-voice/aipc_krunner_runner.py"
+SYSTEM_RUNNER = Path("/usr/lib/aipc-voice/aipc_krunner_runner.py")
+MODULE_RUNNER = Path(
+    "/var/home/birdyo/aipc-strix-halo/modules/voice-pipecat/files/usr/lib/aipc-voice/aipc_krunner_runner.py"
+)
+
+
+def _runner_src() -> Path:
+    for p in (SYSTEM_RUNNER, REPO_RUNNER, MODULE_RUNNER):
+        if p.is_file():
+            return p
+    raise SystemExit("aipc_krunner_runner.py not found")
+
+
+def main() -> int:
+    home = Path.home()
+    data = Path(os.environ.get("XDG_DATA_HOME", home / ".local/share"))
+    bin_dir = home / ".local/bin"
+    runner_dst = bin_dir / "aipc-krunner-runner"
+    desktop_dst = data / "krunner/dbusplugins/plasma-runner-aipc.desktop"
+    service_dst = data / "dbus-1/services/org.kde.aipc_assistant.service"
+
+    src = _runner_src()
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    desktop_dst.parent.mkdir(parents=True, exist_ok=True)
+    service_dst.parent.mkdir(parents=True, exist_ok=True)
+
+    shutil.copy2(src, runner_dst)
+    runner_dst.chmod(0o755)
+
+    desktop_src = (
+        Path(__file__).resolve().parents[1]
+        / "share/krunner/dbusplugins/plasma-runner-aipc.desktop"
+    )
+    if not desktop_src.is_file():
+        desktop_src = Path(
+            "/var/home/birdyo/aipc-strix-halo/modules/voice-pipecat/files/usr/share/krunner/dbusplugins/plasma-runner-aipc.desktop"
+        )
+    shutil.copy2(desktop_src, desktop_dst)
+
+    service_dst.write_text(
+        "[D-BUS Service]\n"
+        f"Name=org.kde.aipc_assistant\n"
+        f"Exec={sys.executable} {runner_dst}\n",
+        encoding="utf-8",
+    )
+
+    # Restart krunner so the plugin is picked up
+    for cmd in (
+        ["kquitapp6", "krunner"],
+        ["kquitapp", "krunner"],
+        ["killall", "krunner"],
+    ):
+        if shutil.which(cmd[0]):
+            subprocess.run(cmd, check=False, capture_output=True)
+            break
+
+    # User unit so the runner stays up (DBus activation alone is flaky).
+    unit_dir = home / ".config/systemd/user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    unit = unit_dir / "aipc-krunner.service"
+    unit.write_text(
+        "[Unit]\n"
+        "Description=AIPC KRunner DBus runner (Spotlight-style assistant)\n"
+        "After=graphical-session.target\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"ExecStart={sys.executable} {runner_dst}\n"
+        "Restart=on-failure\n"
+        "RestartSec=2\n"
+        "Environment=AIPC_KRUNNER_SPEAK=1\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=default.target\n",
+        encoding="utf-8",
+    )
+    for args in (
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable", "--now", "aipc-krunner.service"],
+    ):
+        subprocess.run(args, check=False, capture_output=True)
+
+    print(f"aipc-krunner-install: installed runner → {runner_dst}")
+    print(f"aipc-krunner-install: plugin → {desktop_dst}")
+    print(f"aipc-krunner-install: dbus → {service_dst}")
+    print(f"aipc-krunner-install: user unit → {unit}")
+    print("Open KRunner (Alt+Space) and type:  aipc 你好   or   助理 打开面板")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

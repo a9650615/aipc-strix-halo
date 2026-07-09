@@ -34,6 +34,7 @@ HELPERS: dict[str, str] = {
     "bind-hotkey": "aipc-voice-bind-hotkey",
     "record-clone": "aipc-voice-record-clone",
     "status-script": "aipc-voice-status",
+    "krunner-install": "aipc-krunner-install",
 }
 
 
