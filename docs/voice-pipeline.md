@@ -41,8 +41,9 @@ If KDE global-shortcut tools are missing or no desktop session is active, the he
 **Backend:** `aipc-kokoro` container — `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4`
 on **:8880** (OpenAI `/v1/audio/speech`).
 
-**Chinese (default):** voice `zf_xiaoxiao` (override `AIPC_TTS_VOICE_ZH`).
-Other Mandarin packs: `zf_xiaobei`, `zf_xiaoni`, `zf_xiaoyi`, `zm_yunjian`, …
+**Chinese (default):** voice `zf_xiaoyi` (override `AIPC_TTS_VOICE_ZH`).
+Other Mandarin packs: `zf_xiaoxiao`, `zf_xiaobei`, `zf_xiaoni`, `zm_yunjian`, …
+(All mainland Mandarin; not Taiwanese accent.)
 **English:** `af_heart` (`AIPC_TTS_VOICE_EN`).
 
 `aipc_voice_tts.speak()` routes by CJK density, requests WAV, plays with
@@ -55,7 +56,7 @@ curl -sS http://127.0.0.1:8880/v1/audio/voices | head
 # Chinese sample
 curl -sS -X POST http://127.0.0.1:8880/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"kokoro","voice":"zf_xiaoxiao","input":"你好","response_format":"wav"}' \
+  -d '{"model":"kokoro","voice":"zf_xiaoyi","input":"你好","response_format":"wav"}' \
   -o /tmp/zh.wav && paplay /tmp/zh.wav
 aipc-voice-once --seconds 5
 ```

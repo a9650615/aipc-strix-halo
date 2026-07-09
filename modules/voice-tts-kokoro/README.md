@@ -10,13 +10,14 @@ Kokoro ships **dedicated Mandarin voice packs** (not espeak phoneme hacks):
 
 | Voice | Style (typical) |
 |---|---|
-| **`zf_xiaoxiao`** | Default female Mandarin — natural conversational |
-| `zf_xiaobei` / `zf_xiaoni` / `zf_xiaoyi` | Alternate female |
+| **`zf_xiaoyi`** | Default female Mandarin — clearer / more assistant-like |
+| `zf_xiaoxiao` / `zf_xiaobei` / `zf_xiaoni` | Alternate female (still mainland Mandarin packs) |
 | `zm_yunjian` / `zm_yunxi` / `zm_yunxia` / `zm_yunyang` | Male Mandarin |
 
 `aipc_voice_tts.choose_voice()` routes any utterance with ≥12% CJK codepoints
-(or ≥2 CJK chars) to `AIPC_TTS_VOICE_ZH` (default **`zf_xiaoxiao`**). English
-uses `af_heart`. Override anytime with `AIPC_TTS_VOICE=zf_xiaoxiao`.
+(or ≥2 CJK chars) to `AIPC_TTS_VOICE_ZH` (default **`zf_xiaoyi`**). English
+uses `af_heart`. Override anytime with `AIPC_TTS_VOICE=zf_xiaoni` etc.
+All `zf_*`/`zm_*` packs are mainland Mandarin training data — not Taiwanese.
 
 Mixed 中英 text is synthesized with the Chinese voice so Mandarin prosody wins
 (what you want for this product).

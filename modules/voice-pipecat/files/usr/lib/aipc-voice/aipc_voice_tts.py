@@ -22,7 +22,9 @@ TTS_TIMEOUT = float(os.environ.get("AIPC_TTS_TIMEOUT", "90"))
 
 # Kokoro voice packs (see GET /v1/audio/voices). zf_* / zm_* = Mandarin.
 VOICE_EN = os.environ.get("AIPC_TTS_VOICE_EN", "af_heart")
-VOICE_ZH = os.environ.get("AIPC_TTS_VOICE_ZH", "zf_xiaoxiao")
+# zf_xiaoyi: clearer / more "assistant" than soft mainland-broadcast xiaoxiao.
+# Override with AIPC_TTS_VOICE_ZH=zf_xiaoni|zf_xiaobei|zf_xiaoxiao|zm_yunxi …
+VOICE_ZH = os.environ.get("AIPC_TTS_VOICE_ZH", "zf_xiaoyi")
 MODEL = os.environ.get("AIPC_TTS_MODEL", "kokoro")
 
 _CJK_RE = re.compile(r"[㐀-鿿豈-﫿]")
