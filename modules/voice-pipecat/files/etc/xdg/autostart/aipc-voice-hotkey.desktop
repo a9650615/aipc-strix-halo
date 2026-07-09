@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=AIPC Voice Hotkey Binder
+Exec=/usr/bin/aipc-voice-bind-hotkey
+Terminal=false
+OnlyShowIn=KDE;
+X-GNOME-Autostart-enabled=true

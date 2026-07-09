@@ -1,0 +1,13 @@
+[Unit]
+Description=aipc voice mute flag (paired with aipc-voice-mute.target)
+BindsTo=aipc-voice-mute.target
+After=aipc-voice-mute.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'mkdir -p /run/aipc && touch /run/aipc/voice-mute'
+ExecStop=/bin/rm -f /run/aipc/voice-mute
+
+[Install]
+WantedBy=aipc-voice-mute.target

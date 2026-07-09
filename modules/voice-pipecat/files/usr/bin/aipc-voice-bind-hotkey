@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Bind AIPC voice push-to-talk in the current desktop session."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from collections.abc import Mapping
+from pathlib import Path
+
+DEFAULT_SHORTCUT = "Meta+Space"
+DEFAULT_COMMAND = "/usr/bin/aipc-voice-once"
+DESKTOP_FILE = Path.home() / ".local/share/applications/aipc-voice-once.desktop"
+HOTKEY_FILE = Path("/etc/aipc/voice/hotkey")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--shortcut", default=None)
+    parser.add_argument("--command", default=DEFAULT_COMMAND)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--self-test", action="store_true")
+    return parser
+
+
+def _desktop_entry_text(command: str) -> str:
+    return (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=AIPC Voice Assistant\n"
+        f"Exec={command}\n"
+        "Terminal=false\n"
+        "Categories=Utility;\n"
+    )
+
+
+def _qdbus_bin() -> str | None:
+    return (
+        shutil.which("qdbus6")
+        or shutil.which("qdbus-qt6")
+        or shutil.which("qdbus")
+    )
+
+
+def _qt_key_for_shortcut(shortcut: str) -> int | None:
+    """Map common shortcuts to Qt key codes for KGlobalAccel.setShortcut."""
+    s = shortcut.strip()
+    if s.upper().startswith("F") and s[1:].isdigit():
+        n = int(s[1:])
+        if 1 <= n <= 35:
+            return 0x01000030 + (n - 1)  # Qt::Key_F1 …
+    if s in ("Meta+Space", "Super+Space"):
+        return 0x20 | 0x08000000  # Key_Space | MetaModifier
+    return None
+
+
+def _register_shortcut_dbus(shortcut: str) -> bool:
+    """Plasma 6: reloadConfig is gone — register via setShortcut on session bus."""
+    key = _qt_key_for_shortcut(shortcut)
+    if key is None:
+        return False
+    try:
+        import dbus  # type: ignore
+    except ImportError:
+        return False
+    try:
+        bus = dbus.SessionBus()
+        obj = bus.get_object("org.kde.kglobalaccel", "/kglobalaccel")
+        iface = dbus.Interface(obj, "org.kde.KGlobalAccel")
+        action_id = dbus.Array(
+            [
+                dbus.String("services"),
+                dbus.String("aipc-voice-once.desktop"),
+                dbus.String(""),
+                dbus.String(""),
+            ],
+            signature="s",
+        )
+        iface.doRegister(action_id)
+        keys = dbus.Array([dbus.Int32(key)], signature="i")
+        iface.setShortcut(action_id, keys, dbus.UInt32(0))
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-voice-bind-hotkey: dbus setShortcut failed: {exc}", file=sys.stderr)
+        return False
+
+
+def _shortcut_commands(shortcut: str) -> list[list[str]]:
+    return [
+        [
+            "kwriteconfig6",
+            "--file",
+            "kglobalshortcutsrc",
+            "--group",
+            "services",
+            "--key",
+            "aipc-voice-once.desktop",
+            f"{shortcut},none,AIPC Voice Assistant",
+        ],
+    ]
+
+
+def _shortcut_from_file(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    for line in path.read_text().splitlines():
+        shortcut = line.strip()
+        if shortcut and not shortcut.startswith("#"):
+            return shortcut
+    return None
+
+
+def _choose_shortcut(
+    cli_shortcut: str | None,
+    config_path: Path = HOTKEY_FILE,
+    env: Mapping[str, str] = os.environ,
+) -> str:
+    if cli_shortcut:
+        return cli_shortcut
+    env_shortcut = env.get("AIPC_VOICE_SHORTCUT", "").strip()
+    if env_shortcut:
+        return env_shortcut
+    file_shortcut = _shortcut_from_file(config_path)
+    if file_shortcut:
+        return file_shortcut
+    return DEFAULT_SHORTCUT
+
+
+def _write_desktop_file(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def _missing_tools() -> list[str]:
+    missing: list[str] = []
+    if shutil.which("kwriteconfig6") is None:
+        missing.append("kwriteconfig6")
+    return missing
+
+
+def _self_test() -> int:
+    desktop_text = _desktop_entry_text(DEFAULT_COMMAND)
+    assert f"Exec={DEFAULT_COMMAND}" in desktop_text
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "hotkey"
+        config_path.write_text("\n# comment\nF20\n")
+        missing_path = Path(tmpdir) / "missing"
+
+        assert _shortcut_from_file(config_path) == "F20"
+        assert _shortcut_from_file(missing_path) is None
+        assert _choose_shortcut("Ctrl+Alt+V", config_path, {}) == "Ctrl+Alt+V"
+        assert _choose_shortcut(None, config_path, {"AIPC_VOICE_SHORTCUT": "Meta+V"}) == "Meta+V"
+        assert _choose_shortcut(None, config_path, {}) == "F20"
+        assert _choose_shortcut(None, missing_path, {}) == DEFAULT_SHORTCUT
+
+        cmds = _shortcut_commands(_choose_shortcut(None, config_path, {}))
+        assert cmds[0][0] == "kwriteconfig6"
+        assert "aipc-voice-once.desktop" in cmds[0]
+        assert "F20" in cmds[0][-1]
+        assert _qt_key_for_shortcut("F20") == 0x01000030 + 19
+
+    print("aipc-voice-bind-hotkey: self-test OK")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.self_test:
+        return _self_test()
+
+    selected_shortcut = _choose_shortcut(args.shortcut)
+    desktop_text = _desktop_entry_text(args.command)
+    cmds = _shortcut_commands(selected_shortcut)
+    missing = _missing_tools()
+    has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+    if args.dry_run or missing or not has_display:
+        print(f"write {DESKTOP_FILE}")
+        for cmd in cmds:
+            print(" ".join(cmd))
+        if missing:
+            print(
+                f"aipc-voice-bind-hotkey: missing desktop tools: {', '.join(missing)}",
+                file=sys.stderr,
+            )
+            return 2
+        if not has_display:
+            print(
+                "aipc-voice-bind-hotkey: DISPLAY/WAYLAND_DISPLAY not set; "
+                "run inside the desktop session",
+                file=sys.stderr,
+            )
+            return 2
+        # dry-run with tools present
+        return 0
+
+    _write_desktop_file(DESKTOP_FILE, desktop_text)
+    try:
+        subprocess.run(cmds[0], check=True)
+    except subprocess.CalledProcessError as exc:
+        print(f"aipc-voice-bind-hotkey: desktop binding failed: {exc}", file=sys.stderr)
+        return 2
+    # Apply live without logout (Plasma 6 KGlobalAccel).
+    if _register_shortcut_dbus(selected_shortcut):
+        print(f"aipc-voice-bind-hotkey: bound {selected_shortcut} to {args.command} (live)")
+    else:
+        print(
+            f"aipc-voice-bind-hotkey: wrote {selected_shortcut} → {args.command}; "
+            "if inactive, re-run inside the desktop session or check System Settings → Shortcuts",
+            file=sys.stderr,
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

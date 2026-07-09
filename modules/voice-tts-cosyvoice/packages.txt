@@ -1,1 +1,3 @@
-# TTS runs in container via Lemonade
+# CosyVoice runs from a runtime Python venv under
+# /var/lib/aipc-voice/cosyvoice/venv (created after first boot / manual
+# install). No host RPM packages required at image build time.

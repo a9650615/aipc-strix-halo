@@ -1,0 +1,22 @@
+# Override stock flw1: side/Command-Center style Prog3 -> F20 for AIPC voice
+version: 1
+kind: CapabilityMap
+name: ROG Flow Z13 (2025) AIPC voice F20
+id: flw1
+mapping:
+  - name: Armoury / Command Center button -> F20 (AIPC voice)
+    source_events:
+      - keyboard: KeyProg3
+    target_event:
+      keyboard: KeyF20
+  - name: Prog1 fallback -> F20
+    source_events:
+      - keyboard: KeyProg1
+    target_event:
+      keyboard: KeyF20
+  - name: Prog2 fallback -> F20
+    source_events:
+      - keyboard: KeyProg2
+    target_event:
+      keyboard: KeyF20
+filtered_events: []

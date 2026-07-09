@@ -22,8 +22,8 @@ The 128 GB unified memory is the defining capability — large LLMs (70B-class Q
 
 ## 2. Goals
 
-1. **Always-on local AI assistant** — voice-callable wake word → STT → LLM → TTS pipeline that runs 24/7 on NPU/iGPU.
-2. **Persistent intelligence** — RAG over personal documents, code, browser, screen, and email/calendar; long-term memory of facts, preferences, and conversations via mem0.
+1. **Always-on local AI assistant (closed loop)** — hear → think → speak → remember → manage as one product loop, not a pile of CLIs. Standing baseline: SenseVoice (STT) → `resident-small` via LiteLLM `/chat` → Kokoro (TTS) + mem0, with localhost portal for status and voice “open dashboard”. Heavy agent/122B models are optional role layers on top. Details: `docs/voice-pipeline.md`.
+2. **Persistent intelligence** — RAG over personal documents, code, browser, screen, and email/calendar; long-term memory of facts, preferences, and conversations via mem0 (part of the always-on closed loop).
 3. **Capable agent layer** — multi-agent orchestration (code/shell, browser, screen-control, file/calendar) coordinated by LangGraph, with broad tool surface via MCP.
 4. **First-class gaming** — SteamOS-equivalent gamescope session, AI overlay callable by voice for game strategy assistance.
 5. **Developer rig** — VSCode + Zed + Neovim; Node + Python distrobox; Continue.dev + Cline + Aider + Goose + Claude Code, all sharing one LiteLLM gateway, giving a Claude-Code-equivalent local experience.
@@ -192,28 +192,43 @@ modules/<name>/
 | `rag-ingest` | Watcher daemons: desktop docs, code repos, browser, screen+OCR, email+calendar |
 | `memory-mem0` | mem0 server, LiteLLM integration |
 
-### Phase 3 — Voice
+### Phase 3 — Voice (closed loop + peers)
+
+Standing **closed loop** (always-on; not torn down by `aipc models use`):
+
+```text
+mic → SenseVoice :9001 → local intent (e.g. open portal) OR /chat :4100
+      (resident-small via LiteLLM :4000 + mem0 :7000) → Kokoro :8880 TTS
+      + notify · manage UI: system-aipc-portal :7080
+```
 
 | Module | Purpose |
 |---|---|
-| `voice-pipecat` | Pipecat orchestrator + pipeline config |
+| `voice-pipecat` | One-shot loop client (`aipc-voice-once`), hotkey, local intents, TTS router |
 | `voice-wake` | openWakeWord (NPU, ONNX) + wake-word training docs |
-| `voice-stt-sensevoice` | SenseVoice-Small service (short utterance) |
+| `voice-stt-sensevoice` | SenseVoice-Small service (short utterance) — **hear** |
 | `voice-stt-paraformer` | Paraformer-zh-streaming service (long / dictation) |
-| `voice-tts-cosyvoice` | CosyVoice 2 service (Chinese TTS) |
-| `voice-tts-kokoro` | Kokoro / Piper service (English / fallback) |
+| `voice-tts-cosyvoice` | CosyVoice 2 service (Chinese clone TTS; preferred when ready) |
+| `voice-tts-kokoro` | Kokoro service (English + Chinese fallback) — **speak** |
+| `system-aipc-portal` | Localhost management homepage (`aipc portal`) — **manage** |
+
+Control plane: `aipc voice status|loop|start`, `aipc portal open`,  
+`aipc models use agent|122b|free` (heavy LLMs only).  
+
+Canonical write-up: **`docs/voice-pipeline.md`** (closed-loop diagram, baseline table, voice→dashboard phrases).
 
 ### Phase 4 — Agent
 
 | Module | Purpose |
 |---|---|
-| `agent-orchestrator` | LangGraph daemon + graph definitions |
+| `agent-orchestrator` | LangGraph `/chat` entry for the voice loop; default model `resident-small` (`AIPC_SUPERVISOR_MODEL` override); mem0 recall/remember |
 | `agent-code-shell` | Open Interpreter wrapper |
 | `agent-browser` | browser-use + Playwright |
 | `agent-screen-control` | Qwen2-VL + xdotool/ydotool + window blacklist + session gate |
 | `agent-tools-files` | File system tools |
 | `agent-tools-calendar` | Calendar + Email (CalDAV / IMAP) tools |
 | `agent-tools-search` | SearXNG self-host + search tool |
+| `agent-tools-usage` | AI coding usage/quota lookup for Daily Assistant (`usage_lookup`) |
 | `agent-mcp-gateway` | MCP server registry + gateway daemon |
 | `agent-gate` | Permission gate: grant/revoke/check/audit for risky actions (UNIX-socket RPC, `aipc-agent-gate.service`) |
 
@@ -238,6 +253,8 @@ modules/<name>/
 | `dev-ai-goose` | Goose → LiteLLM + MCP config |
 | `dev-ai-claude-code` | Claude Code CLI |
 | `dev-ai-opencode` | OpenCode CLI → LiteLLM config |
+| `dev-ai-codexbar-usage` | CodexBar Python port — `aipc-usage` / `aipc usage show|cost|serve` provider windows |
+| `dev-ai-codexbar-gui` | CodexBar PySide6 tray GUI — polls local usage HTTP server |
 | `ccs` | CCS — multi-provider Claude Code/Codex/Droid switcher, `aipc` profile → LiteLLM |
 | `dev-ai-mcp-dev-servers` | GitHub / FS / Playwright MCP servers (disabled, blocked on phase-4-agent) |
 

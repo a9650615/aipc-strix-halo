@@ -1,0 +1,53 @@
+# Multi-site web engine config. Same Playwright Chromium; one pack per site.
+# Setup can be guided by local LLM + these declarations (no hard-coded single site).
+
+default_site: chatgpt
+
+engine:
+  kind: playwright-chromium
+  cdp_port: 9222
+  # Shared browser process; per-site profile under data_root/sites/<id>/
+  # Default headless so automation never steals the desktop. Interactive
+  # login forces headed via AIPC_WEB_HEADED=1 or `auth login`.
+  headless: true
+  locale: zh-TW
+
+# Setup judge: always NPU-resident model (no Vulkan 35B required)
+setup:
+  use_llm: true
+  model: resident-small
+  litellm_base: http://127.0.0.1:4000/v1
+  # json_content only — NPU FLM may reject tools API
+  prompt_style: json_content
+
+sites:
+  chatgpt:
+    enabled: true
+    title: ChatGPT
+    url: https://chatgpt.com/
+    # Site pack Python path (Site adapter)
+    pack: aipc_chatgpt.sites.chatgpt
+    auth:
+      # login is interactive in browser; we only store session
+      method: interactive_browser
+      detect: pack  # use pack.is_logged_in()
+    capabilities:
+      - inject_text
+      - voice
+      - session_export
+    # First-run hints (also fed to LLM setup judge)
+    setup_hints:
+      - "需要 Plus/訂閱帳號才能用 Voice"
+      - "登入後 session 存於本機 profile，不存密碼"
+
+  # Example stubs — enable when packs exist
+  # claude:
+  #   enabled: false
+  #   title: Claude
+  #   url: https://claude.ai/
+  #   pack: aipc_chatgpt.sites.claude
+  # gemini:
+  #   enabled: false
+  #   title: Gemini
+  #   url: https://gemini.google.com/
+  #   pack: aipc_chatgpt.sites.gemini

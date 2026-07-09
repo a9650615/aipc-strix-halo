@@ -5,6 +5,14 @@ import yaml
 from aipc_lib.modules import Module
 
 
+def _has_hwdb(mods: list[Module]) -> bool:
+    for m in mods:
+        hwdb_dir = m.path / "files/etc/udev/hwdb.d"
+        if hwdb_dir.is_dir() and any(hwdb_dir.glob("*.hwdb")):
+            return True
+    return False
+
+
 def render(mods: list[Module]) -> str:
     tasks: list[dict] = []
 
@@ -80,6 +88,12 @@ def render(mods: list[Module]) -> str:
                 "name": f"Run post-install for {m.name}",
                 "script": f"modules/{m.name}/post-install.sh",
             })
+
+    if _has_hwdb(mods):
+        tasks.append({
+            "name": "Update systemd hwdb",
+            "shell": "systemd-hwdb update",
+        })
 
     play = [{"hosts": "aipc", "become": True, "tasks": tasks}]
     return yaml.dump(play, default_flow_style=False, sort_keys=False)

@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Toggle aipc-voice-mute.target on screen lock / unlock (KDE + freedesktop)."""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+
+
+def set_mute(active: bool) -> None:
+    action = "start" if active else "stop"
+    subprocess.run(
+        ["systemctl", action, "aipc-voice-mute.target"],
+        check=False,
+        capture_output=True,
+    )
+
+
+def main() -> int:
+    # Prefer gdbus monitor of screensaver ActiveChanged on session bus.
+    # Works for org.freedesktop.ScreenSaver and org.gnome.ScreenSaver.
+    cmd = [
+        "gdbus",
+        "monitor",
+        "--session",
+        "--dest",
+        "org.freedesktop.ScreenSaver",
+        "--object-path",
+        "/org/freedesktop/ScreenSaver",
+    ]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except FileNotFoundError:
+        print("aipc-voice-mute-screenlock: gdbus missing", file=sys.stderr)
+        return 1
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        # signal lines contain ActiveChanged and boolean
+        if "ActiveChanged" not in line:
+            continue
+        low = line.lower()
+        if "true" in low:
+            set_mute(True)
+        elif "false" in low:
+            set_mute(False)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

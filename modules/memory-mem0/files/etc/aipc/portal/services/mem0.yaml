@@ -1,0 +1,10 @@
+id: mem0
+title: Mem0 Memory
+module: memory-mem0
+kind: memory
+systemd: aipc-mem0.service
+health: http://127.0.0.1:7000/healthz
+endpoint: http://127.0.0.1:7000
+tags:
+  - memory
+  - baseline

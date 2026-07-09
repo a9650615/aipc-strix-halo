@@ -1,1 +1,3 @@
-# TTS runs in container
+# Kokoro runs in a container; host only needs a player for the client.
+# espeak-ng remains the silent-failure fallback in aipc_voice_tts.
+espeak-ng

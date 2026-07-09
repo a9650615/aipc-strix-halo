@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Record or clean a CosyVoice clone reference sample (16 kHz mono WAV)."""
+
+from __future__ import annotations
+
+import argparse
+import array
+import shutil
+import subprocess
+import sys
+import wave
+from pathlib import Path
+
+DEFAULT_OUT = Path("/var/lib/aipc-voice/persona/clone.wav")
+SAMPLES = Path.home() / "aipc-voice-samples"
+
+
+def _level(path: Path) -> tuple[int, float, int]:
+    with wave.open(str(path), "rb") as w:
+        data = w.readframes(w.getnframes())
+    samples = array.array("h")
+    samples.frombytes(data)
+    if not samples:
+        return 0, 0.0, 0
+    peak = max(abs(s) for s in samples)
+    rms = (sum(s * s for s in samples) / len(samples)) ** 0.5
+    clipped = sum(1 for s in samples if abs(s) >= 32000)
+    return peak, rms, clipped
+
+
+def _run(cmd: list[str]) -> None:
+    subprocess.run(cmd, check=True)
+
+
+def record(seconds: int, out: Path, mic_percent: int) -> Path:
+    SAMPLES.mkdir(parents=True, exist_ok=True)
+    raw = SAMPLES / f"clone-record-{seconds}s.wav"
+    # lower mic gain if pactl available
+    if shutil.which("pactl"):
+        subprocess.run(
+            ["pactl", "set-source-volume", "@DEFAULT_SOURCE@", f"{mic_percent}%"],
+            check=False,
+        )
+    print(f"Recording {seconds}s → {raw} (mic ~{mic_percent}%)", flush=True)
+    for i in range(3, 0, -1):
+        print(f"  {i}...", flush=True)
+        subprocess.run(["sleep", "1"], check=False)
+    _run(["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", str(seconds), str(raw)])
+    peak, rms, clipped = _level(raw)
+    print(f"levels peak={peak} rms={rms:.1f} clipped={clipped}")
+    if peak < 500:
+        print("WARNING: very quiet — move closer or raise mic", file=sys.stderr)
+    if clipped > 50:
+        print("WARNING: clipping — lower mic or speak softer", file=sys.stderr)
+    return raw
+
+
+def clean(src: Path, dest: Path) -> Path:
+    """Mild denoise + loudnorm for clone reference (keeps timbre for CosyVoice)."""
+    SAMPLES.mkdir(parents=True, exist_ok=True)
+    tmp = SAMPLES / "clone-cleaned-mild.wav"
+    if shutil.which("ffmpeg"):
+        _run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(src),
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-af",
+                "highpass=f=80,lowpass=f=8000,afftdn=nf=-20:nr=8:nt=w,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=16000",
+                "-c:a",
+                "pcm_s16le",
+                str(tmp),
+            ]
+        )
+    else:
+        shutil.copy(src, tmp)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # may need root for /var/lib path
+    try:
+        shutil.copy(tmp, dest)
+    except PermissionError:
+        subprocess.run(["sudo", "cp", str(tmp), str(dest)], check=True)
+        subprocess.run(["sudo", "chmod", "644", str(dest)], check=False)
+    peak, rms, clipped = _level(dest if dest.is_file() else tmp)
+    print(f"staged {dest} peak={peak} rms={rms:.1f} clipped={clipped}")
+    return dest
+
+
+def extract_video(video: Path, dest: Path) -> Path:
+    SAMPLES.mkdir(parents=True, exist_ok=True)
+    raw = SAMPLES / "from-video-raw.wav"
+    _run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            str(raw),
+        ]
+    )
+    return clean(raw, dest)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--seconds", type=int, default=8)
+    ap.add_argument("--mic-percent", type=int, default=50, help="pactl source volume during record")
+    ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ap.add_argument("--from-video", type=Path, default=None)
+    ap.add_argument("--from-wav", type=Path, default=None)
+    ap.add_argument("--clean-only", type=Path, default=None, help="clean existing wav into --out")
+    ap.add_argument("--play", action="store_true")
+    args = ap.parse_args()
+
+    if args.clean_only:
+        path = clean(args.clean_only, args.out)
+    elif args.from_video:
+        path = extract_video(args.from_video, args.out)
+    elif args.from_wav:
+        path = clean(args.from_wav, args.out)
+    else:
+        if not shutil.which("arecord"):
+            print("arecord missing", file=sys.stderr)
+            return 1
+        raw = record(args.seconds, args.out, args.mic_percent)
+        path = clean(raw, args.out)
+
+    if args.play and shutil.which("paplay"):
+        subprocess.run(["paplay", str(path)], check=False)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

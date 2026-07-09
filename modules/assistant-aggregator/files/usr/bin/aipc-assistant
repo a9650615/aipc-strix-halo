@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""Unified entry into the aipc assistant aggregator (text + mode + status)."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+def _ensure_path() -> None:
+    candidates = [
+        Path("/usr/lib/aipc_assistant"),
+        Path(__file__).resolve().parents[1] / "lib" / "aipc_assistant",
+        Path(__file__).resolve().parents[2]
+        / "lib"
+        / "aipc_assistant",  # files/usr/lib/aipc_assistant when run from module tree
+    ]
+    # module tree: files/usr/bin → files/usr/lib/aipc_assistant
+    mod_lib = Path(__file__).resolve().parent.parent / "lib" / "aipc_assistant"
+    candidates.insert(0, mod_lib)
+    for c in candidates:
+        if c.is_dir() and str(c.parent) not in sys.path:
+            # package dir is aipc_assistant; parent must be on path
+            parent = str(c.parent)
+            if parent not in sys.path:
+                sys.path.insert(0, parent)
+            # Also support layout where aipc_assistant is the package root named folder
+            if str(c) not in sys.path and (c / "__init__.py").exists():
+                # parent of package
+                if str(c.parent) not in sys.path:
+                    sys.path.insert(0, str(c.parent))
+
+
+def main(argv: list[str] | None = None) -> int:
+    _ensure_path()
+    from aipc_assistant.pipeline import run_turn, status_dict
+    from aipc_assistant.slots import mode as mode_slot
+    from aipc_assistant.types import TurnRequest
+
+    p = argparse.ArgumentParser(
+        prog="aipc-assistant",
+        description="aipc 助理聚合器（文字/語音統一入口）",
+        epilog="首次使用：aipc-assistant setup    網上：aipc-assistant setup --online",
+    )
+    sub = p.add_subparsers(dest="cmd")
+
+    p.add_argument("--text", "-t", help="user text (turn)")
+    p.add_argument("--stdin", action="store_true", help="read text from stdin")
+    p.add_argument("--modality", choices=("text", "voice"), default="text")
+    p.add_argument("--prefer", choices=("auto", "local", "online"), default="auto")
+    p.add_argument("--session-id", default=None)
+    p.add_argument("--json", action="store_true", help="print TurnResponse as JSON")
+    p.add_argument("--self-test", action="store_true")
+
+    sp_mode = sub.add_parser("mode", help="get/set assistant mode")
+    sp_mode.add_argument("value", nargs="?", choices=("local", "online", "get"))
+
+    sp_status = sub.add_parser("status", help="aggregator status")
+    sp_status.add_argument(
+        "--human", "-H", action="store_true", help="friendly checklist (default if tty)"
+    )
+    sp_status.add_argument("--json", action="store_true", help="force JSON")
+
+    sp_feat = sub.add_parser("feature", help="list feature packs")
+    sp_feat.add_argument("feat_cmd", nargs="?", default="list", choices=("list",))
+
+    sp_setup = sub.add_parser("setup", help="首次使用引導（檢查/裝引擎/登入）")
+    sp_setup.add_argument(
+        "--online",
+        action="store_true",
+        help="一併設定網上 ChatGPT（Playwright + 登入）",
+    )
+    sp_setup.add_argument(
+        "--skip-login",
+        action="store_true",
+        help="只檢查/裝引擎，不開登入窗",
+    )
+    sp_setup.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="少互動（仍可能需要你在瀏覽器登入）",
+    )
+    sp_setup.add_argument(
+        "--check-only",
+        action="store_true",
+        help="只顯示檢查表，不執行安裝/登入",
+    )
+
+    args = p.parse_args(argv)
+
+    if args.self_test:
+        return _self_test()
+
+    if args.cmd == "mode":
+        if not args.value or args.value == "get":
+            print(mode_slot.get_mode())
+            return 0
+        print(mode_slot.set_mode(args.value))
+        return 0
+
+    if args.cmd == "setup":
+        from aipc_assistant.onboarding import diagnose, format_report, run_wizard
+
+        if args.check_only:
+            print(format_report(diagnose()))
+            return 0
+        return run_wizard(
+            online=args.online,
+            skip_login=args.skip_login,
+            non_interactive=args.yes,
+        )
+
+    if args.cmd == "status":
+        from aipc_assistant.onboarding import diagnose, format_report, is_first_run
+
+        want_json = args.json or (not sys.stdout.isatty() and not args.human)
+        if args.human or (sys.stdout.isatty() and not args.json):
+            print(format_report(diagnose()))
+            if is_first_run():
+                print()
+                print("提示：第一次用請執行  aipc-assistant setup")
+                print("      要用 ChatGPT： aipc-assistant setup --online")
+            if args.json:
+                print()
+                print(json.dumps(status_dict(), ensure_ascii=False, indent=2))
+            return 0
+        print(json.dumps(status_dict(), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.cmd == "feature":
+        from aipc_assistant.paths import features_path
+
+        path = features_path()
+        if path.is_file():
+            print(path.read_text(encoding="utf-8"))
+        else:
+            print("features.yaml missing", file=sys.stderr)
+            return 1
+        return 0
+
+    text = args.text or ""
+    if args.stdin or (not text and not sys.stdin.isatty() and args.cmd is None):
+        text = sys.stdin.read()
+
+    if not text.strip() and args.cmd is None and not args.text:
+        from aipc_assistant.onboarding import diagnose, format_report, is_first_run
+
+        # Bare invoke: friendly landing instead of raw argparse help
+        print(format_report(diagnose()))
+        print()
+        if is_first_run():
+            print("第一次？直接跑：  aipc-assistant setup")
+            print("要網上助理：      aipc-assistant setup --online")
+        else:
+            print("用法：")
+            print('  aipc-assistant --text "你好"')
+            print("  aipc-assistant mode local|online")
+            print("  aipc-assistant status")
+            print("  aipc-assistant setup [--online]")
+        return 0
+
+    # Soft tip on first online prefer
+    if args.prefer == "online" or mode_slot.get_mode() == "online":
+        from aipc_assistant.onboarding import is_first_run
+
+        if is_first_run() and not args.json:
+            print(
+                "（首次網上使用建議先：aipc-assistant setup --online）",
+                file=sys.stderr,
+            )
+
+    resp = run_turn(
+        TurnRequest(
+            modality=args.modality,
+            text=text,
+            session_id=args.session_id,
+            prefer=args.prefer,
+        )
+    )
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "text": resp.text,
+                    "mode_used": resp.mode_used,
+                    "backend": resp.backend,
+                    "error": resp.error,
+                    "actions": [
+                        {"name": a.name, "source": a.source, "confidence": a.confidence}
+                        for a in resp.actions
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        if resp.error:
+            print(resp.error, file=sys.stderr)
+            return 1
+        print(resp.text)
+    return 1 if resp.error else 0
+
+
+def _self_test() -> int:
+    _ensure_path()
+    from aipc_assistant.registry import bootstrap_builtin, list_packs
+    from aipc_assistant.slots import keywords as kw
+    from aipc_assistant.slots import mode as mode_slot
+    from aipc_assistant.types import ALLOWED_ACTIONS
+
+    assert "session_close" in ALLOWED_ACTIONS
+    m = mode_slot.get_mode()
+    assert m in ("local", "online")
+    acts = kw.match_actions("請結束語音謝謝", role="user")
+    assert any(a.name == "session_close" for a in acts), acts
+    acts2 = kw.match_actions("hello world", role="user")
+    assert acts2 == []
+    bootstrap_builtin()
+    assert len(list_packs()) >= 5
+    from aipc_assistant.backends import local as local_be
+    from aipc_assistant.onboarding import diagnose, format_report
+
+    r = diagnose()
+    assert r.checks
+    assert "aipc" in format_report(r).lower() or "助理" in format_report(r)
+    # NPU probe must not throw
+    local_be.npu_reachable()
+    print("aipc-assistant self-test ok")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

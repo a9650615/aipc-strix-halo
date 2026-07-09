@@ -1,0 +1,20 @@
+[Unit]
+Description=aipc voice wake listener (openWakeWord or energy VAD)
+After=sound.target network-online.target
+# Pause when mute target is active (start mute → stop wake).
+Conflicts=aipc-voice-mute.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/lib/aipc-voice/aipc_voice_wake.py --mode auto
+Environment=AIPC_VOICE_ONCE=/usr/bin/aipc-voice-once
+Environment=AIPC_VOICE_MUTE_FLAG=/run/aipc/voice-mute
+Environment=AIPC_WAKE_MODEL=/var/lib/aipc-voice/wake/user-model.onnx
+Restart=on-failure
+RestartSec=2
+# Recreate after mute target drops (Conflicts stopped us).
+# Companion path unit / user can systemctl start this again; also:
+ExecStartPre=/bin/mkdir -p /var/lib/aipc-voice/wake /run/aipc
+
+[Install]
+WantedBy=default.target

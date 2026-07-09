@@ -1,0 +1,11 @@
+id: lemonade
+title: Lemonade (NPU/ROCm)
+module: llm-lemonade
+kind: llm
+systemd: lemonade.service
+health: http://127.0.0.1:8001/api/v0/health
+endpoint: http://127.0.0.1:8001
+tags:
+  - llm
+  - npu
+  - baseline

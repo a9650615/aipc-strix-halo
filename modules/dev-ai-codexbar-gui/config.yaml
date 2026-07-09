@@ -1,0 +1,14 @@
+# codexbar-gui defaults
+
+# HTTP server host and port (shared with aipc-usage serve).
+server_host: 127.0.0.1
+server_port: 8080
+
+# Refresh interval in seconds (how often to poll the server).
+refresh_interval_seconds: 60
+
+# Providers to show by default (empty = all from registry).
+visible_providers: []
+
+# Auto-start the HTTP server on app launch.
+auto_start_server: true

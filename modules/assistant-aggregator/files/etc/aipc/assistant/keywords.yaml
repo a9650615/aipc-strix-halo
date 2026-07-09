@@ -1,0 +1,36 @@
+# Deterministic control fallback (and v0 primary until control_model is on).
+# on: user | both  — default user-only when applied to online transcript.
+rules:
+  - id: end-session
+    match:
+      - "結束語音"
+      - "關掉語音"
+      - "結束通話"
+      - "關閉助理"
+      - "關掉視窗"
+      - "stop voice"
+      - "end voice"
+    on: user
+    action: session_close
+    cooldown_s: 5
+
+  - id: back-local
+    match:
+      - "回到本地"
+      - "本地模式"
+      - "切回本地"
+      - "local mode"
+    on: user
+    action: mode_local
+    cooldown_s: 5
+
+  - id: go-online
+    match:
+      - "網上助理"
+      - "用 ChatGPT"
+      - "切到語音 ChatGPT"
+      - "online mode"
+      - "online assistant"
+    on: user
+    action: mode_online
+    cooldown_s: 10

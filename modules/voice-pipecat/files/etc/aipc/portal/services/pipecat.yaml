@@ -1,0 +1,10 @@
+id: pipecat
+title: Voice helpers (Pipecat)
+module: voice-pipecat
+kind: voice
+endpoint: null
+ui: null
+notes: "Helpers: aipc-voice-once, aipc-voice-bind-hotkey, aipc-voice-status (no always-on HTTP UI)"
+tags:
+  - voice
+  - helpers

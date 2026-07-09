@@ -61,3 +61,14 @@ def test_aipc_cli_installed(two_mods: list[Module]) -> None:
     assert "COPY tools/ /usr/lib/aipc/tools/" in out
     assert "pip install --no-cache-dir /usr/lib/aipc/tools" in out
     assert "ln -sf /usr/lib/aipc/tools/.venv/bin/aipc /usr/bin/aipc" in out
+
+
+def test_hwdb_update_appended_when_hwdb_present(tmp_path: Path) -> None:
+    m = tmp_path / "mod-hwdb"
+    hwdb_dir = m / "files/etc/udev/hwdb.d"
+    hwdb_dir.mkdir(parents=True)
+    (hwdb_dir / "x.hwdb").write_text("evdev:name:Test Device:*\n")
+
+    out = render([Module(name="mod-hwdb", path=m, packages=[], kargs=[])], base="base:latest", image_ref="x", build_date="d")
+
+    assert "RUN systemd-hwdb update" in out

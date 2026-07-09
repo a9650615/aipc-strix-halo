@@ -154,6 +154,62 @@ def _configure_mem0_local_service() -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(args=["mem0-local"], returncode=0)
 
 
+def _repo_root() -> Path:
+    # tools/aipc_lib/tools_menu.py → repo root
+    return Path(__file__).resolve().parents[2]
+
+
+def _codexbar_usage_installed() -> bool:
+    if _has("aipc-usage"):
+        return True
+    try:
+        import codexbar_usage  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+def _install_codexbar_usage() -> subprocess.CompletedProcess:
+    pkg = _repo_root() / "modules/dev-ai-codexbar-usage/files/usr/lib/aipc-codexbar-usage"
+    if not pkg.is_dir():
+        return subprocess.CompletedProcess(
+            args=["codexbar-usage"],
+            returncode=1,
+            stderr=f"package tree missing: {pkg}",
+        )
+    return _run([sys.executable, "-m", "pip", "install", "--user", "-e", str(pkg)])
+
+
+def _uninstall_codexbar_usage() -> subprocess.CompletedProcess:
+    return _run([sys.executable, "-m", "pip", "uninstall", "-y", "aipc-codexbar-usage"])
+
+
+def _codexbar_gui_installed() -> bool:
+    if _has("codexbar-gui"):
+        return True
+    try:
+        import codexbar_gui  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+def _install_codexbar_gui() -> subprocess.CompletedProcess:
+    pkg = _repo_root() / "modules/dev-ai-codexbar-gui/files/usr/lib/codexbar-gui"
+    if not pkg.is_dir():
+        return subprocess.CompletedProcess(
+            args=["codexbar-gui"],
+            returncode=1,
+            stderr=f"package tree missing: {pkg}",
+        )
+    return _run([sys.executable, "-m", "pip", "install", "--user", "-e", str(pkg)])
+
+
+def _uninstall_codexbar_gui() -> subprocess.CompletedProcess:
+    return _run([sys.executable, "-m", "pip", "uninstall", "-y", "codexbar-gui"])
+
 
 CATEGORIES: dict[str, list[Tool]] = {
     "AI coding tools": [
@@ -180,6 +236,18 @@ CATEGORIES: dict[str, list[Tool]] = {
             install_label="Configure Claude",
             uninstall_label="Re-apply Claude",
             uninstall_marks_absent=False,
+        ),
+        Tool(
+            "codexbar usage (aipc-usage)",
+            _codexbar_usage_installed,
+            _install_codexbar_usage,
+            _uninstall_codexbar_usage,
+        ),
+        Tool(
+            "codexbar GUI",
+            _codexbar_gui_installed,
+            _install_codexbar_gui,
+            _uninstall_codexbar_gui,
         ),
     ],
     "Terminal": [

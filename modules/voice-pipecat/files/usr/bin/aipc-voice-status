@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""One-shot status of the local voice assistant stack."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+
+def _http(url: str, timeout: float = 2.0) -> tuple[int, str]:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.status, resp.read().decode(errors="replace")[:300]
+    except Exception as exc:  # noqa: BLE001
+        return 0, str(exc)
+
+
+def _unit(name: str) -> str:
+    try:
+        return subprocess.check_output(
+            ["systemctl", "is-active", name], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except subprocess.CalledProcessError as exc:
+        return (exc.output or "inactive").strip() or "inactive"
+
+
+def main() -> int:
+    rows = []
+    rows.append(("mic_default", subprocess.getoutput("pactl get-default-source 2>/dev/null") or "n/a"))
+    rows.append(("mic_volume", subprocess.getoutput("pactl get-source-volume @DEFAULT_SOURCE@ 2>/dev/null | head -1") or "n/a"))
+    for unit in (
+        "aipc-voice-stt-sensevoice.service",
+        "aipc-voice-wake.service",
+        "aipc-voice-tts-cosyvoice.service",
+    ):
+        rows.append((unit, _unit(unit)))
+    for name, url in (
+        ("stt_9001", "http://127.0.0.1:9001/healthz"),
+        ("kokoro_8880", "http://127.0.0.1:8880/health"),
+        ("cosyvoice_9880", "http://127.0.0.1:9880/healthz"),
+        ("chat_4100", "http://127.0.0.1:4100/healthz"),
+    ):
+        code, body = _http(url)
+        rows.append((name, f"{code} {body[:80]}"))
+    clone = Path("/var/lib/aipc-voice/persona/clone.wav")
+    rows.append(("clone.wav", f"present={clone.is_file()} size={clone.stat().st_size if clone.is_file() else 0}"))
+    hotkey = Path("/etc/aipc/voice/hotkey")
+    rows.append(("hotkey", hotkey.read_text().strip() if hotkey.is_file() else "missing"))
+    zh = Path("/etc/aipc/voice/tts-zh-voice")
+    rows.append(("tts-zh-voice", zh.read_text().strip() if zh.is_file() else "zf_xiaoyi (default)"))
+    rows.append(("aipc-voice-once", shutil.which("aipc-voice-once") or "not in PATH"))
+    rows.append(("kokoro_container", subprocess.getoutput("podman ps --format '{{.Names}} {{.Status}}' 2>/dev/null | grep -i kokoro || echo none")))
+
+    width = max(len(k) for k, _ in rows)
+    for k, v in rows:
+        print(f"{k:<{width}}  {v}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

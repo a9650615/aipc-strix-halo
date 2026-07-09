@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Train / stage a custom wake phrase (v0: sample marker; ONNX fit later)."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+# Allow import from module install path or repo layout.
+sys.path.insert(0, "/usr/lib/aipc-voice")
+try:
+    from aipc_voice_wake import train_stub
+except ImportError:
+    here = Path(__file__).resolve()
+    sys.path.insert(0, str(here.parents[1] / "lib/aipc-voice"))
+    from aipc_voice_wake import train_stub  # type: ignore
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--samples", type=Path, required=True, help="directory of WAV samples")
+    p.add_argument("--label", required=True, help="wake phrase label")
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=Path("/var/lib/aipc-voice/wake/user-model.onnx"),
+    )
+    args = p.parse_args()
+    return train_stub(args.samples, args.out, args.label)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -3,6 +3,14 @@ from __future__ import annotations
 from aipc_lib.modules import Module
 
 
+def _has_hwdb(mods: list[Module]) -> bool:
+    for m in mods:
+        hwdb_dir = m.path / "files/etc/udev/hwdb.d"
+        if hwdb_dir.is_dir() and any(hwdb_dir.glob("*.hwdb")):
+            return True
+    return False
+
+
 def render(
     mods: list[Module],
     *,
@@ -74,6 +82,10 @@ def render(
 
         if m.kargs or files_dir.is_dir() or modprobe_dir.is_dir() or env_dir.is_dir() or quadlet_dir.is_dir() or post.exists():
             lines.append("")
+
+    if _has_hwdb(mods):
+        lines.append("RUN systemd-hwdb update")
+        lines.append("")
 
     lines.append("RUN bootc container lint")
     return "\n".join(lines) + "\n"

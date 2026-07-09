@@ -86,3 +86,17 @@ def test_aipc_cli_installed(two_mods: list[Module]) -> None:
     assert install_task is not None
     assert "pip install --no-cache-dir /usr/lib/aipc/tools" in install_task["shell"]
     assert install_task["args"]["creates"] == "/usr/bin/aipc"
+
+
+def test_hwdb_update_task_appended_when_hwdb_present(tmp_path: Path) -> None:
+    m = tmp_path / "mod-hwdb"
+    hwdb_dir = m / "files/etc/udev/hwdb.d"
+    hwdb_dir.mkdir(parents=True)
+    (hwdb_dir / "x.hwdb").write_text("evdev:name:Test Device:*\n")
+
+    parsed = yaml.safe_load(render([Module(name="mod-hwdb", path=m, packages=[], kargs=[])]))
+    tasks = parsed[0]["tasks"]
+    hwdb_task = next((t for t in tasks if t.get("name") == "Update systemd hwdb"), None)
+
+    assert hwdb_task is not None
+    assert hwdb_task["shell"] == "systemd-hwdb update"

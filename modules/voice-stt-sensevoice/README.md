@@ -57,12 +57,26 @@ the service runs `uvicorn` directly from a venv at `/usr/lib/aipc-voice/venv`.
   directory only ships to `/etc/aipc/env.d/<module>/` for reference, it is
   not sourced by systemd services) and `MODELSCOPE_CACHE=/var/lib/aipc-voice/models`.
 - `post-install.sh`: build-time only — venv + pinned pip install,
+  SELinux `bin_t` relabel of `…/venv/bin` (see below),
   `mkdir -p /var/lib/aipc-voice/models`, `systemctl enable`. Does **not**
   download model weights (no network-dependent runtime service in
   post-install per CLAUDE.md §8). `funasr.AutoModel` downloads
   `iic/SenseVoiceSmall` from ModelScope into `MODELSCOPE_CACHE` the first
   time the service actually starts with network available — this is
   upstream's own default behavior, not something this module reimplements.
+
+## SELinux / EXEC permission
+
+Same bug class as `memory-mem0` and `rag-embedder`: a fresh venv's
+console scripts land as `lib_t` (under `/usr/lib/...`) or `var_lib_t`
+(under a live-hotfix `/var/lib/...` path). systemd then fails with
+`status=203/EXEC` / `Permission denied` before Python even starts.
+
+`post-install.sh` persists `bin_t` via `semanage fcontext` +
+`restorecon` (or `chcon` fallback). The unit also invokes
+`python3 …/uvicorn` rather than bare `uvicorn`, matching the
+`agent-orchestrator` live pattern. Live hotfixes must re-`chcon -R -t
+bin_t` on the venv's `bin/` after recreating it.
 
 ## Hardware verification (2026-07-06)
 

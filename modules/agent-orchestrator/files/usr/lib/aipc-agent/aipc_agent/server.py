@@ -26,6 +26,12 @@ class ChatResponse(BaseModel):
     task_id: str
 
 
+@app.get("/healthz")
+def healthz() -> dict:
+    """Liveness for portal/doctor/voice loop probes (not a model warm check)."""
+    return {"status": "ok", "service": "aipc-agent-orchestrator"}
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse | JSONResponse:
     task_id = str(uuid.uuid4())

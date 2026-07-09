@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=CodexBar
+Comment=AI coding usage tracker — system tray
+Exec=/usr/lib/codexbar-gui/start.sh
+Icon=codexbar-gui
+Terminal=false
+Categories=Development;Monitor;
+StartupNotify=false
+X-KDE-StartupNotify=false
+X-GNOME-Autostart-enabled=true
+NoDisplay=false

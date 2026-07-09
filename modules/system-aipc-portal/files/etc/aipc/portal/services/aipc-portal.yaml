@@ -1,0 +1,11 @@
+id: aipc-portal
+title: AIPC Portal
+module: system-aipc-portal
+kind: system
+systemd: aipc-portal.service
+health: http://127.0.0.1:7080/healthz
+endpoint: http://127.0.0.1:7080
+ui: http://127.0.0.1:7080/
+tags:
+  - system
+  - dashboard

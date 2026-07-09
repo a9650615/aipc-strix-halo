@@ -1,0 +1,20 @@
+[Unit]
+Description=AIPC Kokoro-82M neural TTS (OpenAI speech API, zh+en)
+After=network-online.target
+
+[Container]
+# Real public image — models baked in. Pin tag for reproducible boots.
+Image=ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4
+ContainerName=aipc-kokoro
+PublishPort=127.0.0.1:8880:8880
+# Mandarin voices: zf_xiaoxiao zf_xiaobei zf_xiaoni zf_xiaoyi
+#                 zm_yunjian zm_yunxi zm_yunxia zm_yunyang
+# English voices: af_heart af_bella am_adam bf_emma …
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

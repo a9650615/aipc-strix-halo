@@ -1,0 +1,25 @@
+# AIPC override of stock flow_type1 (id: flw1).
+# 控制中心 / Command Center: KeyProg3 → keyboard F20 for KDE shortcuts.
+# Also still appears as BTN_MODE on Xbox Elite target; aipc-command-center-listen
+# handles that path if F20 is not delivered to the desktop.
+version: 1
+kind: CapabilityMap
+name: ROG Flow Z13 (2025) AIPC voice F20
+id: flw1
+mapping:
+  - name: Command Center / Armoury Prog3 -> F20
+    source_events:
+      - keyboard: KeyProg3
+    target_event:
+      keyboard: KeyF20
+  - name: Prog1 -> F20
+    source_events:
+      - keyboard: KeyProg1
+    target_event:
+      keyboard: KeyF20
+  - name: Prog2 -> F20
+    source_events:
+      - keyboard: KeyProg2
+    target_event:
+      keyboard: KeyF20
+filtered_events: []

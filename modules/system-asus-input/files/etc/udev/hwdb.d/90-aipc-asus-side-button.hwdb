@@ -1,0 +1,3 @@
+evdev:name:Asus WMI hotkeys:*
+ # Hardware verification fills this when discovery prints MSC_SCAN:
+ # KEYBOARD_KEY_<scan>=f20

@@ -18,6 +18,8 @@ def test_ai_coding_tools_category_has_all_tools() -> None:
         "goose",
         "opencode",
         "mem0 local service",
+        "codexbar usage (aipc-usage)",
+        "codexbar GUI",
     ]
 
 
@@ -27,8 +29,7 @@ def test_terminal_category_has_ccstatus() -> None:
 
 
 def test_mem0_local_tool_is_service_config_action() -> None:
-    tool = tools_menu.CATEGORIES["AI coding tools"][-1]
-    assert tool.name == "mem0 local service"
+    tool = next(t for t in tools_menu.CATEGORIES["AI coding tools"] if t.name == "mem0 local service")
     assert tool.install_label == "Configure Claude"
     assert tool.uninstall_label == "Re-apply Claude"
     assert tool.uninstall_marks_absent is False

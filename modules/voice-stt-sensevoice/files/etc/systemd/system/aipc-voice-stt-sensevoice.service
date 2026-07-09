@@ -4,11 +4,15 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/lib/aipc-voice/venv/bin/uvicorn aipc_stt_sensevoice.server:app --host 127.0.0.1 --port 9001
+# Invoke via python3 so SELinux domain transition matches other native venv
+# services; uvicorn is a console script and must itself be bin_t (post-install).
+ExecStart=/usr/lib/aipc-voice/venv/bin/python3 /usr/lib/aipc-voice/venv/bin/uvicorn aipc_stt_sensevoice.server:app --host 127.0.0.1 --port 9001
 Environment=PYTHONPATH=/usr/lib/aipc-voice
 Environment=HSA_OVERRIDE_GFX_VERSION=11.5.1
+Environment=AIPC_STT_DEVICE=cpu
 Environment=MODELSCOPE_CACHE=/var/lib/aipc-voice/models
 Restart=on-failure
+RestartSec=3
 
 [Install]
 WantedBy=default.target

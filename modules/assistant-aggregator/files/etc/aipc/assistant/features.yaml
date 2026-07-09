@@ -1,0 +1,18 @@
+# Slot / pack enablement. Core aggregator slots are always on when the
+# module is installed. Optional packs default off.
+slots:
+  control_keywords: true
+  control_model: true    # resident-small JSON verified 2026-07-10
+  context_mem0: true
+  backend_local: true
+  backend_online: true   # soft-fail if assistant-chatgpt missing
+
+packs:
+  handoff: false
+  system_audio: false
+  project: false
+  gpt: false
+  upload: false
+  canvas: false
+  capture: false
+  tasks: false

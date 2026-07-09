@@ -1,33 +1,50 @@
 # voice-pipecat
 
-## Current status: v0 push-to-talk, text-out — enabled; plumbing hardware-verified, real mic input not yet confirmed
+## Current status: closed-loop client — push-to-talk + TTS + local intents
 
-This is a deliberately reduced scope, not the full Phase 3 design: **no
-TTS, no wake word, no hotkey**. The user's explicit direction was "text
-output is fine, the assistant does not need to speak yet." What's here is
-a manually-invoked one-shot round trip: record -> transcribe -> ask the
-agent -> show the reply as a desktop notification.
+This module is the **user-facing turn of the always-on closed loop**
+(see `docs/voice-pipeline.md` and `docs/architecture.md` § Phase 3):
 
-### What it does (v0)
+```text
+record → SenseVoice STT → local intent (e.g. open portal)
+                       → else /chat (resident-small + mem0)
+                       → Kokoro/Cosy TTS + notify-send
+```
 
-`files/usr/bin/aipc-voice-once` — a single stdlib-only Python script, no
-systemd unit, invoked manually from a terminal (or a keyboard-shortcut
-launcher a user sets up themselves; no hotkey is registered by this
-module):
+It is not the full streaming Pipecat graph yet (wake/barge-in deferred).
+`aipc voice status|loop|start` and `aipc portal` are the operator surface
+in `tools/aipc` — prefer those over hand-started units.
+
+### What it does
+
+`files/usr/bin/aipc-voice-once` — stdlib-only one-shot (also hotkey / wake):
 
 1. Records N seconds of audio (default 5, `--seconds` or
    `$AIPC_VOICE_RECORD_SECONDS`) from the default ALSA input via
    `arecord -f S16_LE -r 16000 -c 1` — no Python audio library dependency.
-2. `POST`s the WAV to the STT service (assumed contract below).
-3. `POST`s the transcribed text to agent-orchestrator's `/chat`
-   (`http://127.0.0.1:4100/chat`, real and hardware-verified — see
-   `modules/agent-orchestrator`).
-4. Shows the reply via `notify-send` (falls back to stdout if
-   `notify-send` isn't present).
+2. `POST`s the WAV to SenseVoice STT (`:9001/transcribe`).
+3. **Local intents** (no LLM): phrases like “打开 dashboard” / “open portal”
+   call `aipc portal open` and speak/notify the result.
+4. Otherwise `POST`s text to agent-orchestrator `/chat` (`:4100`) —
+   default model **resident-small** (closed-loop brain).
+5. Speaks via TTS router (`aipc_voice_tts.py`: Cosy → Kokoro → espeak) and
+   always `notify-send` (stdout fallback).
 
 Run it directly: `aipc-voice-once` (or `aipc-voice-once --seconds 8` for a
 longer recording). `--self-test` runs offline checks only (used by
 `verify.sh`).
+
+Bind the push-to-talk shortcut from a desktop session:
+
+```bash
+aipc-voice-bind-hotkey
+```
+
+The helper reads `/etc/aipc/voice/hotkey` by default; the repo ships `F20` as
+the default shortcut. KDE autostart runs the binder inside the login session,
+and manual rebinding is available with `aipc-voice-bind-hotkey --shortcut F20`.
+If KDE tools or `DISPLAY` are unavailable, the helper prints the commands it
+would run and exits optional (`2`) instead of changing system state.
 
 ### Why plain Python, not `pipecat-ai`
 
@@ -42,6 +59,16 @@ be more code than the problem, not less — boring-over-clever per this
 repo's own ethos. Revisit `pipecat-ai` once the streaming pieces (wake
 word, TTS, barge-in) are actually being built; the pip package stays a
 reasonable choice for that later work.
+
+TTS is opportunistic via `aipc_voice_tts.py`. Routing:
+
+- **Chinese (CJK)**: CosyVoice clone `POST :9880/tts` `{"text":...}` first
+  (`AIPC_PREFER_COSYVOICE=1` default) → Kokoro `:8880/v1/audio/speech` → espeak
+- **English**: Kokoro → espeak (CosyVoice only if `AIPC_TTS_FORCE_COSYVOICE=1`)
+- Kokoro voice packs still respect `/etc/aipc/voice/tts-zh-voice` /
+  `tts-en-voice` (and `AIPC_TTS_VOICE*`)
+- Set `AIPC_VOICE_TTS=0` to force text-only output
+- If all TTS backends fail, `aipc-voice-once` keeps `notify-send` / stdout
 
 ### STT interface contract
 
@@ -62,11 +89,9 @@ Response: 200 {"text": "..."}
   explicit user direction. Tasks 4.x, D5.
 - NPU wake-word classifier/training pipeline — task group 2, a separate,
   more complex piece. `modules/voice-wake` doesn't exist yet.
-- Global hotkey (`Super+Space` push-to-talk, D6) — GNOME keybinding
-  registration is real desktop-integration complexity; tasks 1.2/2.x/7.1
-  are all still open. `aipc-voice-once` must be invoked manually (a
-  terminal alias or a user-configured keybinding calling it is a
-  reasonable stopgap, not shipped here).
+- Full desktop hotkey registration — `aipc-voice-bind-hotkey` exists for
+  runtime binding, but the broader hotkey/session integration work is
+  still deferred.
 - The full path-A pipeline config (`files/etc/aipc/pipecat/pipeline.yaml`)
   describes the eventual wake/STT-router/LLM/TTS-router shape and is left
   in place untouched — it is not read by `aipc-voice-once` and does
@@ -79,7 +104,9 @@ Response: 200 {"text": "..."}
   — this v0 always calls the supervisor's `/chat`, never a direct
   Daily-Assistant shortcut.
 
-### Verification reached
+#See `docs/voice-pipeline.md` for the staged end-to-end flow and verification tiers.
+
+## Verification reached
 
 - **Static**: `verify.sh` runs `ast.parse` on `aipc-voice-once` plus
   `aipc-voice-once --self-test` (offline: URL defaults, JSON response

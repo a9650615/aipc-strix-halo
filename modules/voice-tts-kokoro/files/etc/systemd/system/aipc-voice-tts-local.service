@@ -1,0 +1,16 @@
+[Unit]
+Description=aipc voice local TTS (espeak-ng backend, OpenAI speech API shape)
+After=network-online.target
+
+[Service]
+Type=simple
+# Stdlib server — no venv required (Python 3.14 friendly).
+ExecStart=/usr/bin/python3 /usr/lib/aipc-voice/aipc_tts_local/server.py
+Environment=PYTHONPATH=/usr/lib/aipc-voice
+Environment=AIPC_TTS_HOST=127.0.0.1
+Environment=AIPC_TTS_PORT=8880
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

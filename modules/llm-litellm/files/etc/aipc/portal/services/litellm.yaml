@@ -1,0 +1,10 @@
+id: litellm
+title: LiteLLM Gateway
+module: llm-litellm
+kind: llm
+systemd: litellm.service
+health: http://127.0.0.1:4000/health
+endpoint: http://127.0.0.1:4000
+tags:
+  - llm
+  - gateway
