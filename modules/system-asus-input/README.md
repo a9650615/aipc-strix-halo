@@ -53,26 +53,27 @@ Windows behavior (ROG docs / forum): short-press opens Command Center /
 ScreenXpert; long-press often launches Copilot — largely **not remappable**
 in Armoury Crate.
 
-**Linux detection (hardware-verified 2026-07-10 on this machine):**  
-Multiple exclusive captures (with and without InputPlumber grabbing
-`Asus WMI hotkeys`, plus N-KEY hidraw, gpio-keys, virtual Xbox pad) showed
-**zero** KEY/MSC/HID/ACPI events when the 控制中心 key was pressed.
-Stock Bazzite InputPlumber maps `KeyProg3` → gamepad QuickAccess *if*
-that key ever appears; override under
-`files/etc/inputplumber/capability_maps/flw1.yaml` remaps Prog1–3 → **F20**
-once the kernel reports codes.
+**Linux path (hardware-verified 2026-07-10):**
 
-Until the kernel/firmware path exists, use:
+InputPlumber (`50-rog_flow_z13.yaml`) claims `Asus WMI hotkeys` and maps
+the 控制中心 / Armoury-style key to the virtual **Microsoft X-Box One Elite 2
+pad**. User capture:
 
-| Path | How |
+```text
+Microsoft X-Box One Elite 2 pad|KEY|316|v1   # BTN_MODE (Guide / QuickAccess)
+Microsoft X-Box One Elite 2 pad|KEY|304|v1   # BTN_SOUTH (A), often co-fired
+```
+
+| Component | Role |
 |---|---|
-| KRunner Spotlight | `Alt+Space` then `aipc …` / `助理 …` (`aipc voice krunner-install`) |
-| Meta+A | Opens KRunner prefilled with `aipc ` |
-| F20 (software) | KDE shortcut for AIPC Voice Assistant (控制中心 does not emit F20 yet) |
-| Voice energy wake | `aipc-voice-wake.service` |
+| `aipc-command-center.service` | Watches Elite pad for 316/304 → `aipc-voice-once` as desktop user |
+| `capability_maps.d/flw1.yaml` | Prefer map Prog1–3 → keyboard **F20** (for KDE F20 bind when delivered) |
+| KRunner / Meta+A | Spotlight-style text entry (always works) |
 
 ```sh
-sudo aipc-asus-side-button-discover --capture --timeout 20   # press 控制中心 during window
+sudo systemctl status aipc-command-center
+sudo aipc-asus-side-button-discover --capture --timeout 20
+journalctl -u aipc-command-center -f   # press 控制中心
 ```
 
 ## Hardware assumption

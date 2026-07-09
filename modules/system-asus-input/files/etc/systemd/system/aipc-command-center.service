@@ -1,0 +1,16 @@
+[Unit]
+Description=AIPC: GZ302 控制中心 (Command Center) → aipc-voice-once
+After=inputplumber.service sound.target
+Wants=inputplumber.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/aipc-command-center-listen
+Environment=AIPC_VOICE_ONCE=/home/birdyo/.local/bin/aipc-voice-once
+Environment=AIPC_VOICE_RECORD_SECONDS=5
+Environment=AIPC_CC_COOLDOWN=3
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Watch GZ302 控制中心 after InputPlumber remap; launch aipc-voice-once.
+
+Hardware: ASUS ROG Flow Z13 Command Center key is eaten by InputPlumber and
+appears on the virtual "Microsoft X-Box One Elite 2 pad" as:
+
+  KEY 316 = BTN_MODE   (Guide / QuickAccess — primary)
+  KEY 304 = BTN_SOUTH  (A — sometimes co-fired)
+
+This listener debounces presses and runs the voice assistant as the desktop user.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import pwd
+import select
+import struct
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+EV_KEY = 0x01
+EVENT_SIZE = 24
+# BTN_MODE (Xbox guide) and BTN_SOUTH (A) as reported in user capture
+CODES = {316, 304}
+COOLDOWN_S = float(os.environ.get("AIPC_CC_COOLDOWN", "3"))
+ONCE = os.environ.get(
+    "AIPC_VOICE_ONCE",
+    "/home/birdyo/.local/bin/aipc-voice-once",
+)
+RECORD_SECONDS = os.environ.get("AIPC_VOICE_RECORD_SECONDS", "5")
+PAD_NAME = "Microsoft X-Box One Elite 2 pad"
+
+
+def find_pad() -> str | None:
+    for d in Path("/dev/input").glob("event*"):
+        try:
+            name = (Path("/sys/class/input") / d.name / "device/name").read_text().strip()
+        except OSError:
+            continue
+        if name == PAD_NAME or "X-Box One Elite" in name:
+            return str(d)
+    return None
+
+
+def desktop_env() -> dict[str, str]:
+    env = os.environ.copy()
+    run_user = Path("/run/user")
+    if not run_user.is_dir():
+        return env
+    for entry in sorted(run_user.iterdir(), key=lambda p: p.name):
+        if not entry.name.isdigit():
+            continue
+        bus = entry / "bus"
+        if not bus.exists():
+            continue
+        uid = int(entry.name)
+        try:
+            pw = pwd.getpwuid(uid)
+        except KeyError:
+            continue
+        if pw.pw_name in ("root", "nobody"):
+            continue
+        env["DISPLAY"] = env.get("DISPLAY") or ":0"
+        env["XDG_RUNTIME_DIR"] = str(entry)
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
+        env["HOME"] = pw.pw_dir
+        env["USER"] = pw.pw_name
+        env["LOGNAME"] = pw.pw_name
+        env["AIPC_CC_AS"] = pw.pw_name
+        local = Path(pw.pw_dir) / ".local/bin/aipc-voice-once"
+        if local.is_file():
+            env["AIPC_VOICE_ONCE_RESOLVED"] = str(local)
+        return env
+    return env
+
+
+def trigger() -> None:
+    env = desktop_env()
+    cmd = env.pop("AIPC_VOICE_ONCE_RESOLVED", None) or ONCE
+    argv = [cmd, "--seconds", str(RECORD_SECONDS)]
+    as_user = env.get("AIPC_CC_AS")
+    if as_user and os.geteuid() == 0 and as_user != "root":
+        argv = ["runuser", "-u", as_user, "--", *argv]
+    log = Path("/tmp/aipc-voice-once-from-cc.log")
+    try:
+        lf = open(log, "ab", buffering=0)  # noqa: SIM115
+    except OSError:
+        lf = subprocess.DEVNULL
+    print(f"aipc-command-center: spawn {' '.join(argv)}", flush=True)
+    subprocess.Popen(argv, env=env, stdout=lf, stderr=lf, start_new_session=True)
+
+
+def loop(path: str) -> int:
+    print(f"aipc-command-center: watching {path} for BTN_MODE/BTN_SOUTH (316/304)", flush=True)
+    f = open(path, "rb")
+    poll = select.poll()
+    poll.register(f.fileno(), select.POLLIN)
+    last = 0.0
+    try:
+        while True:
+            if not poll.poll(1000):
+                # device may vanish on inputplumber restart
+                if not Path(path).exists():
+                    print("aipc-command-center: device gone, exit for restart", flush=True)
+                    return 1
+                continue
+            data = f.read(EVENT_SIZE)
+            if len(data) < EVENT_SIZE:
+                continue
+            _s, _u, typ, code, value = struct.unpack("llHHi", data)
+            if typ != EV_KEY or value != 1:
+                continue
+            if code not in CODES:
+                continue
+            now = time.monotonic()
+            if now - last < COOLDOWN_S:
+                continue
+            last = now
+            print(f"aipc-command-center: key {code} pressed → voice", flush=True)
+            trigger()
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        f.close()
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--self-test", action="store_true")
+    args = ap.parse_args()
+    if args.self_test:
+        assert 316 in CODES and 304 in CODES
+        print("aipc-command-center-listen: self-test OK")
+        return 0
+    path = find_pad()
+    if not path:
+        print("aipc-command-center: Xbox Elite pad not found (is inputplumber up?)", file=sys.stderr)
+        return 2
+    return loop(path)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
