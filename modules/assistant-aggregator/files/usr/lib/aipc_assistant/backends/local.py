@@ -116,16 +116,7 @@ def chat(text: str, session_id: str | None = None) -> str:
     lb = rt.get("local_backend") or {}
     if not isinstance(lb, dict):
         lb = {}
-    mode = str(os.environ.get("AIPC_ASSISTANT_LOCAL_BACKEND") or lb.get("mode") or "auto").lower()
-
-    if mode == "agent":
-        try:
-            return _agent_chat(text, session_id, lb)
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:300]
-            raise RuntimeError(f"local agent HTTP {e.code}: {detail}") from e
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"local agent unreachable: {e}") from e
+    mode = str(os.environ.get("AIPC_ASSISTANT_LOCAL_BACKEND") or lb.get("mode") or "npu").lower()
 
     def _npu_or_raise() -> str:
         try:

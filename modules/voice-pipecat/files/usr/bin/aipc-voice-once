@@ -54,9 +54,10 @@ CHAT_URL = os.environ.get("AIPC_VOICE_CHAT_URL", "http://127.0.0.1:4100/chat")
 RECORD_SECONDS = int(os.environ.get("AIPC_VOICE_RECORD_SECONDS", "5"))
 SESSION_ID = os.environ.get("AIPC_VOICE_SESSION_ID", "voice-pipecat-dev")
 CHAT_TIMEOUT = float(os.environ.get("AIPC_VOICE_CHAT_TIMEOUT", "180"))
-# Prefer unified aggregator when present (assistant-aggregator); fall back to
-# direct /chat so older images without the hub still work.
-USE_AGGREGATOR = os.environ.get("AIPC_VOICE_USE_AGGREGATOR", "1") != "0"
+# Closed loop default: direct orchestrator /chat (resident-small). Aggregator
+# is optional (mode routing / online) — opt in with AIPC_VOICE_USE_AGGREGATOR=1.
+# Default was 1 and double-failed (NPU+agent 502) before falling back to /chat.
+USE_AGGREGATOR = os.environ.get("AIPC_VOICE_USE_AGGREGATOR", "0") == "1"
 
 
 def build_parser():
