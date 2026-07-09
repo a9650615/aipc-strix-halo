@@ -1,9 +1,13 @@
-"""TTS router: Kokoro-82M neural (zh+en) first, espeak only as last resort.
+"""TTS router: CosyVoice clone (CJK) → Kokoro-82M → espeak last resort.
 
-Chinese defaults to zf_xiaoyi (clearer assistant Mandarin). English: af_heart.
-OpenAI-compatible endpoint: POST :8880/v1/audio/speech
+Chinese prefers CosyVoice zero-shot clone on :9880 when preferred (default on)
+and available; falls through to Kokoro Mandarin packs, then espeak.
+English uses Kokoro first (skip CosyVoice unless AIPC_TTS_FORCE_COSYVOICE=1).
 
-Voice override order (first wins):
+OpenAI-compatible Kokoro: POST :8880/v1/audio/speech
+CosyVoice clone:         POST :9880/tts  body {"text":"..."} → audio/wav
+
+Voice override order for Kokoro (first wins):
   AIPC_TTS_VOICE env → /etc/aipc/voice/tts-zh-voice or tts-en-voice → built-in default
 """
 
@@ -20,9 +24,13 @@ import urllib.request
 from pathlib import Path
 
 COSYVOICE_URL = os.environ.get("AIPC_COSYVOICE_URL", "http://127.0.0.1:9880/tts")
+COSYVOICE_HEALTH_URL = os.environ.get(
+    "AIPC_COSYVOICE_HEALTH_URL", "http://127.0.0.1:9880/healthz"
+)
 KOKORO_URL = os.environ.get("AIPC_KOKORO_URL", "http://127.0.0.1:8880/v1/audio/speech")
 LOCAL_TTS_URL = os.environ.get("AIPC_LOCAL_TTS_URL", KOKORO_URL)
 TTS_TIMEOUT = float(os.environ.get("AIPC_TTS_TIMEOUT", "90"))
+HEALTH_TIMEOUT = float(os.environ.get("AIPC_TTS_HEALTH_TIMEOUT", "1.5"))
 
 _VOICE_ZH_FILE = Path(os.environ.get("AIPC_TTS_VOICE_ZH_FILE", "/etc/aipc/voice/tts-zh-voice"))
 _VOICE_EN_FILE = Path(os.environ.get("AIPC_TTS_VOICE_EN_FILE", "/etc/aipc/voice/tts-en-voice"))
@@ -92,15 +100,70 @@ def choose_voice(text: str) -> str:
     return voice_zh() if is_cjk(text) else voice_en()
 
 
+def prefer_cosyvoice() -> bool:
+    """Default on: CJK replies try CosyVoice clone first."""
+    return os.environ.get("AIPC_PREFER_COSYVOICE", "1") == "1"
+
+
+def force_cosyvoice() -> bool:
+    return os.environ.get("AIPC_TTS_FORCE_COSYVOICE", "0") == "1"
+
+
+def cosyvoice_wanted(text: str) -> bool:
+    if force_cosyvoice():
+        return True
+    return prefer_cosyvoice() and is_cjk(text)
+
+
+def cosyvoice_healthy(opener=urllib.request.urlopen) -> bool:
+    """Best-effort health probe; failure means try CosyVoice anyway and fall through."""
+    if os.environ.get("AIPC_COSYVOICE_SKIP_HEALTH", "0") == "1":
+        return True
+    req = urllib.request.Request(COSYVOICE_HEALTH_URL, method="GET")
+    try:
+        with opener(req, timeout=HEALTH_TIMEOUT) as resp:
+            raw = resp.read()
+            if resp.status and int(resp.status) >= 400:
+                return False
+        try:
+            data = json.loads(raw.decode() or "{}")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return True
+        if isinstance(data, dict):
+            status = str(data.get("status", "ok")).lower()
+            return status in ("ok", "healthy", "ready", "up", "")
+        return True
+    except (OSError, urllib.error.URLError, TimeoutError, ValueError):
+        return False
+
+
+def tts_url_chain(text: str, *, check_health: bool = False, opener=urllib.request.urlopen) -> list[str]:
+    """Ordered HTTP backends before espeak.
+
+    Chinese (default): CosyVoice :9880/tts → Kokoro :8880/v1/audio/speech
+    English:           Kokoro only (CosyVoice only if AIPC_TTS_FORCE_COSYVOICE=1)
+    """
+    chain: list[str] = []
+    if cosyvoice_wanted(text):
+        if not check_health or cosyvoice_healthy(opener=opener):
+            chain.append(COSYVOICE_URL)
+    kokoro = LOCAL_TTS_URL or KOKORO_URL
+    if kokoro not in chain:
+        chain.append(kokoro)
+    return chain
+
+
 def choose_tts_url(text: str) -> str:
-    # CosyVoice only when explicitly preferred and CJK (clone / higher fidelity).
-    if is_cjk(text) and os.environ.get("AIPC_PREFER_COSYVOICE", "0") == "1":
-        return COSYVOICE_URL
-    return LOCAL_TTS_URL or KOKORO_URL
+    """Primary URL for this utterance (first of the fallback chain)."""
+    return tts_url_chain(text, check_health=False)[0]
+
+
+def _is_kokoro_url(url: str) -> bool:
+    return "audio/speech" in url or url in (KOKORO_URL, LOCAL_TTS_URL)
 
 
 def build_payload(text: str, url: str) -> tuple[bytes, str]:
-    if "audio/speech" in url or url in (KOKORO_URL, LOCAL_TTS_URL):
+    if _is_kokoro_url(url):
         return (
             json.dumps(
                 {
@@ -113,6 +176,7 @@ def build_payload(text: str, url: str) -> tuple[bytes, str]:
             ).encode(),
             "application/json",
         )
+    # CosyVoice clone: server reads clone.wav; client only sends text.
     return json.dumps({"text": text}).encode(), "application/json"
 
 
@@ -184,8 +248,7 @@ def speak_espeak(text: str) -> bool:
             pass
 
 
-def speak_http(text: str, opener=urllib.request.urlopen) -> bool:
-    url = choose_tts_url(text)
+def _post_tts(text: str, url: str, opener=urllib.request.urlopen) -> bool:
     body, content_type = build_payload(text, url)
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": content_type}, method="POST"
@@ -209,6 +272,14 @@ def speak_http(text: str, opener=urllib.request.urlopen) -> bool:
         return False
 
 
+def speak_http(text: str, opener=urllib.request.urlopen) -> bool:
+    # Try CosyVoice first for CJK (if preferred); always fall through to Kokoro.
+    for url in tts_url_chain(text, check_health=False, opener=opener):
+        if _post_tts(text, url, opener=opener):
+            return True
+    return False
+
+
 def speak(text: str, opener=urllib.request.urlopen) -> bool:
     if not text or not str(text).strip():
         return False
@@ -220,20 +291,71 @@ def speak(text: str, opener=urllib.request.urlopen) -> bool:
 
 
 def _self_test() -> int:
-    assert choose_tts_url("hello") == LOCAL_TTS_URL
-    assert choose_voice("hello") == voice_en()
-    assert choose_voice("你好世界") == voice_zh()
-    assert choose_voice("OK，我知道了") == voice_zh()  # mixed, still CJK-led
-    body, content_type = build_payload("你好", LOCAL_TTS_URL)
-    assert content_type == "application/json"
-    payload = json.loads(body.decode())
-    assert payload["model"] == "kokoro"
-    assert payload["voice"] == voice_zh()
-    assert payload["response_format"] == "wav"
-    assert speak("") is False
-    assert _voice_from_file(Path("/nonexistent")) is None
-    print("aipc_voice_tts: self-test OK")
-    return 0
+    saved = {
+        k: os.environ.get(k)
+        for k in (
+            "AIPC_PREFER_COSYVOICE",
+            "AIPC_TTS_FORCE_COSYVOICE",
+            "AIPC_TTS_VOICE",
+            "AIPC_COSYVOICE_SKIP_HEALTH",
+        )
+    }
+    try:
+        os.environ.pop("AIPC_TTS_VOICE", None)
+        os.environ.pop("AIPC_TTS_FORCE_COSYVOICE", None)
+        os.environ["AIPC_PREFER_COSYVOICE"] = "1"
+
+        # English: Kokoro only (no CosyVoice unless forced).
+        assert choose_tts_url("hello") == (LOCAL_TTS_URL or KOKORO_URL)
+        assert tts_url_chain("hello") == [LOCAL_TTS_URL or KOKORO_URL]
+        assert choose_voice("hello") == voice_en()
+
+        # Chinese: CosyVoice → Kokoro.
+        zh = "你好世界"
+        assert is_cjk(zh)
+        assert cosyvoice_wanted(zh)
+        assert choose_tts_url(zh) == COSYVOICE_URL
+        assert tts_url_chain(zh) == [COSYVOICE_URL, LOCAL_TTS_URL or KOKORO_URL]
+        assert choose_voice(zh) == voice_zh()
+        assert choose_voice("OK，我知道了") == voice_zh()
+
+        # CosyVoice payload is text-only.
+        body, content_type = build_payload(zh, COSYVOICE_URL)
+        assert content_type == "application/json"
+        assert json.loads(body.decode()) == {"text": zh}
+
+        # Kokoro payload still carries voice pack (tts-zh-voice override path).
+        body, content_type = build_payload(zh, LOCAL_TTS_URL or KOKORO_URL)
+        assert content_type == "application/json"
+        payload = json.loads(body.decode())
+        assert payload["model"] == "kokoro"
+        assert payload["voice"] == voice_zh()
+        assert payload["response_format"] == "wav"
+        assert payload["input"] == zh
+
+        # Prefer off → Chinese goes straight to Kokoro.
+        os.environ["AIPC_PREFER_COSYVOICE"] = "0"
+        assert not cosyvoice_wanted(zh)
+        assert choose_tts_url(zh) == (LOCAL_TTS_URL or KOKORO_URL)
+        assert tts_url_chain(zh) == [LOCAL_TTS_URL or KOKORO_URL]
+
+        # Force CosyVoice for English.
+        os.environ["AIPC_PREFER_COSYVOICE"] = "1"
+        os.environ["AIPC_TTS_FORCE_COSYVOICE"] = "1"
+        assert cosyvoice_wanted("hello")
+        assert tts_url_chain("hello")[0] == COSYVOICE_URL
+        assert (LOCAL_TTS_URL or KOKORO_URL) in tts_url_chain("hello")
+
+        assert speak("") is False
+        assert _voice_from_file(Path("/nonexistent")) is None
+        print("aipc_voice_tts: self-test OK")
+        return 0
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 if __name__ == "__main__":

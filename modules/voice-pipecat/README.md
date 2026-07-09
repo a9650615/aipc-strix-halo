@@ -56,9 +56,15 @@ repo's own ethos. Revisit `pipecat-ai` once the streaming pieces (wake
 word, TTS, barge-in) are actually being built; the pip package stays a
 reasonable choice for that later work.
 
-TTS is opportunistic. Set `AIPC_VOICE_TTS=0` to force text-only output.
-If local TTS endpoints are unavailable, `aipc-voice-once` keeps the
-existing `notify-send` or stdout fallback.
+TTS is opportunistic via `aipc_voice_tts.py`. Routing:
+
+- **Chinese (CJK)**: CosyVoice clone `POST :9880/tts` `{"text":...}` first
+  (`AIPC_PREFER_COSYVOICE=1` default) → Kokoro `:8880/v1/audio/speech` → espeak
+- **English**: Kokoro → espeak (CosyVoice only if `AIPC_TTS_FORCE_COSYVOICE=1`)
+- Kokoro voice packs still respect `/etc/aipc/voice/tts-zh-voice` /
+  `tts-en-voice` (and `AIPC_TTS_VOICE*`)
+- Set `AIPC_VOICE_TTS=0` to force text-only output
+- If all TTS backends fail, `aipc-voice-once` keeps `notify-send` / stdout
 
 ### STT interface contract
 
