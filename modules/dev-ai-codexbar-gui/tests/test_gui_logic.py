@@ -31,6 +31,10 @@ def test_color_and_paint() -> None:
     _ = QApplication.instance() or QApplication([])
     assert get_color_for_percent(10) == "#27ae60"
     assert not paint_usage_pixmap(percent=32).isNull()
+    # Remaining path is the tray headline contract
+    rem = paint_usage_pixmap(remaining=68.0, size=32)
+    assert not rem.isNull()
+    assert rem.width() >= 32
 
 
 def test_summary_from_views_official() -> None:

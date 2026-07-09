@@ -14,7 +14,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Optional
 
-TIMEOUT = float(os.environ.get("AIPC_USAGE_TIMEOUT", "90"))
+# Keep short so daily-assistant / voice never mystery-timeout (voice chat ~180–210s).
+TIMEOUT = float(os.environ.get("AIPC_USAGE_TIMEOUT", "15"))
 USAGE_ENDPOINT = os.environ.get("AIPC_USAGE_ENDPOINT", "http://127.0.0.1:8080").rstrip(
     "/"
 )
@@ -86,16 +87,42 @@ def _http_health() -> bool:
         return False
 
 
+def _cli_provider_ids(ids: Optional[list[str]]) -> Optional[list[str]]:
+    """Default to ``codex`` only — bare multi-provider usage often hangs."""
+    if ids:
+        return ids
+    if os.environ.get("CODEXBAR_ALL_PROVIDERS", "").lower() in {"1", "true", "yes"}:
+        return None
+    env = (os.environ.get("CODEXBAR_PROVIDER") or "").strip()
+    return [env] if env else ["codex"]
+
+
 def _from_official_cli(ids: Optional[list[str]]) -> Optional[list]:
     binary = _find_codexbar()
     if not binary:
         return None
-    cmd = [binary, "usage", "--format", "json"]
-    if ids and len(ids) == 1:
-        cmd.extend(["--provider", ids[0]])
-    proc = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=TIMEOUT, check=False
-    )
+    scope = _cli_provider_ids(ids)
+    web_to = max(5, min(int(TIMEOUT), 60))
+    cmd = [
+        binary,
+        "usage",
+        "--format",
+        "json",
+        "--web-timeout",
+        str(web_to),
+    ]
+    if scope and len(scope) == 1:
+        cmd.extend(["--provider", scope[0]])
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT + 5.0,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
     text = (proc.stdout or "").strip()
     if not text:
         return None
@@ -103,8 +130,8 @@ def _from_official_cli(ids: Optional[list[str]]) -> Optional[list]:
     if start < 0:
         return None
     data = json.loads(text[start:])
-    if ids and len(ids) > 1:
-        want = set(ids)
+    if scope and len(scope) > 1:
+        want = set(scope)
         data = [x for x in data if isinstance(x, dict) and x.get("provider") in want]
     return data if isinstance(data, list) else None
 
@@ -250,6 +277,7 @@ def self_test() -> None:
     assert p["remaining_percent"] == 68
     assert p["weekly_used_percent"] == 100
     assert p["account"] == "x@y.z"
+    assert _cli_provider_ids(None) == ["codex"]
     empty = lookup_usage("__no_such_xyz__")
     assert empty["tool"] == "usage.lookup"
     print("aipc_agent_tools_usage self_test: OK")
