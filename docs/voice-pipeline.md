@@ -60,6 +60,30 @@ curl -sS -X POST http://127.0.0.1:8880/v1/audio/speech \
 aipc-voice-once --seconds 5
 ```
 
+## Where each stage runs (Strix Halo / Linux)
+
+| Stage | Desired | Reality on this host (2026-07-10) |
+|---|---|---|
+| Wake (always-on) | **NPU** ~100 mW | Energy VAD on CPU today; openWakeWord→NPU is future |
+| STT (SenseVoice) | NPU or iGPU | **CPU** (ROCm `cuda:0` segfaults SenseVoice — known ceiling) |
+| LLM (chat) | NPU small + iGPU large | Lemonade **FLM on NPU** (`gemma4-it-e4b-FLM`) + Vulkan iGPU for big models |
+| **TTS (Kokoro)** | ideally NPU | **CPU container** — no Linux NPU TTS path yet |
+
+### Why TTS is not on the NPU (yet)
+
+1. **Lemonade `kokoro-v1`** is recipe `kokoro` → **CPU** (official matrix:
+   “Text-to-speech | kokoro | cpu”). It is **not** FLM/NPU. Loading it also
+   needs the `kokoros` binary from GitHub releases; download can 504.
+2. **FLM (XDNA2 NPU on Linux)** serves LLM / ASR / embed / rerank — list has
+   `whisper-v3:turbo` and chat models, **no TTS tag**.
+3. **AMD Vitis AI ONNX EP** for custom ONNX TTS on Ryzen AI is **Windows-first**;
+   Linux x86 NPU offload is incomplete (community: missing `voe` / EP).
+
+So the correct placement today is: **keep NPU free for always-on / small LLM /
+future STT**, and run **neural Kokoro TTS on CPU** (already ~1–2 s for a short
+sentence; does not fight the LLM for VRAM). When AMD/Lemonade ship NPU TTS on
+Linux, swap the backend URL only — client stays OpenAI speech-shaped.
+
 ## Stage 3: Wake + mute + hotkey
 
 - **Hotkey**: `aipc-voice-bind-hotkey` (default config `/etc/aipc/voice/hotkey` = `F20`).
