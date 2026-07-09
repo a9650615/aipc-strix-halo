@@ -26,7 +26,8 @@ logger = logging.getLogger("codexbar_gui.upstream")
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
-CLI_TIMEOUT = float(os.environ.get("CODEXBAR_CLI_TIMEOUT", "90"))
+# Official CLI can hang when OAuth/network stalls; keep UI responsive.
+CLI_TIMEOUT = float(os.environ.get("CODEXBAR_CLI_TIMEOUT", "35"))
 
 
 @dataclass
@@ -227,6 +228,24 @@ def fetch_from_http(
     return parse_upstream_list(body)
 
 
+def _cli_provider_arg(provider: Optional[str]) -> Optional[str]:
+    """Which ``--provider`` to pass.
+
+    Bare ``codexbar usage`` (all enabled providers) can hang for minutes when a
+    secondary provider (e.g. Claude cookie scrape) stalls — leaving tray/web
+    empty. Default to **codex** only; override with ``CODEXBAR_PROVIDER`` or
+    set ``CODEXBAR_ALL_PROVIDERS=1`` for the full list.
+    """
+    if provider:
+        return provider
+    env = (os.environ.get("CODEXBAR_PROVIDER") or "").strip()
+    if env:
+        return env
+    if os.environ.get("CODEXBAR_ALL_PROVIDERS", "").lower() in {"1", "true", "yes"}:
+        return None
+    return "codex"
+
+
 def fetch_from_cli(
     provider: Optional[str] = None,
     timeout: float = CLI_TIMEOUT,
@@ -234,15 +253,26 @@ def fetch_from_cli(
     binary = find_codexbar_binary()
     if not binary:
         return None
-    cmd = [binary, "usage", "--format", "json"]
-    if provider:
-        cmd.extend(["--provider", provider])
+    # Cap upstream web scrape so one slow provider cannot hang forever.
+    web_to = max(5, min(int(timeout), 60))
+    cmd = [
+        binary,
+        "usage",
+        "--format",
+        "json",
+        "--web-timeout",
+        str(web_to),
+    ]
+    prov = _cli_provider_arg(provider)
+    if prov:
+        cmd.extend(["--provider", prov])
+    logger.info("CLI: %s", " ".join(cmd))
     try:
         proc = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=timeout + 5.0,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -253,7 +283,7 @@ def fetch_from_cli(
     if not text:
         logger.warning("codexbar CLI empty stdout: %s", (proc.stderr or "")[:200])
         return None
-    # Some builds mix logs — find first '[' 
+    # Some builds mix logs — find first '['
     start = text.find("[")
     if start < 0:
         return None

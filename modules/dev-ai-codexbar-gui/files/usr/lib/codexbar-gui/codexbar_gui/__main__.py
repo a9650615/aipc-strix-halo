@@ -46,12 +46,19 @@ def entry_point(argv: list[str] | None = None) -> int:
         from codexbar_gui.webapp import main as web_main
         import sys as _sys
 
-        _sys.argv = ["codexbar-gui-web", "--port", str(args.web_port)]
+        _sys.argv = [
+            "codexbar-gui-web",
+            "--host",
+            args.host,
+            "--port",
+            str(args.web_port),
+        ]
         return web_main()
     return _tray_main(
         host=args.host,
         port=args.port,
         refresh_interval_ms=max(5, args.refresh_interval) * 1000,
+        web_port=args.web_port,
     )
 
 

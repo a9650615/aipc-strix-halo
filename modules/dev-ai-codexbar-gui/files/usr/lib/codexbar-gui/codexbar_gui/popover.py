@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, QPoint, QTimer
+from PySide6.QtCore import QPoint, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QGuiApplication, QCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -81,6 +80,33 @@ class _WindowRow(QWidget):
         layout.addWidget(reset)
 
 
+def _rem_color(rem: Optional[float]) -> str:
+    if rem is None:
+        return "#6c7086"
+    if rem <= 20:
+        return "#e74c3c"
+    if rem <= 50:
+        return "#f39c12"
+    return "#a6e3a1"
+
+
+class _ReloadWorker(QThread):
+    done = Signal(list)
+
+    def __init__(self, host: str, port: int, parent=None) -> None:
+        super().__init__(parent)
+        self._host = host
+        self._port = port
+
+    def run(self) -> None:
+        try:
+            views = fetch_usage_views(self._host, self._port, prefer_cli=True)
+        except Exception:
+            logger.warning("popover reload failed", exc_info=True)
+            views = []
+        self.done.emit(views)
+
+
 class _ProviderCard(QFrame):
     def __init__(self, view: ProviderView, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -92,26 +118,43 @@ class _ProviderCard(QFrame):
         root.setContentsMargins(12, 10, 12, 10)
         root.setSpacing(6)
 
-        head = QHBoxLayout()
         rem = view.headline_remaining
-        icon = QLabel()
-        icon.setPixmap(
-            paint_usage_pixmap(
-                percent=(100.0 - rem) if rem is not None else None,
-                error=not view.ok,
-                size=28,
-            )
-        )
-        head.addWidget(icon)
+        color = _rem_color(rem if view.ok else None)
+
+        # Top head: big remaining % (menu-bar style headline) + name
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        big = QLabel("—" if rem is None or not view.ok else f"{int(round(rem))}")
+        big.setFont(QFont("Sans", 28, QFont.Weight.Bold))
+        big.setStyleSheet(f"color:{color}; border:none;")
+        big.setMinimumWidth(56)
+        big.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        head.addWidget(big)
+
+        unit_col = QVBoxLayout()
+        unit_col.setSpacing(0)
+        unit = QLabel("% left" if rem is not None and view.ok else "")
+        unit.setStyleSheet(f"color:{color}; border:none; font-size:12px; font-weight:600;")
+        unit_col.addWidget(unit)
         title = QLabel(f"<b>{view.display_name}</b>")
-        title.setFont(QFont("Sans", 12))
+        title.setFont(QFont("Sans", 11))
         title.setStyleSheet("color:#cdd6f4; border:none;")
-        head.addWidget(title)
+        unit_col.addWidget(title)
         if view.source:
             src = QLabel(view.source)
             src.setStyleSheet("color:#6c7086; border:none; font-size:11px;")
-            head.addWidget(src)
-        head.addStretch()
+            unit_col.addWidget(src)
+        head.addLayout(unit_col, 1)
+
+        icon = QLabel()
+        icon.setPixmap(
+            paint_usage_pixmap(
+                remaining=rem if view.ok else None,
+                error=not view.ok,
+                size=36,
+            )
+        )
+        head.addWidget(icon)
         root.addLayout(head)
 
         if view.error:
@@ -147,7 +190,12 @@ class _ProviderCard(QFrame):
 class UsagePopover(QWidget):
     """Frameless tool window shown near the tray / cursor."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8080) -> None:
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8080,
+        web_url: Optional[str] = None,
+    ) -> None:
         super().__init__(
             None,
             Qt.WindowType.Tool
@@ -159,7 +207,9 @@ class UsagePopover(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._host = host
         self._port = port
+        self._web_url = web_url
         self._views: List[ProviderView] = []
+        self._worker: Optional[_ReloadWorker] = None
 
         self.setStyleSheet(
             "#CodexBarPopover { background:#11111b; border:1px solid #45475a; border-radius:10px; }"
@@ -174,6 +224,10 @@ class UsagePopover(QWidget):
         outer.setSpacing(8)
 
         title_row = QHBoxLayout()
+        self._headline = QLabel("—")
+        self._headline.setFont(QFont("Sans", 22, QFont.Weight.Bold))
+        self._headline.setStyleSheet("color:#89b4fa; border:none;")
+        title_row.addWidget(self._headline)
         title = QLabel("<b>CodexBar</b>")
         title.setFont(QFont("Sans", 13))
         title_row.addWidget(title)
@@ -182,6 +236,16 @@ class UsagePopover(QWidget):
         self._status.setStyleSheet("color:#6c7086; font-size:11px;")
         title_row.addWidget(self._status)
         outer.addLayout(title_row)
+
+        self._web_label = QLabel("")
+        self._web_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.LinksAccessibleByMouse
+        )
+        self._web_label.setOpenExternalLinks(True)
+        self._web_label.setStyleSheet("color:#89b4fa; font-size:11px; border:none;")
+        outer.addWidget(self._web_label)
+        self._set_web_url(web_url)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -201,6 +265,9 @@ class UsagePopover(QWidget):
         refresh = QPushButton("Refresh")
         refresh.clicked.connect(self.reload)
         btns.addWidget(refresh)
+        self._web_btn = QPushButton("Open Web")
+        self._web_btn.clicked.connect(self._open_web)
+        btns.addWidget(self._web_btn)
         settings = QPushButton("Settings…")
         settings.clicked.connect(self._open_settings)
         btns.addWidget(settings)
@@ -211,7 +278,31 @@ class UsagePopover(QWidget):
         outer.addLayout(btns)
 
         self.setMinimumWidth(420)
-        self.resize(440, 320)
+        self.resize(440, 340)
+
+    def set_web_url(self, url: Optional[str]) -> None:
+        self._set_web_url(url)
+
+    def _set_web_url(self, url: Optional[str]) -> None:
+        self._web_url = url
+        if url:
+            self._web_label.setText(
+                f'Web UI: <a href="{url}" style="color:#89b4fa;">{url}</a>'
+                "  (not :8080 — that is JSON-only serve)"
+            )
+            self._web_label.show()
+            self._web_btn.setEnabled(True)
+        else:
+            self._web_label.setText("Web UI: not running")
+            self._web_btn.setEnabled(False)
+
+    def _open_web(self) -> None:
+        if not self._web_url:
+            return
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        QDesktopServices.openUrl(QUrl(self._web_url))
 
     def show_at_cursor(self) -> None:
         self.reload()
@@ -232,13 +323,16 @@ class UsagePopover(QWidget):
         self.setFocus(Qt.FocusReason.PopupFocusReason)
 
     def reload(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._status.setText("loading…")
+            return
         self._status.setText("loading…")
-        QApplication.processEvents()
-        try:
-            self._views = fetch_usage_views(self._host, self._port, prefer_cli=True)
-        except Exception as exc:
-            logger.warning("reload failed: %s", exc)
-            self._views = []
+        self._worker = _ReloadWorker(self._host, self._port, parent=self)
+        self._worker.done.connect(self._on_reload_done)
+        self._worker.start()
+
+    def _on_reload_done(self, views: list) -> None:
+        self._views = list(views)
         self._rebuild()
 
     def _rebuild(self) -> None:
@@ -249,11 +343,28 @@ class UsagePopover(QWidget):
                 w.deleteLater()
 
         binary = find_codexbar_binary()
+        rems = [
+            v.headline_remaining
+            for v in self._views
+            if v.ok and v.headline_remaining is not None
+        ]
+        if rems:
+            worst = min(rems)
+            self._headline.setText(f"{int(round(worst))}")
+            self._headline.setStyleSheet(
+                f"color:{_rem_color(worst)}; border:none;"
+            )
+        else:
+            self._headline.setText("—")
+            self._headline.setStyleSheet("color:#6c7086; border:none;")
+
         if not self._views:
             msg = QLabel(
-                "No usage data.\n"
+                "No usage data from official CLI.\n"
                 + (
-                    f"CLI: {binary}"
+                    f"CLI: {binary}\n"
+                    "If this hangs, wait or run: codexbar usage --format json\n"
+                    + (f"Web: {self._web_url}" if self._web_url else "")
                     if binary
                     else "Install official codexbar CLI from GitHub Releases."
                 )
@@ -270,7 +381,7 @@ class UsagePopover(QWidget):
 
         self._body.adjustSize()
         # Fit window height to content modestly
-        hint_h = min(520, max(200, self._body.sizeHint().height() + 100))
+        hint_h = min(520, max(200, self._body.sizeHint().height() + 120))
         self.resize(self.width(), hint_h)
 
     def _open_settings(self) -> None:

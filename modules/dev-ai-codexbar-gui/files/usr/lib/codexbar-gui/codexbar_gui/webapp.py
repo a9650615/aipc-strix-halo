@@ -88,9 +88,15 @@ _HTML = r"""<!DOCTYPE html>
 <body>
 <header>
   <h1>CodexBar</h1>
+  <span class="big" id="headline">—</span>
+  <span class="meta">% left (worst)</span>
   <span class="meta" id="meta">loading…</span>
   <button type="button" id="refresh">Refresh</button>
 </header>
+<p class="meta" style="margin:-.5rem 0 1rem">
+  This is the HTML UI on <strong>:8787</strong>. Official <code>codexbar serve</code>
+  on :8080 is JSON-only (<code>GET /</code> → 404) — that is not a missing UI.
+</p>
 <div id="root" class="grid"></div>
 <script>
 function colorClass(rem) {
@@ -137,19 +143,26 @@ function card(p) {
 async function load() {
   const meta = document.getElementById('meta');
   const root = document.getElementById('root');
+  const headline = document.getElementById('headline');
   meta.textContent = 'loading…';
   try {
     const r = await fetch('/api/usage', {cache: 'no-store'});
     const data = await r.json();
     if (!data.providers || !data.providers.length) {
       root.innerHTML = `<div class="empty">${data.detail || 'No providers'}</div>`;
+      headline.textContent = '—';
     } else {
       root.innerHTML = data.providers.map(card).join('');
+      const rems = data.providers
+        .map(p => p.headline_remaining)
+        .filter(x => x != null && !Number.isNaN(x));
+      headline.textContent = rems.length ? Math.round(Math.min(...rems)) : '—';
     }
     meta.textContent = (data.source || 'cli') + ' · ' + new Date().toLocaleTimeString();
   } catch (e) {
     root.innerHTML = `<div class="empty err">Failed to load: ${e}</div>`;
     meta.textContent = 'error';
+    headline.textContent = '—';
   }
 }
 document.getElementById('refresh').onclick = load;

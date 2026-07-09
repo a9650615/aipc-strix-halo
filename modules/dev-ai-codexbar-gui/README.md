@@ -46,22 +46,36 @@ On start you get:
 
 | Surface | What |
 |---------|------|
-| **Tray icon** | Remaining % digits + meter (menu-bar style headline) |
-| **Click tray** | Desktop popover with Session/Weekly cards |
-| **Web UI** | `http://127.0.0.1:8787/` (HTML dashboard; official serve has no `/` UI) |
+| **Tray icon** | Remaining % digits + bottom bar (HiDPI; not an empty meter) |
+| **Click tray** | Popover with **big remaining %** header + Session/Weekly cards |
+| **Web UI** | `http://127.0.0.1:8787/` — **this** is the HTML UI |
+
+**Port map (do not confuse):**
+
+| Port | Role |
+|------|------|
+| **8787** | CodexBar GUI web dashboard (HTML) — open this in browser |
+| **8080** | Official `codexbar serve` JSON only — `GET /` is 404 by design |
+| 8000 | Unused |
 
 ```sh
+# Restart after pulling (old process has no web / old icon):
+pkill -f 'python3 -m codexbar_gui' || true
+codexbar-gui
+# open http://127.0.0.1:8787/
+
 # Web only (no tray)
 python3 -m codexbar_gui --web-only --web-port 8787
-# open http://127.0.0.1:8787/
 ```
 
 Data path is always official:
 
 ```sh
-codexbar usage --format json
-# optional JSON API (no HTML):
-codexbar serve --port 8080   # NOT 8000; / is 404 by design upstream
+# GUI defaults to --provider codex (full “all providers” can hang on Claude/etc.)
+codexbar usage --format json --provider codex --web-timeout 15
+# optional: all providers (may hang)
+export CODEXBAR_ALL_PROVIDERS=1
+# or: export CODEXBAR_PROVIDER=claude
 ```
 
 ## What the menu shows (upstream fields)

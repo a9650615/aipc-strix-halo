@@ -86,3 +86,16 @@ def test_summary_uses_worst_remaining() -> None:
     # remaining 68% → used 32% for icon fill
     assert used_for_icon == 32
     assert "Session" in tip or "session" in tip.lower() or "68" in tip or "Codex" in tip
+
+
+def test_cli_provider_default(monkeypatch) -> None:
+    from codexbar_gui.upstream import _cli_provider_arg
+    monkeypatch.delenv("CODEXBAR_PROVIDER", raising=False)
+    monkeypatch.delenv("CODEXBAR_ALL_PROVIDERS", raising=False)
+    assert _cli_provider_arg(None) == "codex"
+    assert _cli_provider_arg("claude") == "claude"
+    monkeypatch.setenv("CODEXBAR_PROVIDER", "gemini")
+    assert _cli_provider_arg(None) == "gemini"
+    monkeypatch.delenv("CODEXBAR_PROVIDER", raising=False)
+    monkeypatch.setenv("CODEXBAR_ALL_PROVIDERS", "1")
+    assert _cli_provider_arg(None) is None
