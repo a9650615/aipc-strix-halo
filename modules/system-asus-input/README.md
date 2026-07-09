@@ -44,25 +44,35 @@ sudo udevadm trigger --subsystem-match=input
 
 Do not claim the side button is complete until the physical button is pressed on the hardware and the end-to-end `F20` path is confirmed in a real desktop session.
 
-### GZ302EA (2025) detection note (2026-07-10)
+### GZ302EA (2025) — 控制中心鍵 (Command Center)
 
+Official chassis label (ASUS diagram): **控制中心**, between volume keys
+and USB-A on the tablet edge (power → volume → **Command Center** → USB).
+
+Windows behavior (ROG docs / forum): short-press opens Command Center /
+ScreenXpert; long-press often launches Copilot — largely **not remappable**
+in Armoury Crate.
+
+**Linux detection (hardware-verified 2026-07-10 on this machine):**  
 Multiple exclusive captures (with and without InputPlumber grabbing
-`Asus WMI hotkeys`) showed **zero** KEY/MSC/HID/ACPI events from the
-tablet-edge **Command Center** button. Stock Bazzite InputPlumber maps
-`KeyProg3` → gamepad QuickAccess *if* that key ever appears; an override
-can target `KeyF20` instead once the kernel reports a code.
+`Asus WMI hotkeys`, plus N-KEY hidraw, gpio-keys, virtual Xbox pad) showed
+**zero** KEY/MSC/HID/ACPI events when the 控制中心 key was pressed.
+Stock Bazzite InputPlumber maps `KeyProg3` → gamepad QuickAccess *if*
+that key ever appears; override under
+`files/etc/inputplumber/capability_maps/flw1.yaml` remaps Prog1–3 → **F20**
+once the kernel reports codes.
 
-Until then, use:
+Until the kernel/firmware path exists, use:
 
 | Path | How |
 |---|---|
 | KRunner Spotlight | `Alt+Space` then `aipc …` / `助理 …` (`aipc voice krunner-install`) |
 | Meta+A | Opens KRunner prefilled with `aipc ` |
-| F20 (software) | KDE shortcut for AIPC Voice Assistant (side button does not emit F20 yet) |
+| F20 (software) | KDE shortcut for AIPC Voice Assistant (控制中心 does not emit F20 yet) |
 | Voice energy wake | `aipc-voice-wake.service` |
 
 ```sh
-sudo aipc-asus-side-button-discover --capture --timeout 20   # press button during window
+sudo aipc-asus-side-button-discover --capture --timeout 20   # press 控制中心 during window
 ```
 
 ## Hardware assumption
