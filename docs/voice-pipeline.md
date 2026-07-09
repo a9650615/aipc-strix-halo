@@ -130,6 +130,47 @@ is hardware-proven and explicitly adopted:
 not stop SenseVoice / Kokoro / mem0. 122B vs agent Vulkan is exclusive at
 the **role** layer only; baseline coexists with either.
 
+## aipc CLI — install vs day-to-day management
+
+**Install / image ship path** (durable, both targets):
+
+| Piece | Module | Notes |
+|---|---|---|
+| STT SenseVoice | `modules/voice-stt-sensevoice` | systemd unit `:9001` |
+| TTS Kokoro | `modules/voice-tts-kokoro` | quadlet `aipc-kokoro` `:8880` |
+| Push-to-talk + helpers | `modules/voice-pipecat` | `aipc-voice-once`, hotkey, status script |
+| mem0 | `modules/memory-mem0` | `:7000` |
+| resident-small | `modules/llm-lemonade` + `llm-models` | NPU FLM alias |
+
+Modules land via `aipc render bootc` / `aipc render ansible` then image
+switch or playbook — not by hand-copying under `/var/lib` alone. Live
+hotfixes are for bring-up only; durable state stays in `modules/`.
+
+**Runtime control plane** (always prefer these over raw systemctl/podman):
+
+```bash
+aipc voice status          # baseline + Cosy/chat peers
+aipc voice start           # mem0 + SenseVoice + Kokoro
+aipc voice stop --yes      # STT/TTS only; mem0 + resident-small stay
+aipc voice once --seconds 5
+aipc voice bind-hotkey
+aipc voice record-clone
+
+aipc portal                # localhost entry page URL + service card summary
+aipc portal open           # open http://127.0.0.1:7080/ in the browser
+aipc portal serve          # foreground server if aipc-portal.service not installed yet
+
+aipc doctor                # module verify.sh + voice static checks
+aipc models use agent|122b|free   # heavy LLMs only; never tears baseline
+aipc mem0 migrate-from-saas       # optional SaaS import
+aipc config --mem0-local          # point Claude plugin at local mem0
+```
+
+Shipped `aipc-voice-*` binaries remain for shortcuts and desktop launchers;
+`aipc voice …` is the supported operator surface. For a browser overview of
+baseline + peers without retyping status commands, use `aipc portal open`
+(module `system-aipc-portal`; pre-bootc hosts: `aipc portal serve` then open).
+
 ## Where each stage runs (Strix Halo / Linux)
 
 | Stage | Desired | Reality on this host (2026-07-10) |

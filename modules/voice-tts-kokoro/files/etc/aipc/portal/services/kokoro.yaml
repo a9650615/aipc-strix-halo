@@ -1,0 +1,12 @@
+id: kokoro
+title: Kokoro TTS
+module: voice-tts-kokoro
+kind: voice
+systemd: aipc-kokoro.service
+health: http://127.0.0.1:8880/health
+endpoint: http://127.0.0.1:8880
+notes: "Quadlet/container name: aipc-kokoro (fallback when unit missing)"
+tags:
+  - voice
+  - tts
+  - baseline

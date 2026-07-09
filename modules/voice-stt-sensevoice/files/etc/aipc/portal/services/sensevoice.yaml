@@ -1,0 +1,11 @@
+id: sensevoice
+title: SenseVoice STT
+module: voice-stt-sensevoice
+kind: voice
+systemd: aipc-voice-stt-sensevoice.service
+health: http://127.0.0.1:9001/healthz
+endpoint: http://127.0.0.1:9001
+tags:
+  - voice
+  - stt
+  - baseline

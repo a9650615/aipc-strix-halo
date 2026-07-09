@@ -29,6 +29,7 @@ from aipc_lib import secrets
 from aipc_lib import status_dashboard as status_mod
 from aipc_lib import storage_reclaim as storage_reclaim_mod
 from aipc_lib import tools_menu as tools_menu_mod
+from aipc_lib import portal as portal_mod
 from aipc_lib.modules import discover
 from aipc_lib.render_bootc import render as render_bootc
 from aipc_lib.render_ansible import render as render_ansible
@@ -1001,6 +1002,66 @@ def mem0_migrate_from_saas(key_file: Path | None, apply: bool) -> None:
         click.echo(f"dry-run: {result.fetched} SaaS memories found, 0 imported (pass --apply to write)")
         return
     click.echo(f"imported {result.imported}/{result.fetched} memories into local mem0")
+
+
+
+
+@main.group("portal", invoke_without_command=True)
+@click.pass_context
+def portal_cmd(ctx: click.Context) -> None:
+    """Localhost AIPC entry portal (service cards + health).
+
+    Prefer the installed aipc-portal.service when present; use
+    `aipc portal serve` on live hosts before the next bootc switch.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    url = portal_mod.portal_url()
+    state = portal_mod.portal_status(url)
+    probes = portal_mod.collect_status()
+    click.echo(portal_mod.format_status_lines(probes, url=url, server_state=state))
+    if state != "running":
+        click.echo(
+            "hint: portal server not running — try: aipc portal serve",
+            err=True,
+        )
+
+
+@portal_cmd.command("open")
+def portal_open() -> None:
+    """Open the portal URL in the default browser."""
+    url = portal_mod.portal_url()
+    if portal_mod.portal_status(url) != "running":
+        click.echo(
+            f"portal not reachable at {url}; start with: aipc portal serve",
+            err=True,
+        )
+    portal_mod.open_portal(url)
+    click.echo(url)
+
+
+@portal_cmd.command("serve")
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", default=7080, show_default=True, type=int)
+def portal_serve(host: str, port: int) -> None:
+    """Run the portal HTTP server in the foreground (live-host fallback)."""
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        click.echo("refusing non-localhost bind (portal is local-only)", err=True)
+        sys.exit(2)
+    roots = portal_mod.resolve_services_roots()
+    click.echo(f"serving AIPC portal on http://{host}:{port}/")
+    if roots:
+        click.echo("metadata roots:")
+        for r in roots:
+            click.echo(f"  {r}")
+    try:
+        portal_mod.serve(host=host, port=port, roots=roots)
+    except RuntimeError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(1)
+    except OSError as exc:
+        click.echo(f"bind failed: {exc}", err=True)
+        sys.exit(1)
 
 
 @main.command("status")
