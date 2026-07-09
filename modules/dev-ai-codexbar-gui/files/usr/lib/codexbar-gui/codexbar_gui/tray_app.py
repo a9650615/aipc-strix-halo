@@ -17,6 +17,7 @@ from codexbar_gui.popover import UsagePopover
 from codexbar_gui.server_launcher import kill_server, start_server
 from codexbar_gui.upstream import fetch_usage_views, find_codexbar_binary
 from codexbar_gui.usage_panel import summary_from_views
+from codexbar_gui.webapp import start_web, stop_web
 
 logger = logging.getLogger("codexbar_gui.tray_app")
 
@@ -53,6 +54,8 @@ class CodexBarApp:
         self._refresh_timer: Optional[QTimer] = None
         self._server_proc: Optional[subprocess.Popen] = None
         self._current_used: Optional[float] = None
+        self._current_remaining: Optional[float] = None
+        self._web_url: Optional[str] = None
 
     def run(self) -> int:
         # Prefer xcb only if user forces it; default keep session platform.
@@ -81,6 +84,14 @@ class CodexBarApp:
             )
             return 1
 
+        # Local web dashboard (official serve has no HTML UI).
+        ok_web, web_msg = start_web()
+        if ok_web:
+            self._web_url = web_msg
+            logger.info("Web UI: %s", web_msg)
+        else:
+            logger.warning("Web UI not started: %s", web_msg)
+
         self._popover = UsagePopover(self._host, self._port)
         self._init_tray()
         self._start_server()
@@ -91,7 +102,8 @@ class CodexBarApp:
             QMessageBox.warning(
                 None,
                 "CodexBar",
-                "No system tray available.\nOpening usage window instead.",
+                "No system tray available.\nOpening usage window instead."
+                + (f"\nWeb: {self._web_url}" if self._web_url else ""),
             )
             self._popover.show_at_cursor()
         else:
@@ -106,8 +118,11 @@ class CodexBarApp:
 
     def _init_tray(self) -> None:
         self._tray = QSystemTrayIcon()
-        self._tray.setIcon(QIcon(make_simple_pixmap("C", 24, "#4a90d9")))
-        self._tray.setToolTip("CodexBar — click for usage")
+        self._tray.setIcon(QIcon(make_simple_pixmap("C", 24, "#89b4fa")))
+        tip = "CodexBar — click for usage"
+        if self._web_url:
+            tip += f"\nWeb: {self._web_url}"
+        self._tray.setToolTip(tip)
         # Do NOT use setContextMenu(QMenu) with QWidgetActions on Wayland —
         # it fails with "Failed to create grabbing popup".
         # Left/right/double-click all open the Wayland-safe popover.
@@ -143,10 +158,14 @@ class CodexBarApp:
             views = fetch_usage_views(self._host, self._port, prefer_cli=True)
             used, tip = summary_from_views(views)
             self._current_used = used
+            # Worst remaining across providers (lowest left).
+            rems = [v.headline_remaining for v in views if v.ok and v.headline_remaining is not None]
+            self._current_remaining = min(rems) if rems else None
             err = not views or all(not v.ok for v in views)
-            self._set_icon(percent=used, error=err)
+            self._set_icon(remaining=self._current_remaining, error=err)
             if self._tray:
-                self._tray.setToolTip(tip + "\n(click tray icon)")
+                extra = f"\nWeb: {self._web_url}" if self._web_url else ""
+                self._tray.setToolTip(tip + "\n(click tray icon)" + extra)
         except Exception:
             logger.warning("refresh failed", exc_info=True)
             self._set_icon(error=True)
@@ -156,11 +175,20 @@ class CodexBarApp:
         self._refresh_timer.timeout.connect(self._refresh_data)
         self._refresh_timer.start(self._refresh_interval_ms)
 
-    def _set_icon(self, percent: Optional[float] = None, error: bool = False) -> None:
+    def _set_icon(
+        self,
+        percent: Optional[float] = None,
+        error: bool = False,
+        remaining: Optional[float] = None,
+    ) -> None:
         if not self._tray:
             return
-        pct = percent if percent is not None else self._current_used
-        self._tray.setIcon(QIcon(paint_usage_pixmap(percent=pct, error=error, size=24)))
+        rem = remaining if remaining is not None else self._current_remaining
+        if rem is None and percent is not None:
+            rem = 100.0 - percent
+        self._tray.setIcon(
+            QIcon(paint_usage_pixmap(remaining=rem, error=error, size=24))
+        )
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         # Trigger = left click; Context = right click on some platforms;
@@ -177,6 +205,7 @@ class CodexBarApp:
         if self._refresh_timer:
             self._refresh_timer.stop()
         kill_server()
+        stop_web()
         if self._popover:
             self._popover.hide()
         if self._tray:

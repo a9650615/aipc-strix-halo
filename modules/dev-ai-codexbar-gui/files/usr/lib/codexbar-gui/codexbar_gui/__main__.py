@@ -12,13 +12,24 @@ from codexbar_gui.tray_app import DEFAULT_HOST, DEFAULT_PORT, REFRESH_INTERVAL_M
 def entry_point(argv: list[str] | None = None) -> int:
     """Entry point compatible with pyproject.toml [project.scripts]."""
     parser = argparse.ArgumentParser(description="CodexBar system tray GUI")
-    parser.add_argument("--host", default=DEFAULT_HOST, help="Usage server host")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Usage server port")
+    parser.add_argument("--host", default=DEFAULT_HOST, help="codexbar serve host")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="codexbar serve port (default 8080)")
     parser.add_argument(
         "--refresh-interval",
         type=int,
         default=REFRESH_INTERVAL_MS // 1000,
         help="Refresh interval in seconds",
+    )
+    parser.add_argument(
+        "--web-only",
+        action="store_true",
+        help="Only run local web dashboard (no tray)",
+    )
+    parser.add_argument(
+        "--web-port",
+        type=int,
+        default=8787,
+        help="Local web UI port (default 8787)",
     )
     parser.add_argument(
         "--log-level",
@@ -31,6 +42,12 @@ def entry_point(argv: list[str] | None = None) -> int:
         level=getattr(logging, args.log_level),
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     )
+    if args.web_only:
+        from codexbar_gui.webapp import main as web_main
+        import sys as _sys
+
+        _sys.argv = ["codexbar-gui-web", "--port", str(args.web_port)]
+        return web_main()
     return _tray_main(
         host=args.host,
         port=args.port,

@@ -40,14 +40,29 @@ Configure providers the same way as upstream (CLI config under
 
 ```sh
 codexbar-gui
-# or
-/usr/lib/codexbar-gui/start.sh
-# or
-python3 -m codexbar_gui --port 8080
 ```
 
-The tray app will start `codexbar serve` if nothing is on the port, or call
-`codexbar usage --format json` directly.
+On start you get:
+
+| Surface | What |
+|---------|------|
+| **Tray icon** | Remaining % digits + meter (menu-bar style headline) |
+| **Click tray** | Desktop popover with Session/Weekly cards |
+| **Web UI** | `http://127.0.0.1:8787/` (HTML dashboard; official serve has no `/` UI) |
+
+```sh
+# Web only (no tray)
+python3 -m codexbar_gui --web-only --web-port 8787
+# open http://127.0.0.1:8787/
+```
+
+Data path is always official:
+
+```sh
+codexbar usage --format json
+# optional JSON API (no HTML):
+codexbar serve --port 8080   # NOT 8000; / is 404 by design upstream
+```
 
 ## What the menu shows (upstream fields)
 
