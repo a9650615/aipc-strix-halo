@@ -47,3 +47,17 @@ def test_both_renderers_reference_all_four_subdirs(full_mod: Module) -> None:
     ]:
         assert dest in bootc_out, f"bootc render missing dest {dest}"
         assert dest in ansible_out, f"ansible render missing dest {dest}"
+
+
+def test_both_renderers_append_hwdb_update(tmp_path: Path) -> None:
+    mdir = tmp_path / "mod-hwdb"
+    hwdb_dir = mdir / "files/etc/udev/hwdb.d"
+    hwdb_dir.mkdir(parents=True)
+    (hwdb_dir / "x.hwdb").write_text("evdev:name:Test Device:*\n")
+    mod = Module(name="mod-hwdb", path=mdir, packages=[], kargs=[])
+
+    bootc_out = render_bootc([mod], base="base:latest", image_ref="x", build_date="d")
+    ansible_out = render_ansible([mod])
+
+    assert "systemd-hwdb update" in bootc_out
+    assert "systemd-hwdb update" in ansible_out

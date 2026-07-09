@@ -36,6 +36,9 @@ Bind the push-to-talk shortcut from a desktop session:
 aipc-voice-bind-hotkey
 ```
 
+The helper reads `/etc/aipc/voice/hotkey` by default; the repo ships `F20` as
+the default shortcut. KDE autostart runs the binder inside the login session,
+and manual rebinding is available with `aipc-voice-bind-hotkey --shortcut F20`.
 If KDE tools or `DISPLAY` are unavailable, the helper prints the commands it
 would run and exits optional (`2`) instead of changing system state.
 

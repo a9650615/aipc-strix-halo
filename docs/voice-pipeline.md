@@ -5,15 +5,21 @@ The voice assistant is implemented in staged slices. The current reliable core i
 ## Stage 1: v0 push-to-talk text-out
 
 ```text
-push-to-talk or manual command
+Z13 side button or manual command
         │
-        ▼
-aipc-voice-once
-        │
-        ├── arecord captures 16 kHz mono WAV
-        ├── POST http://127.0.0.1:9001/transcribe
-        ├── POST http://127.0.0.1:4100/chat
-        └── notify-send text reply, stdout fallback
+        ├── direct KDE shortcut capture, if the desktop sees the button
+        └── hwdb remap to F20, if discovery only yields MSC_SCAN
+                │
+                ▼
+      KDE shortcut binder / autostart
+                │
+                ▼
+         aipc-voice-once
+                │
+                ├── arecord captures 16 kHz mono WAV
+                ├── POST http://127.0.0.1:9001/transcribe
+                ├── POST http://127.0.0.1:4100/chat
+                └── notify-send text reply, stdout fallback
 ```
 
 Run manually:
@@ -25,7 +31,7 @@ aipc-voice-once --seconds 5
 Bind the KDE push-to-talk helper from inside the desktop session:
 
 ```bash
-aipc-voice-bind-hotkey
+aipc-voice-bind-hotkey --shortcut F20
 ```
 
 If KDE global-shortcut tools are missing or no desktop session is active, the helper prints the commands it would run and exits optional.
@@ -54,8 +60,9 @@ Run these on the AI PC after deploying the image:
 
 ```bash
 systemctl is-active aipc-voice-stt-sensevoice.service
+aipc-asus-side-button-discover --timeout 20
+aipc-voice-bind-hotkey --shortcut F20
 aipc-voice-once --seconds 5
-aipc-voice-bind-hotkey --dry-run
 aipc doctor
 ```
 

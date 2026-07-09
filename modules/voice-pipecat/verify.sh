@@ -23,6 +23,18 @@ for script in aipc-voice-once aipc-voice-bind-hotkey; do
     check_script "$script"
 done
 
+hotkey_file="$this_dir/files/etc/aipc/voice/hotkey"
+[ -f "$hotkey_file" ] || {
+    echo "voice-pipecat: missing hotkey config" >&2
+    exit 1
+}
+
+autostart_file="$this_dir/files/etc/xdg/autostart/aipc-voice-hotkey.desktop"
+[ -f "$autostart_file" ] || {
+    echo "voice-pipecat: missing KDE autostart desktop file" >&2
+    exit 1
+}
+
 tts="$this_dir/files/usr/lib/aipc-voice/aipc_voice_tts.py"
 python3 -c "import ast; ast.parse(open('$tts').read())" || {
     echo "voice-pipecat: aipc_voice_tts syntax error" >&2

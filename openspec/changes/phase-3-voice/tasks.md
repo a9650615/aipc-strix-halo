@@ -94,7 +94,7 @@
 
 ## 7. Listen-Off Triggers + systemd Target
 
-- [x] 7.1 Runtime push-to-talk binding helper exists as `aipc-voice-bind-hotkey`; static-verified only. Full desktop hotkey behavior remains hardware/manual-session verification.
+- [x] 7.1 Runtime push-to-talk binding helper exists as `aipc-voice-bind-hotkey`; repo default `F20` config and KDE autostart are staged, and ASUS side-button discovery plus hwdb template support are in place for static/render verification. Full hardware button behavior remains hardware/manual-session verification.
 - [ ] 7.2 Screen-lock listener: small DBus-monitor service that
   starts/stops `aipc-voice-mute.target` on
   `org.gnome.ScreenSaver.ActiveChanged`.

@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+import sys
+
+
+@dataclass
+class InputDevice:
+    name: str
+    handlers: list[str]
+
+
+def parse_input_devices(text: str) -> list[InputDevice]:
+    devices: list[InputDevice] = []
+    for block in text.split("\n\n"):
+        name: str | None = None
+        handlers: list[str] = []
+        for line in block.splitlines():
+            if line.startswith("N: Name="):
+                raw_name = line[len("N: Name=") :].strip()
+                if raw_name.startswith('"') and raw_name.endswith('"'):
+                    raw_name = raw_name[1:-1]
+                name = raw_name
+            elif line.startswith("H: Handlers="):
+                handlers = line[len("H: Handlers=") :].split()
+        if name is not None:
+            devices.append(InputDevice(name=name, handlers=handlers))
+    return devices
+
+
+def candidate_event_nodes(devices: list[InputDevice]) -> list[str]:
+    candidates: list[str] = []
+    wanted_names = ("Asus WMI hotkeys", "GZ302EA-Keyboard")
+    for device in devices:
+        if not any(wanted in device.name for wanted in wanted_names):
+            continue
+        for handler in device.handlers:
+            if handler.startswith("event"):
+                candidates.append(f"/dev/input/{handler}")
+    return candidates
+
+
+def run_self_test() -> int:
+    sample = """I: Bus=0019 Vendor=0000 Product=0001 Version=0000
+N: Name=\"Asus WMI hotkeys\"
+H: Handlers=kbd event7
+
+I: Bus=0011 Vendor=0001 Product=0001 Version=ab41
+N: Name=\"AT Translated Set 2 keyboard\"
+H: Handlers=sysrq kbd event3 leds
+
+I: Bus=0019 Vendor=0000 Product=0001 Version=0000
+N: Name=\"GZ302EA-Keyboard\"
+H: Handlers=kbd event9
+"""
+    devices = parse_input_devices(sample)
+    assert candidate_event_nodes(devices) == ["/dev/input/event7", "/dev/input/event9"]
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=10)
+    parser.add_argument("--devices-file", type=Path, default=Path("/proc/bus/input/devices"))
+    parser.add_argument("--self-test", action="store_true")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.self_test:
+        return run_self_test()
+
+    text = args.devices_file.read_text()
+    devices = parse_input_devices(text)
+    nodes = candidate_event_nodes(devices)
+    if not nodes:
+        print("No ASUS side-button candidate input nodes found.", file=sys.stderr)
+        return 2
+
+    print("Candidate input nodes:")
+    for node in nodes:
+        print(node)
+    print()
+    print("1. First try KDE shortcut capture with the side button.")
+    print("2. If KDE does not see it, use evtest or libinput debug-events on the candidate node.")
+    print("3. Find the MSC_SCAN value for the side button.")
+    print("4. Fill KEYBOARD_KEY_<scan>=f20 into /etc/udev/hwdb.d/90-aipc-asus-side-button.hwdb.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
