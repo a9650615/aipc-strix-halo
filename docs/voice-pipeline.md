@@ -138,3 +138,15 @@ sudo systemctl restart aipc-voice-stt-sensevoice.service
 ```
 
 Only mark OpenSpec hardware tasks complete after the matching command path is exercised. Wake word, listen-off triggers, firstboot voice screens, and full command/chat routing remain pending.
+
+### Change Kokoro voice without code
+
+```bash
+# Chinese (one name per file, # comments ok)
+echo zf_xiaoyi | sudo tee /etc/aipc/voice/tts-zh-voice
+# English
+echo af_heart | sudo tee /etc/aipc/voice/tts-en-voice
+# Or one-shot env:
+export AIPC_TTS_VOICE_ZH=zf_xiaoni
+```
+

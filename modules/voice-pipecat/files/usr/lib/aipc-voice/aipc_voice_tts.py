@@ -1,7 +1,10 @@
 """TTS router: Kokoro-82M neural (zh+en) first, espeak only as last resort.
 
-Chinese defaults to zf_xiaoxiao (natural Mandarin). English uses af_heart.
+Chinese defaults to zf_xiaoyi (clearer assistant Mandarin). English: af_heart.
 OpenAI-compatible endpoint: POST :8880/v1/audio/speech
+
+Voice override order (first wins):
+  AIPC_TTS_VOICE env → /etc/aipc/voice/tts-zh-voice or tts-en-voice → built-in default
 """
 
 from __future__ import annotations
@@ -14,18 +17,58 @@ import subprocess
 import tempfile
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 COSYVOICE_URL = os.environ.get("AIPC_COSYVOICE_URL", "http://127.0.0.1:9880/tts")
 KOKORO_URL = os.environ.get("AIPC_KOKORO_URL", "http://127.0.0.1:8880/v1/audio/speech")
 LOCAL_TTS_URL = os.environ.get("AIPC_LOCAL_TTS_URL", KOKORO_URL)
 TTS_TIMEOUT = float(os.environ.get("AIPC_TTS_TIMEOUT", "90"))
 
-# Kokoro voice packs (see GET /v1/audio/voices). zf_* / zm_* = Mandarin.
-VOICE_EN = os.environ.get("AIPC_TTS_VOICE_EN", "af_heart")
+_VOICE_ZH_FILE = Path(os.environ.get("AIPC_TTS_VOICE_ZH_FILE", "/etc/aipc/voice/tts-zh-voice"))
+_VOICE_EN_FILE = Path(os.environ.get("AIPC_TTS_VOICE_EN_FILE", "/etc/aipc/voice/tts-en-voice"))
+
+
+def _voice_from_file(path: Path) -> str | None:
+    try:
+        if not path.is_file():
+            return None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if s and not s.startswith("#"):
+                return s
+    except OSError:
+        return None
+    return None
+
+
+def _resolve_voice(env_key: str, file_path: Path, default: str) -> str:
+    env = os.environ.get(env_key, "").strip()
+    if env:
+        return env
+    from_file = _voice_from_file(file_path)
+    if from_file:
+        return from_file
+    return default
+
+
+# Defaults (see GET /v1/audio/voices). zf_* / zm_* = Mandarin packs.
+_DEFAULT_VOICE_EN = "af_heart"
 # zf_xiaoyi: clearer / more "assistant" than soft mainland-broadcast xiaoxiao.
-# Override with AIPC_TTS_VOICE_ZH=zf_xiaoni|zf_xiaobei|zf_xiaoxiao|zm_yunxi …
-VOICE_ZH = os.environ.get("AIPC_TTS_VOICE_ZH", "zf_xiaoyi")
+_DEFAULT_VOICE_ZH = "zf_xiaoyi"
 MODEL = os.environ.get("AIPC_TTS_MODEL", "kokoro")
+
+
+def voice_en() -> str:
+    return _resolve_voice("AIPC_TTS_VOICE_EN", _VOICE_EN_FILE, _DEFAULT_VOICE_EN)
+
+
+def voice_zh() -> str:
+    return _resolve_voice("AIPC_TTS_VOICE_ZH", _VOICE_ZH_FILE, _DEFAULT_VOICE_ZH)
+
+
+# Back-compat for tests / callers that read the attribute once.
+VOICE_EN = _DEFAULT_VOICE_EN
+VOICE_ZH = _DEFAULT_VOICE_ZH
 
 _CJK_RE = re.compile(r"[㐀-鿿豈-﫿]")
 # Dense CJK: if ≥15% of letters are CJK, treat as Chinese utterance.
@@ -46,7 +89,7 @@ def choose_voice(text: str) -> str:
     override = os.environ.get("AIPC_TTS_VOICE", "").strip()
     if override:
         return override
-    return VOICE_ZH if is_cjk(text) else VOICE_EN
+    return voice_zh() if is_cjk(text) else voice_en()
 
 
 def choose_tts_url(text: str) -> str:
@@ -178,16 +221,17 @@ def speak(text: str, opener=urllib.request.urlopen) -> bool:
 
 def _self_test() -> int:
     assert choose_tts_url("hello") == LOCAL_TTS_URL
-    assert choose_voice("hello") == VOICE_EN
-    assert choose_voice("你好世界") == VOICE_ZH
-    assert choose_voice("OK，我知道了") == VOICE_ZH  # mixed, still CJK-led
+    assert choose_voice("hello") == voice_en()
+    assert choose_voice("你好世界") == voice_zh()
+    assert choose_voice("OK，我知道了") == voice_zh()  # mixed, still CJK-led
     body, content_type = build_payload("你好", LOCAL_TTS_URL)
     assert content_type == "application/json"
     payload = json.loads(body.decode())
     assert payload["model"] == "kokoro"
-    assert payload["voice"] == VOICE_ZH
+    assert payload["voice"] == voice_zh()
     assert payload["response_format"] == "wav"
     assert speak("") is False
+    assert _voice_from_file(Path("/nonexistent")) is None
     print("aipc_voice_tts: self-test OK")
     return 0
 
