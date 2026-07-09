@@ -1,0 +1,2 @@
+# Host packages — Python deps (click/rich/httpx) install into the aipc venv
+# via post-install.sh / pyproject.toml. No extra RPMs required.

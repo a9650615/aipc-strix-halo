@@ -32,6 +32,7 @@ from aipc_lib import storage_reclaim as storage_reclaim_mod
 from aipc_lib import tools_menu as tools_menu_mod
 from aipc_lib import portal as portal_mod
 from aipc_lib import voice_ops as voice_ops_mod
+from aipc_lib.codexbar_usage import usage_cli
 from aipc_lib.modules import discover
 from aipc_lib.render_bootc import render as render_bootc
 from aipc_lib.render_ansible import render as render_ansible
@@ -416,6 +417,7 @@ def secrets_cmd() -> None:
 
 
 main.add_command(secrets_cmd, name="secrets")
+main.add_command(usage_cli, name="usage")
 
 
 @secrets_cmd.command("view")

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=CodexBar
+Exec=/usr/lib/codexbar-gui/run.sh
+Icon=codexbar-gui
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-KDE-Autostart-OnLogin=true
+Hidden=false

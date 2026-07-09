@@ -1,0 +1,6 @@
+# System packages for the tray GUI (rpm-ostree on bootc / dnf on ansible).
+# PySide6 wheel can also come from pip in the aipc venv; the system package
+# keeps OpenGL/Qt platform plugins aligned with the host Plasma stack.
+python3-pyside6
+python3-pyyaml
+libglvnd-glx

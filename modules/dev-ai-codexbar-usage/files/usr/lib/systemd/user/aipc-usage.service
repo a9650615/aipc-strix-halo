@@ -1,0 +1,14 @@
+[Unit]
+Description=AIPC CodexBar usage HTTP server (JSON for tray / waybar)
+After=network.target
+Documentation=file:///usr/lib/aipc-codexbar-usage
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/aipc-usage serve --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=5
+# User unit: reads ~/.config/codexbar/config.json from the logged-in user.
+
+[Install]
+WantedBy=default.target

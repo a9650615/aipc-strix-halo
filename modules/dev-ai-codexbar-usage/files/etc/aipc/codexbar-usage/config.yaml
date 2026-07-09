@@ -1,0 +1,11 @@
+# codexbar-usage defaults
+
+# Path to the LiteLLM proxy SQLite database.
+# Override via --db on the CLI; this file is the documented default.
+db_path: /var/lib/litellm-proxy/litellm_proxy.db
+
+# Default output format when --format is omitted.
+default_format: table
+
+# Providers to show by default (empty = all).
+visible_providers: []

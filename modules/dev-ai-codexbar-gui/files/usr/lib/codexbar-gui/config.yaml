@@ -1,0 +1,41 @@
+# CodexBar GUI defaults — system-level configuration.
+# User overrides go in ~/.config/codexbar/gui.yaml.
+
+# How often (seconds) to poll the usage HTTP server for fresh data.
+refresh_interval: 60
+
+# Default providers to show (empty = all enabled providers from the usage server).
+enabled_providers:
+  - codex
+  - openai
+  - claude
+  - gemini
+  - copilot
+  - cursor
+  - windsurf
+  - zed
+
+# System tray icon size in pixels (Qt will scale to the nearest standard size).
+icon_size: 22
+
+# Progress bar display style.
+progress_bar:
+  # "rounded" or "square".
+  shape: rounded
+  # Height of each provider's progress bar in pixels.
+  bar_height: 8
+  # Corner radius for rounded bars (0 = square).
+  corner_radius: 4
+  # Show provider name label next to the bar.
+  show_labels: true
+  # Color theme: "auto" (follows system), "dark", or "light".
+  theme: auto
+
+# Tooltip: show detailed per-provider usage on hover.
+tooltip:
+  # Show usage percentage.
+  show_usage: true
+  # Show cost summary if available.
+  show_cost: true
+  # Show identity (account email/name).
+  show_identity: true

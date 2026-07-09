@@ -54,6 +54,9 @@ SUPERVISOR_SYSTEM_PROMPT = (
 _DAILY_ASSISTANT_KEYWORDS = (
     "calendar", "schedule", "meeting", "email", "inbox", "mail",
     "file", "read",
+    # usage / quota questions → Daily Assistant (has usage_lookup tool)
+    "usage", "quota", "token", "tokens", "rate limit", "codex", "claude",
+    "用量", "額度", "配額",
 )
 
 
@@ -138,6 +141,11 @@ def self_test() -> None:
     denied = da.files_read.invoke({"path": "/etc/passwd"})
     assert denied["status"] in {"not_configured", "denied"}
     assert "root:" not in str(denied)
+    usage = da.usage_lookup.invoke({"providers": ""})
+    assert usage["tool"] == "usage.lookup"
+    assert usage["status"] in {"ok", "error", "not_configured"}
+    assert isinstance(usage.get("providers"), list)
+    assert _route({"text": "how much claude quota do I have left", "session_id": "s"}) == "daily_assistant"
 
     captured = {}
     real_init = ChatLiteLLM.__init__

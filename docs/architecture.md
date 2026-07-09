@@ -228,6 +228,7 @@ Canonical write-up: **`docs/voice-pipeline.md`** (closed-loop diagram, baseline 
 | `agent-tools-files` | File system tools |
 | `agent-tools-calendar` | Calendar + Email (CalDAV / IMAP) tools |
 | `agent-tools-search` | SearXNG self-host + search tool |
+| `agent-tools-usage` | AI coding usage/quota lookup for Daily Assistant (`usage_lookup`) |
 | `agent-mcp-gateway` | MCP server registry + gateway daemon |
 | `agent-gate` | Permission gate: grant/revoke/check/audit for risky actions (UNIX-socket RPC, `aipc-agent-gate.service`) |
 
@@ -252,6 +253,8 @@ Canonical write-up: **`docs/voice-pipeline.md`** (closed-loop diagram, baseline 
 | `dev-ai-goose` | Goose → LiteLLM + MCP config |
 | `dev-ai-claude-code` | Claude Code CLI |
 | `dev-ai-opencode` | OpenCode CLI → LiteLLM config |
+| `dev-ai-codexbar-usage` | CodexBar Python port — `aipc-usage` / `aipc usage show|cost|serve` provider windows |
+| `dev-ai-codexbar-gui` | CodexBar PySide6 tray GUI — polls local usage HTTP server |
 | `ccs` | CCS — multi-provider Claude Code/Codex/Droid switcher, `aipc` profile → LiteLLM |
 | `dev-ai-mcp-dev-servers` | GitHub / FS / Playwright MCP servers (disabled, blocked on phase-4-agent) |
 

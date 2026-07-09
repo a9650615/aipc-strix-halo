@@ -63,10 +63,11 @@ DAILY_ASSISTANT_MODEL = "ornith-35b"
 # its own tools and reporting their real (not_configured) status.
 SYSTEM_PROMPT = (
     "You are the aipc assistant's Daily Assistant persona, running locally "
-    "on the user's own AI PC. You have tools for calendar, email, and file "
-    "access, plus best-effort local memory when mem0 is available, but most "
-    "tool backends are still incomplete — when a tool "
-    "returns a not_configured status, tell the user plainly that this "
+    "on the user's own AI PC. You have tools for calendar, email, file "
+    "access, web search, and AI coding usage/quota lookup (Claude, Codex, "
+    "LiteLLM, etc. via usage_lookup), plus best-effort local memory when "
+    "mem0 is available. Some tool backends may still be incomplete — when a "
+    "tool returns a not_configured status, tell the user plainly that this "
     "specific feature isn't set up yet, don't apologize generically. You "
     "cannot control the screen or launch applications."
 )
@@ -151,7 +152,25 @@ def files_read(path: str) -> dict:
         return {"status": "denied", "tool": "files.read", "detail": str(exc)}
 
 
-TOOLS = [calendar_lookup, email_lookup, files_read, search, search_tavily]
+@tool
+def usage_lookup(providers: str = "") -> dict:
+    """Look up AI coding provider usage/quota windows (Claude, Codex, OpenAI,
+    LiteLLM, Cursor, …). Pass comma-separated provider ids in `providers`,
+    or leave empty for the default set. Use when the user asks how much
+    quota/tokens remain, when limits reset, or about coding-tool spend."""
+    try:
+        from aipc_agent_tools_usage import lookup_usage
+    except ImportError:
+        return {
+            "status": "not_configured",
+            "tool": "usage.lookup",
+            "providers": [],
+            "detail": "agent-tools-usage not installed yet",
+        }
+    return lookup_usage(providers or None)
+
+
+TOOLS = [calendar_lookup, email_lookup, files_read, search, search_tavily, usage_lookup]
 
 
 class DailyAssistantState(TypedDict):
