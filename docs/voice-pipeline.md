@@ -30,10 +30,12 @@ complete without leaving the loop:
 | **Kokoro** | speak |
 | **mem0** | remember across turns |
 | **portal** | see + open by voice (“打开 dashboard”) |
-| **agent/122b models** | optional heavy roles — **not** required for the loop |
+| **agent/122b models** | optional **role layer** — **not** required for the loop |
 
 `AIPC_SUPERVISOR_MODEL` can override `/chat` (e.g. `ornith-35b` after
 `aipc models use agent`); the standing default is **resident-small**.
+Hermes clients that need tool-calls use LiteLLM **`qwythos-9b`** (role
+layer) — never as a substitute for baseline `/chat`.
 
 **Voice path defaults (2026-07-10):**
 
@@ -50,6 +52,16 @@ complete without leaving the loop:
   (see `/etc/aipc/models/122b.disabled` and `modules/llm-ollama/README.md`).  
   Re-enable: `sudo systemctl enable --now ollama.service && aipc models use 122b`.  
   Prefer `aipc models use free` so only NPU `resident-small` stays warm.
+
+### How to trigger a turn
+
+| Trigger | How |
+|---|---|
+| **Keyboard** | **F20** (ASUS side button often remaps here) — bound via `aipc voice bind-hotkey` / `aipc-voice-bind-hotkey --shortcut F20` |
+| **Voice (always-on)** | `aipc-voice-wake.service` energy VAD: sustained speech energy → spawns `aipc-voice-once` as the desktop user (TTS/notify work). openWakeWord / custom wake phrase is future when models are installed. |
+| **CLI** | `aipc-voice-once --seconds 5` |
+
+Mute always-on listen: activate `aipc-voice-mute.target` (creates `/run/aipc/voice-mute`).
 
 ## Stage 1: v0 push-to-talk text-out
 
@@ -215,6 +227,31 @@ is hardware-proven and explicitly adopted:
 `aipc models use agent|122b|free` only switches **heavy role LLMs**. It must
 not stop SenseVoice / Kokoro / mem0. 122B vs agent Vulkan is exclusive at
 the **role** layer only; baseline coexists with either.
+
+## Role layer (optional; on top of baseline)
+
+Standing decision (2026-07-10, trial closed — Hermes OK on this host).
+These are **not** always-on and **must not** replace the closed-loop table
+above. Consumers go through LiteLLM aliases (CLAUDE.md §7).
+
+| Alias | Role | Notes |
+|---|---|---|
+| **`qwythos-9b`** | Hermes / agent **decision + tool-call** brain | Lemonade Vulkan ~5.6GB; `aipc models use agent` warm default; co-resides with one other Vulkan LLM under `max_loaded_models=2` |
+| `coder-agentic` | Heavier tool-call / coding | Optional peer in agent role |
+| `assistant-gemma` | Agent-role chat responder | Complementary to Qwythos, not voice default |
+| `ornith-35b` | Reasoning / agentic coding | On demand |
+| `qwen35-122b-q3` | Giant coding (Ollama) | Exclusive with agent Vulkan; unload via `agent`/`free` |
+
+Hard constraints from system architecture:
+
+1. **Baseline stays up** when agent/122b/free switches — NPU `resident-small`
+   + STT/TTS/mem0/portal are never torn down by presets.
+2. **Voice `/chat` default remains `resident-small`** — Qwythos is not the
+   closed-loop think piece.
+3. **Hermes (and similar agent CLIs) → `qwythos-9b` via LiteLLM** when the
+   agent role is active; do not hardcode Lemonade/Ollama URLs.
+4. **UMA budget** — agent Vulkan stack vs 122B is exclusive; Qwythos is small
+   enough to share a slot with one peer, not an excuse to keep 122B loaded.
 
 ## aipc CLI — install vs day-to-day management
 
