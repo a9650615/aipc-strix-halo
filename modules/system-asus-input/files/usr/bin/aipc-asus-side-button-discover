@@ -1,10 +1,25 @@
 #!/usr/bin/env python3
+"""Discover ASUS ROG Flow Z13 side / Command Center button events.
+
+On GZ302EA (2025) under current Linux, this button often emits **no**
+evdev/HID/ACPI events (Windows hard-codes it to ScreenXpert/Copilot).
+This tool captures MSC_SCAN/KEY on Asus WMI + N-KEY + gpio + InputPlumber
+targets so we can fill hwdb when the kernel starts reporting codes.
+"""
 from __future__ import annotations
 
 import argparse
+import select
+import struct
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
-import sys
+
+EV_KEY = 0x01
+EV_MSC = 0x04
+MSC_SCAN = 0x04
+EVENT_SIZE = 24  # x86_64
 
 
 @dataclass
@@ -31,16 +46,24 @@ def parse_input_devices(text: str) -> list[InputDevice]:
     return devices
 
 
-def candidate_event_nodes(devices: list[InputDevice]) -> list[str]:
-    candidates: list[str] = []
-    wanted_names = ("Asus WMI hotkeys", "GZ302EA-Keyboard")
+def candidate_event_nodes(devices: list[InputDevice]) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    wanted = (
+        "Asus WMI hotkeys",
+        "GZ302EA-Keyboard",
+        "N-KEY",
+        "gpio-keys",
+        "InputPlumber Keyboard",
+        "X-Box",
+        "Elite",
+    )
     for device in devices:
-        if not any(wanted in device.name for wanted in wanted_names):
+        if not any(w in device.name for w in wanted):
             continue
         for handler in device.handlers:
             if handler.startswith("event"):
-                candidates.append(f"/dev/input/{handler}")
-    return candidates
+                out.append((f"/dev/input/{handler}", device.name))
+    return out
 
 
 def run_self_test() -> int:
@@ -51,46 +74,111 @@ H: Handlers=kbd event7
 I: Bus=0011 Vendor=0001 Product=0001 Version=ab41
 N: Name=\"AT Translated Set 2 keyboard\"
 H: Handlers=sysrq kbd event3 leds
-
-I: Bus=0019 Vendor=0000 Product=0001 Version=0000
-N: Name=\"GZ302EA-Keyboard\"
-H: Handlers=kbd event9
 """
     devices = parse_input_devices(sample)
-    assert candidate_event_nodes(devices) == ["/dev/input/event7", "/dev/input/event9"]
+    nodes = candidate_event_nodes(devices)
+    assert nodes == [("/dev/input/event7", "Asus WMI hotkeys")]
     return 0
 
 
+def capture(nodes: list[tuple[str, str]], timeout: int) -> list[str]:
+    fds: list[tuple] = []
+    for path, name in nodes:
+        try:
+            f = open(path, "rb")
+            fds.append((f, path, name))
+        except OSError as e:
+            print(f"open fail {path}: {e}", file=sys.stderr)
+    if not fds:
+        return []
+    poll = select.poll()
+    for f, _, _ in fds:
+        poll.register(f.fileno(), select.POLLIN)
+    print(f"Listening {len(fds)} device(s) for {timeout}s — press the side button now.", flush=True)
+    deadline = time.time() + timeout
+    found: list[str] = []
+    while time.time() < deadline:
+        for fd, _ in poll.poll(200):
+            for f, path, name in fds:
+                if f.fileno() != fd:
+                    continue
+                data = f.read(EVENT_SIZE)
+                if len(data) < EVENT_SIZE:
+                    continue
+                _s, _u, typ, code, value = struct.unpack("llHHi", data)
+                if typ == 0 and code == 0:
+                    continue
+                if typ == EV_MSC and code == MSC_SCAN:
+                    line = f"{name}|MSC_SCAN|0x{value:x}|{value}"
+                elif typ == EV_KEY:
+                    line = f"{name}|KEY|{code}|v{value}"
+                else:
+                    line = f"{name}|T{typ}|{code}|{value}"
+                print(line, flush=True)
+                found.append(line)
+    for f, _, _ in fds:
+        f.close()
+    return found
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--timeout", type=int, default=10)
-    parser.add_argument("--devices-file", type=Path, default=Path("/proc/bus/input/devices"))
-    parser.add_argument("--self-test", action="store_true")
-    return parser
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--timeout", type=int, default=15)
+    p.add_argument("--devices-file", type=Path, default=Path("/proc/bus/input/devices"))
+    p.add_argument("--self-test", action="store_true")
+    p.add_argument("--capture", action="store_true", help="Actually read /dev/input (needs root)")
+    return p
 
 
 def main() -> int:
-    parser = build_parser()
-    args = parser.parse_args()
-
+    args = build_parser().parse_args()
     if args.self_test:
-        return run_self_test()
+        run_self_test()
+        print("aipc-asus-side-button-discover: self-test OK")
+        return 0
 
     text = args.devices_file.read_text()
     devices = parse_input_devices(text)
     nodes = candidate_event_nodes(devices)
     if not nodes:
-        print("No ASUS side-button candidate input nodes found.", file=sys.stderr)
+        print("No ASUS/side-button candidate input nodes found.", file=sys.stderr)
         return 2
 
     print("Candidate input nodes:")
-    for node in nodes:
-        print(node)
+    for path, name in nodes:
+        print(f"  {path}  ({name})")
     print()
-    print("1. First try KDE shortcut capture with the side button.")
-    print("2. If KDE does not see it, use evtest or libinput debug-events on the candidate node.")
-    print("3. Find the MSC_SCAN value for the side button.")
-    print("4. Fill KEYBOARD_KEY_<scan>=f20 into /etc/udev/hwdb.d/90-aipc-asus-side-button.hwdb.")
+
+    if not args.capture:
+        print("Run with --capture (as root) and press the side button during the window:")
+        print(f"  sudo aipc-asus-side-button-discover --capture --timeout {args.timeout}")
+        print()
+        print("If capture prints MSC_SCAN, fill hwdb:")
+        print("  KEYBOARD_KEY_<scan>=f20  in  /etc/udev/hwdb.d/90-aipc-asus-side-button.hwdb")
+        print("  sudo systemd-hwdb update && sudo udevadm trigger")
+        print()
+        print("Known GZ302EA status (2026-07-10): Command Center side button often")
+        print("emits **no** Linux input events (firmware/Windows-oriented). Use")
+        print("KRunner (Alt+Space → aipc …) or F20 software bind / Meta+A instead.")
+        return 0
+
+    found = capture(nodes, args.timeout)
+    print("--- SUMMARY ---")
+    if not found:
+        print("NO_EVENTS — side button produced no KEY/MSC on candidates.")
+        print("This matches GZ302EA Command Center button under current kernel:")
+        print("no remappable scan code available → use KRunner / Meta+A / voice wake.")
+        return 3
+    for line in sorted(set(found)):
+        print(line)
+    scans = [l for l in found if "MSC_SCAN" in l]
+    if scans:
+        print()
+        print("Suggested hwdb (example):")
+        for s in sorted(set(scans)):
+            parts = s.split("|")
+            if len(parts) >= 3 and parts[2].startswith("0x"):
+                print(f"  KEYBOARD_KEY_{parts[2][2:]}=f20")
     return 0
 
 

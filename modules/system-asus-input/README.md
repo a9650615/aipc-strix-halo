@@ -44,6 +44,27 @@ sudo udevadm trigger --subsystem-match=input
 
 Do not claim the side button is complete until the physical button is pressed on the hardware and the end-to-end `F20` path is confirmed in a real desktop session.
 
+### GZ302EA (2025) detection note (2026-07-10)
+
+Multiple exclusive captures (with and without InputPlumber grabbing
+`Asus WMI hotkeys`) showed **zero** KEY/MSC/HID/ACPI events from the
+tablet-edge **Command Center** button. Stock Bazzite InputPlumber maps
+`KeyProg3` → gamepad QuickAccess *if* that key ever appears; an override
+can target `KeyF20` instead once the kernel reports a code.
+
+Until then, use:
+
+| Path | How |
+|---|---|
+| KRunner Spotlight | `Alt+Space` then `aipc …` / `助理 …` (`aipc voice krunner-install`) |
+| Meta+A | Opens KRunner prefilled with `aipc ` |
+| F20 (software) | KDE shortcut for AIPC Voice Assistant (side button does not emit F20 yet) |
+| Voice energy wake | `aipc-voice-wake.service` |
+
+```sh
+sudo aipc-asus-side-button-discover --capture --timeout 20   # press button during window
+```
+
 ## Hardware assumption
 
 - ASUS ROG Flow Z13 (GZ302EA) or similar hardware using ASUS WMI drivers.
