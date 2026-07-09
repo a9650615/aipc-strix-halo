@@ -38,9 +38,10 @@ done < <(find . -path './.git' -prune -o -path './.claude/worktrees' -prune -o \
   -print0 2>/dev/null)
 
 # 2) Conflict marker scan (report only)
-if git grep -n '<<<<<<< ' -- ':!*.md' ':!docs/agent-log.md' 2>/dev/null | head -5 | grep -q .; then
+MARKER=$(printf '%s%s' '<<<' '<<<< ')
+if git grep -nF "$MARKER" -- . ':(exclude).claude/skills/branch-status-merge/**' ':(exclude)docs/agent-log.md' 2>/dev/null | head -5 | grep -q .; then
   echo "WARN: possible conflict markers still in tree:" >&2
-  git grep -n '<<<<<<< ' -- ':!docs/agent-log.md' 2>/dev/null | head -10 || true
+  git grep -nF "$MARKER" -- . ':(exclude).claude/skills/branch-status-merge/**' ':(exclude)docs/agent-log.md' 2>/dev/null | head -10 || true
 fi
 
 # 3) Summarize remaining porcelain
