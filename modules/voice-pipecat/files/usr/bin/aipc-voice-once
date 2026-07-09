@@ -167,13 +167,23 @@ def chat_via_aggregator(text, session_id):
 def show(reply):
     """Speak the reply when TTS is ready; always keep text notification too."""
     spoke = False
-    if os.environ.get("AIPC_VOICE_TTS", "1") != "0" and aipc_voice_tts is not None:
+    if os.environ.get("AIPC_VOICE_TTS", "1") == "0":
+        print("aipc-voice-once: TTS skipped (AIPC_VOICE_TTS=0)", file=sys.stderr)
+    elif aipc_voice_tts is None:
+        print(
+            "aipc-voice-once: TTS module missing "
+            "(need aipc_voice_tts under /var/lib/aipc-voice/lib or /usr/lib/aipc-voice)",
+            file=sys.stderr,
+        )
+    else:
         try:
             spoke = bool(aipc_voice_tts.speak(reply))
         except Exception as exc:  # noqa: BLE001 — never fail the round trip on TTS
             print(f"aipc-voice-once: TTS error: {exc}", file=sys.stderr)
     if spoke:
         print("aipc-voice-once: spoke reply via TTS")
+    else:
+        print("aipc-voice-once: TTS did not play (text-only this turn)", file=sys.stderr)
     if shutil.which("notify-send"):
         subprocess.run(["notify-send", "AIPC Assistant", reply], check=False)
     elif not spoke:

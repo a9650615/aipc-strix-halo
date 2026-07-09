@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -192,22 +193,62 @@ def build_payload(text: str, url: str) -> tuple[bytes, str]:
     return json.dumps({"text": text}).encode(), "application/json"
 
 
+def _audio_env() -> dict[str, str]:
+    """Ensure paplay finds the user PipeWire/Pulse session (wake/system units)."""
+    env = os.environ.copy()
+    if not env.get("XDG_RUNTIME_DIR"):
+        try:
+            env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
+        except Exception:
+            pass
+    env.setdefault("PULSE_SERVER", f"unix:{env.get('XDG_RUNTIME_DIR', '/run/user/1000')}/pulse/native")
+    return env
+
+
+def _default_sink(env: dict[str, str] | None = None) -> str:
+    try:
+        out = subprocess.check_output(
+            ["pactl", "get-default-sink"],
+            text=True,
+            timeout=3,
+            env=env or _audio_env(),
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        return out
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return ""
+
+
 def _play_audio_bytes(audio: bytes, suffix: str = ".wav") -> bool:
     if not audio:
         return False
+    # Reject tiny / non-audio bodies (e.g. JSON error mislabeled as wav).
+    if len(audio) < 64 or (suffix == ".wav" and audio[:4] != b"RIFF"):
+        print(
+            f"aipc-voice-tts: refusing play (bytes={len(audio)} suffix={suffix})",
+            file=sys.stderr,
+        )
+        return False
+
+    env = _audio_env()
+    sink = _default_sink(env)
     players: list[list[str]] = []
     if suffix in (".wav", ".flac"):
         if shutil.which("paplay"):
+            # Explicit sink so Bluetooth/default is obvious in logs.
+            if sink:
+                players.append(["paplay", f"--device={sink}", "{path}"])
             players.append(["paplay", "{path}"])
+        if shutil.which("pw-play"):
+            players.append(["pw-play", "{path}"])
         if shutil.which("aplay"):
             players.append(["aplay", "-q", "{path}"])
     if shutil.which("ffplay"):
         players.append(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "{path}"])
     if shutil.which("mpv"):
         players.append(["mpv", "--no-video", "--really-quiet", "{path}"])
-    if not players and shutil.which("paplay"):
-        players.append(["paplay", "{path}"])
     if not players:
+        print("aipc-voice-tts: no player (paplay/aplay/ffplay/mpv)", file=sys.stderr)
         return False
 
     fd, path = tempfile.mkstemp(suffix=suffix, prefix="aipc-tts-")
@@ -215,13 +256,27 @@ def _play_audio_bytes(audio: bytes, suffix: str = ".wav") -> bool:
     try:
         with open(path, "wb") as f:
             f.write(audio)
+        last_err = ""
         for tmpl in players:
             cmd = [c.format(path=path) for c in tmpl]
             try:
-                subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+                subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    timeout=120,
+                    env=env,
+                )
+                print(
+                    f"aipc-voice-tts: played {len(audio)}B via {cmd[0]}"
+                    + (f" sink={sink}" if sink else ""),
+                    file=sys.stderr,
+                )
                 return True
-            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                last_err = str(exc)
                 continue
+        print(f"aipc-voice-tts: all players failed ({last_err})", file=sys.stderr)
         return False
     finally:
         try:
@@ -269,7 +324,12 @@ def _post_tts(text: str, url: str, opener=urllib.request.urlopen) -> bool:
         with opener(req, timeout=TTS_TIMEOUT) as resp:
             audio = resp.read()
             content = (resp.headers.get("Content-Type") or "").lower()
-        if "json" in content:
+            status = getattr(resp, "status", 200) or 200
+        if int(status) >= 400:
+            print(f"aipc-voice-tts: HTTP {status} from {url}", file=sys.stderr)
+            return False
+        if "json" in content or audio[:1] == b"{":
+            print(f"aipc-voice-tts: non-audio body from {url}", file=sys.stderr)
             return False
         if "mpeg" in content or "mp3" in content:
             suffix = ".mp3"
@@ -279,14 +339,19 @@ def _post_tts(text: str, url: str, opener=urllib.request.urlopen) -> bool:
             suffix = ".flac"
         else:
             suffix = ".wav"
+        print(
+            f"aipc-voice-tts: got {len(audio)}B from {url} ({content or suffix})",
+            file=sys.stderr,
+        )
         return _play_audio_bytes(audio, suffix)
-    except (OSError, urllib.error.URLError, TimeoutError):
+    except (OSError, urllib.error.URLError, TimeoutError) as exc:
+        print(f"aipc-voice-tts: POST failed {url}: {exc}", file=sys.stderr)
         return False
 
 
 def speak_http(text: str, opener=urllib.request.urlopen) -> bool:
-    # Try CosyVoice first for CJK (if preferred); always fall through to Kokoro.
-    for url in tts_url_chain(text, check_health=False, opener=opener):
+    # Prefer health-aware chain so degraded CosyVoice is not first.
+    for url in tts_url_chain(text, check_health=True, opener=opener):
         if _post_tts(text, url, opener=opener):
             return True
     return False
@@ -296,9 +361,11 @@ def speak(text: str, opener=urllib.request.urlopen) -> bool:
     if not text or not str(text).strip():
         return False
     if os.environ.get("AIPC_VOICE_TTS", "1") == "0":
+        print("aipc-voice-tts: disabled (AIPC_VOICE_TTS=0)", file=sys.stderr)
         return False
     if speak_http(text, opener=opener):
         return True
+    print("aipc-voice-tts: HTTP backends failed; trying espeak", file=sys.stderr)
     return speak_espeak(text)
 
 
