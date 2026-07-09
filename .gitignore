@@ -24,6 +24,12 @@ build/
 .idea/
 .vscode/
 *.swp
+*.orig
+*.rej
+*~
+
+# Local agent skill mirrors / session state (canonical skills live under .claude/skills/)
+.grok/
 
 # aipc multi-site web engine local profiles / sessions
 **/.local/share/aipc-web/

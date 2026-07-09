@@ -154,6 +154,21 @@ Ask yourself, before committing:
 
 ## Phase 6 — Commit + push
 
+### 6.0 — Clean tree + branch status + ask-to-merge (after commit)
+
+When this dispatch produced one or more commits, **before** you declare done,
+read and follow `.claude/skills/branch-status-merge/SKILL.md`:
+
+1. Scrub process residue:  
+   `bash .claude/skills/branch-status-merge/scripts/clean-process.sh`  
+   (no `__pycache__`, no `*.orig`/`*.rej`, no mystery untracked junk from your run).
+2. Classify any remaining dirty paths: commit deliverables, leave/report unrelated WIP, restore accidental touches.
+3. Run `bash .claude/skills/branch-status-merge/scripts/branch-status.sh`.
+4. Report cleanliness + branch table (vs main / vs origin).
+5. **Ask** whether to merge into `main` (or push-only / leave as-is).
+6. Do **not** merge or push to `main` unless the user says yes in this turn.
+7. Do **not** claim done while your process files still dirty the tree.
+
 ### 6.1 — Append the agent-log row
 
 Use the `aipc log append` subcommand (added in commit 201e72b precisely to prevent sed-style corruption of historic rows):
