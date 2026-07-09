@@ -8,6 +8,31 @@ from aipc_lib import portal
 from aipc_lib.portal import CardProbe, ServiceMetadata
 
 
+def test_matches_open_portal_intent_zh_en() -> None:
+    assert portal.matches_open_portal_intent("打开 dashboard")
+    assert portal.matches_open_portal_intent("打開管理介面")
+    assert portal.matches_open_portal_intent("open portal")
+    assert portal.matches_open_portal_intent("Open the dashboard please")
+    assert portal.matches_open_portal_intent("dashboard")
+    assert not portal.matches_open_portal_intent("今天天气怎么样")
+    assert not portal.matches_open_portal_intent("remember my birthday")
+
+
+def test_ensure_and_open_portal_starts_then_opens(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(portal, "ensure_portal_running", lambda url=None: True)
+    monkeypatch.setattr(
+        portal,
+        "open_portal",
+        lambda url: calls.append(url),
+    )
+    ok, msg = portal.ensure_and_open_portal("http://127.0.0.1:7080")
+    assert ok
+    assert "7080" in msg
+    assert calls == ["http://127.0.0.1:7080"]
+
+
 def test_load_service_metadata_accepts_mem0_yaml(tmp_path: Path) -> None:
     services = tmp_path / "services"
     services.mkdir()

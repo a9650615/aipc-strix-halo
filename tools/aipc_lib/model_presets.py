@@ -1,19 +1,21 @@
 """Local-model role presets for 128GB UMA (not full mutual exclusion).
 
-Always-on baseline (user standing decision 2026-07-10; change only if a
-better combo is proven):
+Always-on closed loop / baseline (user standing decision 2026-07-10;
+change only if a better combo is hardware-proven). Product write-up:
+docs/voice-pipeline.md and docs/architecture.md Phase 3.
 
-  - resident-small  (Lemonade FLM / NPU)
-  - SenseVoice      (STT service — outside this module, never unload here)
-  - Kokoro          (TTS container — outside this module)
-  - mem0            (memory service — outside this module)
+  - resident-small  (Lemonade FLM / NPU — default /chat brain)
+  - SenseVoice      (STT — outside this module, never unload here)
+  - Kokoro          (TTS — outside this module)
+  - mem0            (memory — outside this module)
+  - portal          (manage UI — outside this module)
 
-Role layer (heavy, exclusive with each other):
+Role layer (heavy, exclusive with each other; optional on top of the loop):
   - agent: Lemonade Vulkan agent LLMs (qwythos / coder-agentic / ornith / …)
   - 122b:  Ollama qwen35-122b-q3 (~81GB) — cannot co-reside with agent Vulkan
 
-`aipc models use` only plans LLM unload/warm. Voice + mem0 stay up as
-systemd/podman units regardless of preset.
+`aipc models use` only plans LLM unload/warm. The closed loop (STT/TTS/
+mem0/portal + NPU resident-small) stays up regardless of preset.
 """
 from __future__ import annotations
 

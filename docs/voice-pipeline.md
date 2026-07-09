@@ -1,6 +1,39 @@
 # Voice Pipeline
 
-The voice assistant is implemented in staged slices. The current reliable core is a one-shot push-to-talk command; wake word, TTS, and full streaming behavior are layered on top only after their services are verified.
+## Closed loop (standing product shape)
+
+One always-on loop — not a pile of independent CLIs. Every turn should
+complete without leaving the loop:
+
+```text
+  mic ──► SenseVoice :9001 ──► local intent? ──yes──► action (e.g. portal open)
+                │                      │ no
+                │                      ▼
+                │              /chat :4100  (resident-small via LiteLLM :4000)
+                │                      │
+                │                      ├── mem0 recall/remember :7000
+                │                      ▼
+                └──────────► Kokoro :8880 TTS + notify-send
+                                    │
+                                    ▼
+                              speaker / desktop
+
+  observe / manage:  aipc portal  http://127.0.0.1:7080/
+                     aipc voice status|loop|start
+                     aipc models use agent|122b|free   (heavy LLMs only)
+```
+
+| Piece | Role in the loop |
+|---|---|
+| **SenseVoice** | hear |
+| **resident-small** | think (default `/chat`; NPU) |
+| **Kokoro** | speak |
+| **mem0** | remember across turns |
+| **portal** | see + open by voice (“打开 dashboard”) |
+| **agent/122b models** | optional heavy roles — **not** required for the loop |
+
+`AIPC_SUPERVISOR_MODEL` can override `/chat` (e.g. `ornith-35b` after
+`aipc models use agent`); the standing default is **resident-small**.
 
 ## Stage 1: v0 push-to-talk text-out
 
@@ -18,8 +51,9 @@ Z13 side button or manual command
                 │
                 ├── arecord captures 16 kHz mono WAV
                 ├── POST http://127.0.0.1:9001/transcribe
-                ├── POST http://127.0.0.1:4100/chat
-                └── notify-send text reply, stdout fallback
+                ├── local intent (portal) OR POST :4100/chat
+                ├── POST Kokoro :8880 (or Cosy) TTS
+                └── notify-send text reply
 ```
 
 Run manually:
@@ -149,15 +183,16 @@ hotfixes are for bring-up only; durable state stays in `modules/`.
 **Runtime control plane** (always prefer these over raw systemctl/podman):
 
 ```bash
-aipc voice status          # baseline + Cosy/chat peers
-aipc voice start           # mem0 + SenseVoice + Kokoro
+aipc voice status          # closed-loop probe (hear→think→speak→remember→UI)
+aipc voice loop            # alias for status
+aipc voice start           # start full closed-loop units
 aipc voice stop --yes      # STT/TTS only; mem0 + resident-small stay
 aipc voice once --seconds 5
 aipc voice bind-hotkey
 aipc voice record-clone
 
 aipc portal                # localhost entry page URL + service card summary
-aipc portal open           # open http://127.0.0.1:7080/ in the browser
+aipc portal open           # open http://127.0.0.1:7080/ (auto-start if needed)
 aipc portal serve          # foreground server if aipc-portal.service not installed yet
 
 aipc doctor                # module verify.sh + voice static checks
@@ -170,6 +205,18 @@ Shipped `aipc-voice-*` binaries remain for shortcuts and desktop launchers;
 `aipc voice …` is the supported operator surface. For a browser overview of
 baseline + peers without retyping status commands, use `aipc portal open`
 (module `system-aipc-portal`; pre-bootc hosts: `aipc portal serve` then open).
+
+### Voice → open dashboard
+
+After push-to-talk / wake, say any of:
+
+- 「打开 dashboard」「打開面板」「打开管理介面」
+- “open portal” / “open dashboard” / “show dashboard”
+
+`aipc-voice-once` matches these **locally** (before `/chat`), then runs
+`aipc portal open` which auto-starts the portal if needed and opens
+`http://127.0.0.1:7080/`. Best from the desktop hotkey session; system wake
+best-efforts `runuser` + `DISPLAY=:0`.
 
 ## Where each stage runs (Strix Halo / Linux)
 

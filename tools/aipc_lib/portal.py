@@ -8,6 +8,7 @@ bootc switch.
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 import urllib.error
@@ -327,22 +328,260 @@ def portal_status(url: str) -> str:
         return "unreachable"
 
 
+# Voice / text local intent — keyword match (not an LLM). Keep in sync with
+# modules/voice-pipecat aipc-voice-once phrase table if that file reimplements.
+_OPEN_PORTAL_NOUNS = (
+    "dashboard",
+    "portal",
+    "aipc portal",
+    "aipcportal",
+    "仪表板",
+    "儀表板",
+    "管理界面",
+    "管理介面",
+    "控制台",
+    "面板",
+    "首页",
+    "首頁",
+    "门户",
+    "門戶",
+)
+_OPEN_PORTAL_VERBS = (
+    "open",
+    "show",
+    "launch",
+    "start",
+    "打开",
+    "打開",
+    "开启",
+    "開啟",
+    "显示",
+    "顯示",
+    "打开一下",
+    "打開一下",
+)
+
+
+def matches_open_portal_intent(text: str) -> bool:
+    """True when the user is asking to open the AIPC portal / dashboard."""
+    raw = (text or "").strip().lower()
+    if not raw:
+        return False
+    compact = "".join(raw.split())
+    # Short command forms (STT often drops verbs or adds punctuation).
+    for exact in (
+        "dashboard",
+        "portal",
+        "打开dashboard",
+        "打開dashboard",
+        "打开portal",
+        "打開portal",
+        "opendashboard",
+        "openportal",
+        "打开面板",
+        "打開面板",
+        "打开仪表板",
+        "打開儀表板",
+        "打开管理界面",
+        "打開管理介面",
+    ):
+        if compact == exact or compact.rstrip("。.!！?") == exact:
+            return True
+    has_noun = any(n in raw or n.replace(" ", "") in compact for n in _OPEN_PORTAL_NOUNS)
+    has_verb = any(v in raw or v in compact for v in _OPEN_PORTAL_VERBS)
+    return has_noun and has_verb
+
+
+def start_portal_background(
+    *,
+    host: str = "127.0.0.1",
+    port: int = 7080,
+    runner=subprocess.Popen,
+) -> bool:
+    """Detach a `portal serve` if the systemd unit is not available."""
+    import time
+
+    url = f"http://{host}:{port}"
+    if portal_status(url) == "running":
+        return True
+
+    # Prefer installed unit when present.
+    try:
+        proc = subprocess.run(
+            ["systemctl", "start", PORTAL_UNIT],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        if proc.returncode == 0:
+            for _ in range(20):
+                if portal_status(url) == "running":
+                    return True
+                time.sleep(0.15)
+    except Exception:
+        pass
+
+    root = package_root()
+    if root is None and not (REPO_ROOT / "tools" / "aipc_lib").is_dir():
+        return False
+
+    log_path = Path("/tmp/aipc-portal-serve.log")
+    pid_path = Path("/tmp/aipc-portal-serve.pid")
+    if pid_path.is_file():
+        try:
+            old = int(pid_path.read_text().strip())
+            os.kill(old, 0)
+            for _ in range(20):
+                if portal_status(url) == "running":
+                    return True
+                time.sleep(0.15)
+        except (ValueError, OSError, ProcessLookupError):
+            pass
+
+    env = os.environ.copy()
+    tools = REPO_ROOT / "tools"
+    if tools.is_dir():
+        env["PYTHONPATH"] = f"{tools}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    if root is not None:
+        env["PYTHONPATH"] = f"{root}{os.pathsep}{env.get('PYTHONPATH', '')}"
+        roots = resolve_services_roots()
+        if roots:
+            env["AIPC_PORTAL_SERVICES"] = ":".join(str(p) for p in roots)
+
+    log_f = open(log_path, "ab", buffering=0)  # noqa: SIM115 — must outlive parent
+    try:
+        if (REPO_ROOT / "tools" / "aipc_lib").is_dir():
+            argv = [
+                sys.executable,
+                "-m",
+                "aipc_lib.cli",
+                "portal",
+                "serve",
+                "--host",
+                host,
+                "--port",
+                str(port),
+            ]
+            cwd = str(REPO_ROOT)
+        else:
+            entry = (root or Path("/usr/lib/aipc-portal")) / "aipc-portal"
+            argv = [str(entry)] if entry.is_file() else [sys.executable, "-m", "aipc_portal.server"]
+            cwd = str(root or "/")
+        child = runner(
+            argv,
+            stdout=log_f,
+            stderr=log_f,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            env=env,
+            cwd=cwd,
+        )
+        pid_path.write_text(str(child.pid), encoding="utf-8")
+    except Exception:
+        log_f.close()
+        return False
+
+    for _ in range(40):
+        if portal_status(url) == "running":
+            return True
+        time.sleep(0.15)
+    return portal_status(url) == "running"
+
+
+def ensure_portal_running(url: str | None = None) -> bool:
+    target = (url or portal_url()).rstrip("/")
+    if portal_status(target) == "running":
+        return True
+    # Parse host/port from URL for background serve.
+    host, port = "127.0.0.1", 7080
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(target)
+        if parsed.hostname:
+            host = parsed.hostname
+        if parsed.port:
+            port = parsed.port
+    except Exception:
+        pass
+    return start_portal_background(host=host, port=port)
+
+
+def _desktop_user_env() -> dict[str, str]:
+    """Best-effort env so xdg-open works from a system voice/wake unit."""
+    import pwd
+
+    env = os.environ.copy()
+    if env.get("DISPLAY") and env.get("XDG_RUNTIME_DIR"):
+        return env
+    # Prefer the logged-in graphical user under /run/user.
+    run_user = Path("/run/user")
+    if run_user.is_dir():
+        for entry in sorted(run_user.iterdir(), key=lambda p: p.name):
+            if not entry.name.isdigit():
+                continue
+            bus = entry / "bus"
+            if not bus.exists():
+                continue
+            uid = int(entry.name)
+            try:
+                home = pwd.getpwuid(uid).pw_dir
+                name = pwd.getpwuid(uid).pw_name
+            except KeyError:
+                continue
+            env["DISPLAY"] = env.get("DISPLAY") or ":0"
+            env["XDG_RUNTIME_DIR"] = str(entry)
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
+            env["HOME"] = home
+            env["USER"] = name
+            env["LOGNAME"] = name
+            env["AIPC_PORTAL_OPEN_AS"] = name
+            return env
+    env.setdefault("DISPLAY", ":0")
+    return env
+
+
 def open_portal(
     url: str,
     runner: Callable[..., object] | None = None,
 ) -> None:
     argv = ["xdg-open", url]
     if runner is None:
+        env = _desktop_user_env()
+        as_user = env.get("AIPC_PORTAL_OPEN_AS")
         try:
-            subprocess.check_call(argv)
+            if as_user and os.geteuid() == 0 and as_user != "root":
+                subprocess.check_call(
+                    ["runuser", "-u", as_user, "--", "xdg-open", url],
+                    env=env,
+                    timeout=10,
+                )
+                return
+            subprocess.check_call(argv, env=env, timeout=10)
             return
         except Exception:
-            webbrowser.open(url)
-            return
+            try:
+                webbrowser.open(url)
+                return
+            except Exception as exc:
+                raise RuntimeError(f"failed to open browser for {url}: {exc}") from exc
     try:
         runner(argv, True)  # type: ignore[misc]
     except TypeError:
         runner(argv)  # type: ignore[misc]
+
+
+def ensure_and_open_portal(url: str | None = None) -> tuple[bool, str]:
+    """Start portal if needed, open browser. Returns (ok, user-facing message)."""
+    target = (url or portal_url()).rstrip("/")
+    if not ensure_portal_running(target):
+        return False, f"无法启动 AIPC 面板（{target}）。请先执行 aipc portal serve。"
+    try:
+        open_portal(target)
+    except Exception as exc:
+        return False, f"面板已在 {target} 运行，但打开浏览器失败：{exc}"
+    return True, f"已打开 AIPC 管理面板：{target}/"
 
 
 def format_status_lines(

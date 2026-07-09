@@ -20,6 +20,7 @@ from aipc_lib import gate_client as gate_client_mod
 from aipc_lib import log_append as log_append_mod
 from aipc_lib import mem0_local_mcp as mem0_local_mcp_mod
 from aipc_lib import mem0_migrate as mem0_migrate_mod
+from aipc_lib import model_presets as model_presets_mod
 from aipc_lib import models as models_mod
 from aipc_lib import opencode_sync as opencode_sync_mod
 from aipc_lib import panel_mirror as panel_mirror_mod
@@ -30,6 +31,7 @@ from aipc_lib import status_dashboard as status_mod
 from aipc_lib import storage_reclaim as storage_reclaim_mod
 from aipc_lib import tools_menu as tools_menu_mod
 from aipc_lib import portal as portal_mod
+from aipc_lib import voice_ops as voice_ops_mod
 from aipc_lib.modules import discover
 from aipc_lib.render_bootc import render as render_bootc
 from aipc_lib.render_ansible import render as render_ansible
@@ -651,6 +653,187 @@ def models_unload(alias: str, manifest: Path) -> None:
         sys.exit(1)
 
 
+def _ollama_warm(model_name: str, keep_alive: str = "15m") -> bool:
+    """Issue a tiny generate so Ollama loads the model and applies keep_alive."""
+    data = json.dumps(
+        {
+            "model": model_name,
+            "prompt": "ok",
+            "stream": False,
+            "keep_alive": keep_alive,
+            "options": {"num_predict": 1},
+        }
+    ).encode()
+    req = urllib.request.Request(
+        status_mod.DEFAULT_OLLAMA_BASE + "/api/generate",
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        # Cold 122B load can take minutes.
+        with urllib.request.urlopen(req, timeout=900) as resp:
+            resp.read()
+        return True
+    except BACKEND_HTTP_ERRORS as e:
+        click.echo(f"ollama warm failed for {model_name}: {e}", err=True)
+        return False
+
+
+def _lemonade_warm(model_name: str) -> bool:
+    """Tiny chat completion so Lemonade auto-loads the model on first use."""
+    data = json.dumps(
+        {
+            "model": model_name,
+            "messages": [{"role": "user", "content": "ok"}],
+            "max_tokens": 1,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+    ).encode()
+    req = urllib.request.Request(
+        LEMONADE_BASE_URL.rstrip("/") + "/v1/chat/completions",
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            resp.read()
+        return True
+    except BACKEND_HTTP_ERRORS as e:
+        click.echo(f"lemonade warm failed for {model_name}: {e}", err=True)
+        return False
+
+
+@models_cmd.command("use")
+@click.argument(
+    "preset",
+    required=False,
+    type=click.Choice(sorted(model_presets_mod.PRESETS.keys())),
+)
+@click.option(
+    "--manifest",
+    type=click.Path(path_type=Path),
+    default=models_mod.DEFAULT_MANIFEST,
+    show_default=True,
+)
+@click.option(
+    "--list",
+    "list_presets",
+    is_flag=True,
+    help="List presets and exit.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Print unload/warm plan only; do not call backends.",
+)
+@click.option(
+    "--no-warm",
+    is_flag=True,
+    help="Skip warm-load after unload (faster; first request pays load cost).",
+)
+def models_use(
+    preset: str | None,
+    manifest: Path,
+    list_presets: bool,
+    dry_run: bool,
+    no_warm: bool,
+) -> None:
+    """Switch mutually exclusive local-model presets (agent vs 122B).
+
+    122B (~81GB) and Lemonade Vulkan agent models must not co-reside on
+    128GB UMA. This unloads the wrong side, optionally warms the right
+    side, then prints which LiteLLM alias to use.
+    """
+    if list_presets or preset is None:
+        for name, desc in sorted(model_presets_mod.PRESETS.items()):
+            click.echo(f"{name}: {desc}")
+        if preset is None and not list_presets:
+            click.echo("Usage: aipc models use <agent|122b|free>", err=True)
+            sys.exit(0 if list_presets else 1)
+        if list_presets:
+            return
+
+    entries = models_mod.load_manifest(manifest)
+    loaded_ollama = status_mod.loaded_models()
+    loaded_lemonade = status_mod.loaded_lemonade_models()
+
+    # None = backend unreachable (or dry-run wants full candidate list):
+    # plan unloads for all matching declared aliases and attempt them.
+    # empty set = reachable and nothing loaded: skip unloads.
+    if dry_run:
+        ollama_ids = None
+        lemonade_ids = None
+    else:
+        ollama_ids = (
+            None
+            if loaded_ollama is None
+            else {m.get("name", "") for m in loaded_ollama if m.get("name")}
+        )
+        lemonade_ids = (
+            None
+            if loaded_lemonade is None
+            else {
+                m.get("model_name", "")
+                for m in loaded_lemonade
+                if m.get("model_name")
+            }
+        )
+        if loaded_ollama is None:
+            click.echo("  warn: Ollama unreachable; will still try declared ollama unloads", err=True)
+        if loaded_lemonade is None:
+            click.echo(
+                "  warn: Lemonade unreachable; will still try declared lemonade unloads",
+                err=True,
+            )
+
+    try:
+        plan = model_presets_mod.plan_switch(
+            preset,
+            entries,
+            loaded_ollama_ids=ollama_ids,
+            loaded_lemonade_ids=lemonade_ids,
+        )
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+
+    click.echo(f"preset: {plan.preset}")
+    for note in plan.notes:
+        click.echo(f"  note: {note}")
+
+    if not plan.unloads:
+        click.echo("  unload: (nothing currently loaded that this preset frees)")
+    for u in plan.unloads:
+        click.echo(f"  unload: {u.alias} ({u.backend}: {u.model_id})")
+        if dry_run:
+            continue
+        if u.backend == "ollama":
+            if not _ollama_unload(u.model_id):
+                sys.exit(1)
+        elif u.backend == "lemonade":
+            if not _lemonade_unload(u.model_id):
+                sys.exit(1)
+
+    if plan.warm and not no_warm:
+        click.echo(f"  warm: {plan.warm.alias} ({plan.warm.backend}: {plan.warm.model_id})")
+        if not dry_run:
+            if plan.warm.backend == "ollama":
+                if not _ollama_warm(plan.warm.model_id):
+                    sys.exit(1)
+                click.echo(f"  warm ok: {plan.warm.alias}")
+            elif plan.warm.backend == "lemonade":
+                if not _lemonade_warm(plan.warm.model_id):
+                    sys.exit(1)
+                click.echo(f"  warm ok: {plan.warm.alias}")
+    elif plan.warm and no_warm:
+        click.echo(f"  warm skipped: {plan.warm.alias}")
+
+    if not dry_run:
+        click.echo("done.")
+
+
 @main.group()
 def log() -> None:
     """Agent log operations."""
@@ -1004,6 +1187,111 @@ def mem0_migrate_from_saas(key_file: Path | None, apply: bool) -> None:
     click.echo(f"imported {result.imported}/{result.fetched} memories into local mem0")
 
 
+@main.group("voice")
+def voice_cmd() -> None:
+    """Local voice assistant baseline (SenseVoice + Kokoro + helpers).
+
+    Install/enable path is still the modules/ tree (bootc or ansible render).
+    This group is the day-to-day control plane so operators do not hand-start
+    units or containers outside aipc.
+    """
+
+
+@voice_cmd.command("status")
+def voice_status() -> None:
+    """Show closed-loop health: STT → LLM → TTS → mem0 → portal."""
+    probes = voice_ops_mod.collect_baseline_status()
+    click.echo(voice_ops_mod.format_status(probes))
+    required = ("sensevoice", "resident-small", "litellm", "chat", "kokoro", "mem0")
+    bad = [p for p in probes if not p.ok and p.name in required]
+    if bad:
+        sys.exit(1)
+
+
+@voice_cmd.command("loop")
+def voice_loop() -> None:
+    """Alias for status — closed-loop probe (hear→think→speak→remember→UI)."""
+    voice_status()
+
+
+@voice_cmd.command("start")
+@click.option("--dry-run", is_flag=True, help="Print commands only.")
+def voice_start(dry_run: bool) -> None:
+    """Start baseline STT/TTS/mem0 (tolerates missing optional units)."""
+    results = voice_ops_mod.apply_plan(voice_ops_mod.plan_start(), dry_run=dry_run)
+    for argv, code, msg in results:
+        line = " ".join(argv)
+        if dry_run:
+            click.echo(f"dry-run: {line}")
+            continue
+        # Missing unit/container is expected on partial installs.
+        if code == 0:
+            click.echo(f"ok: {line}")
+        else:
+            click.echo(f"skip/fail ({code}): {line}" + (f" — {msg}" if msg else ""), err=True)
+    if not dry_run:
+        voice_status()
+
+
+@voice_cmd.command("stop")
+@click.option("--dry-run", is_flag=True, help="Print commands only.")
+@click.option(
+    "--yes",
+    is_flag=True,
+    help="Required: stop is for maintenance; baseline is meant to stay up.",
+)
+def voice_stop(dry_run: bool, yes: bool) -> None:
+    """Stop SenseVoice + Kokoro only (mem0 and resident-small stay)."""
+    if not dry_run and not yes:
+        click.echo("Refusing to stop without --yes (baseline is always-on).", err=True)
+        sys.exit(1)
+    results = voice_ops_mod.apply_plan(voice_ops_mod.plan_stop(), dry_run=dry_run)
+    for argv, code, msg in results:
+        line = " ".join(argv)
+        if dry_run:
+            click.echo(f"dry-run: {line}")
+            continue
+        if code == 0:
+            click.echo(f"ok: {line}")
+        else:
+            click.echo(f"skip/fail ({code}): {line}" + (f" — {msg}" if msg else ""), err=True)
+
+
+@voice_cmd.command("once")
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def voice_once(args: tuple[str, ...]) -> None:
+    """Run one push-to-talk turn (forwards to aipc-voice-once)."""
+    helper = voice_ops_mod.resolve_helper("once")
+    if helper is None:
+        click.echo(
+            "aipc-voice-once not found; install/enable modules/voice-pipecat "
+            "(bootc/ansible) or copy the helper into PATH.",
+            err=True,
+        )
+        sys.exit(1)
+    raise SystemExit(subprocess.call([str(helper), *args]))
+
+
+@voice_cmd.command("bind-hotkey")
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def voice_bind_hotkey(args: tuple[str, ...]) -> None:
+    """Bind desktop push-to-talk (forwards to aipc-voice-bind-hotkey)."""
+    helper = voice_ops_mod.resolve_helper("bind-hotkey")
+    if helper is None:
+        click.echo("aipc-voice-bind-hotkey not found; enable voice-pipecat.", err=True)
+        sys.exit(1)
+    raise SystemExit(subprocess.call([str(helper), *args]))
+
+
+@voice_cmd.command("record-clone")
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def voice_record_clone(args: tuple[str, ...]) -> None:
+    """Record/refresh CosyVoice clone.wav (forwards to aipc-voice-record-clone)."""
+    helper = voice_ops_mod.resolve_helper("record-clone")
+    if helper is None:
+        click.echo("aipc-voice-record-clone not found; enable voice-pipecat.", err=True)
+        sys.exit(1)
+    raise SystemExit(subprocess.call([str(helper), *args]))
 
 
 @main.group("portal", invoke_without_command=True)
@@ -1028,16 +1316,28 @@ def portal_cmd(ctx: click.Context) -> None:
 
 
 @portal_cmd.command("open")
-def portal_open() -> None:
-    """Open the portal URL in the default browser."""
+@click.option(
+    "--no-start",
+    is_flag=True,
+    help="Do not auto-start the portal server if it is down.",
+)
+def portal_open(no_start: bool) -> None:
+    """Open the portal in the default browser (auto-starts serve if needed)."""
     url = portal_mod.portal_url()
-    if portal_mod.portal_status(url) != "running":
-        click.echo(
-            f"portal not reachable at {url}; start with: aipc portal serve",
-            err=True,
-        )
-    portal_mod.open_portal(url)
-    click.echo(url)
+    if no_start:
+        if portal_mod.portal_status(url) != "running":
+            click.echo(
+                f"portal not reachable at {url}; start with: aipc portal serve",
+                err=True,
+            )
+            sys.exit(1)
+        portal_mod.open_portal(url)
+        click.echo(url + "/")
+        return
+    ok, message = portal_mod.ensure_and_open_portal(url)
+    click.echo(message)
+    if not ok:
+        sys.exit(1)
 
 
 @portal_cmd.command("serve")

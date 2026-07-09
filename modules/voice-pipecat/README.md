@@ -1,30 +1,34 @@
 # voice-pipecat
 
-## Current status: v0 push-to-talk, text-out — enabled; runtime hotkey helper present, no wake word, no guaranteed TTS yet
+## Current status: closed-loop client — push-to-talk + TTS + local intents
 
-This is a deliberately reduced scope, not the full Phase 3 design: the
-user's explicit direction was "text output is fine, the assistant does
-not need to speak yet." What's here is a manually-invoked one-shot round
-trip: record -> transcribe -> ask the agent -> show the reply as a desktop
-notification, plus a runtime helper that can bind push-to-talk from a
-desktop session.
+This module is the **user-facing turn of the always-on closed loop**
+(see `docs/voice-pipeline.md` and `docs/architecture.md` § Phase 3):
 
-### What it does (v0)
+```text
+record → SenseVoice STT → local intent (e.g. open portal)
+                       → else /chat (resident-small + mem0)
+                       → Kokoro/Cosy TTS + notify-send
+```
 
-`files/usr/bin/aipc-voice-once` — a single stdlib-only Python script, no
-systemd unit, invoked manually from a terminal (or a keyboard-shortcut
-launcher a user sets up themselves; the module also ships a runtime
-hotkey helper for desktop-session binding):
+It is not the full streaming Pipecat graph yet (wake/barge-in deferred).
+`aipc voice status|loop|start` and `aipc portal` are the operator surface
+in `tools/aipc` — prefer those over hand-started units.
+
+### What it does
+
+`files/usr/bin/aipc-voice-once` — stdlib-only one-shot (also hotkey / wake):
 
 1. Records N seconds of audio (default 5, `--seconds` or
    `$AIPC_VOICE_RECORD_SECONDS`) from the default ALSA input via
    `arecord -f S16_LE -r 16000 -c 1` — no Python audio library dependency.
-2. `POST`s the WAV to the STT service (assumed contract below).
-3. `POST`s the transcribed text to agent-orchestrator's `/chat`
-   (`http://127.0.0.1:4100/chat`, real and hardware-verified — see
-   `modules/agent-orchestrator`).
-4. Shows the reply via `notify-send` (falls back to stdout if
-   `notify-send` isn't present).
+2. `POST`s the WAV to SenseVoice STT (`:9001/transcribe`).
+3. **Local intents** (no LLM): phrases like “打开 dashboard” / “open portal”
+   call `aipc portal open` and speak/notify the result.
+4. Otherwise `POST`s text to agent-orchestrator `/chat` (`:4100`) —
+   default model **resident-small** (closed-loop brain).
+5. Speaks via TTS router (`aipc_voice_tts.py`: Cosy → Kokoro → espeak) and
+   always `notify-send` (stdout fallback).
 
 Run it directly: `aipc-voice-once` (or `aipc-voice-once --seconds 8` for a
 longer recording). `--self-test` runs offline checks only (used by

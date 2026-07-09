@@ -9,8 +9,14 @@ the full spec eventually wants — that waits until Researcher/Coder/Browser
 
 Every model call goes through the LiteLLM gateway (CLAUDE.md §7) — never a
 direct backend URL (Ollama, Lemonade, vLLM, or any cloud provider).
+
+Always-on voice closed loop (2026-07-10): default supervisor is
+resident-small (NPU) so SenseVoice → /chat → Kokoro stays fast and does not
+depend on Vulkan agent models (ornith / coder-agentic). Override with
+AIPC_SUPERVISOR_MODEL when the user has switched into agent role.
 """
 
+import os
 from typing import TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -22,10 +28,9 @@ from aipc_agent._util import text_of
 from aipc_agent.daily_assistant import daily_assistant
 
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
-# main-70b (the spec's original default) was cut from models.yaml/llm-litellm
-# 2026-07-04 in a manifest trim — ornith-35b (35B MoE reasoning + agentic
-# coding) is the closest remaining fit for a supervisor role.
-SUPERVISOR_MODEL = "ornith-35b"
+# Closed-loop default: always-on NPU small model. Heavy agent LLMs are
+# optional via env (or future aipc models use agent wiring).
+SUPERVISOR_MODEL = os.environ.get("AIPC_SUPERVISOR_MODEL", "resident-small")
 
 # Without a system prompt the model has no idea it's "the aipc assistant"
 # and answers like a disconnected generic chatbot (e.g. "I'm an AI, I can't
@@ -33,21 +38,22 @@ SUPERVISOR_MODEL = "ornith-35b"
 # growing toolset) — a real user complaint, not hypothetical. Keep this in
 # sync with daily_assistant.SYSTEM_PROMPT's capability list as tools land.
 SUPERVISOR_SYSTEM_PROMPT = (
-    "You are the aipc assistant, a conversational AI running entirely "
-    "locally on this user's own AMD Strix Halo AI PC (no cloud calls, no "
-    "internet dependency for inference). Answer directly and concisely. "
-    "Relevant remembered facts may be included when local memory is available. "
-    "You currently cannot control the screen, launch applications, or "
-    "browse the web — say so plainly if asked, don't apologize like a "
-    "generic assistant with no context about this machine."
+    "You are the aipc assistant on this user's AMD Strix Halo AI PC. "
+    "Inference is local (no cloud). Answer briefly and in the user's language. "
+    "Local memory (mem0) may inject remembered facts — use them when present. "
+    "Always-on stack: resident-small (you), SenseVoice STT, Kokoro TTS, mem0. "
+    "The user can open the AIPC management portal by voice (local intent, not you): "
+    "phrases like 'open dashboard' / '打开面板'. "
+    "You cannot control the screen or browse the web yourself — say so plainly if asked."
 )
 
 # ponytail: keyword match, not intent classification — good enough to reach
 # the Daily Assistant sub-graph today; replace with real routing once a
 # second sub-agent (2.3-2.5) makes a keyword list unworkable.
+# Keep "remember/memory" off this list so mem0 stays on the fast supervisor.
 _DAILY_ASSISTANT_KEYWORDS = (
     "calendar", "schedule", "meeting", "email", "inbox", "mail",
-    "file", "read", "remember", "memory", "recall",
+    "file", "read",
 )
 
 
@@ -57,17 +63,14 @@ class SupervisorState(TypedDict):
 
 
 def _chat_model(model: str) -> ChatLiteLLM:
+    # resident-small is short-form voice; heavy reasoning models need more.
+    max_tokens = 512 if model == "resident-small" else 2048
     return ChatLiteLLM(
         model=model,
         api_base=LITELLM_BASE_URL,
         custom_llm_provider="openai",
         api_key="aipc-local",
-        # ornith-35b is a reasoning model with no natural stop point for
-        # hidden thinking tokens — hardware-verified 2026-07-05: an
-        # unbounded call took minutes past a plain "reply with exactly:
-        # pong" before this cap was added. 2048 covers reasoning + a real
-        # answer without letting one request run indefinitely.
-        max_tokens=2048,
+        max_tokens=max_tokens,
     )
 
 

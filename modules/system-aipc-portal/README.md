@@ -1,11 +1,16 @@
 # system-aipc-portal
 
-Local AIPC entry portal — a localhost homepage that lists manageable
-services declared under `/etc/aipc/portal/services/*.yaml`.
+Local AIPC entry portal — the **manage** surface of the always-on closed
+loop (`docs/voice-pipeline.md`, `docs/architecture.md` Phase 3): a
+localhost homepage that lists manageable services declared under
+`/etc/aipc/portal/services/*.yaml`.
 
 The portal does not manage service internals and does not special-case
 any consumer (including Mem0). Cards appear only because modules install
 metadata.
+
+**Voice open:** `aipc-voice-once` matches phrases like “打开 dashboard” /
+“open portal” and runs `aipc portal open` (auto-starts serve if needed).
 
 ## Endpoint
 
@@ -18,8 +23,9 @@ metadata.
 
 ```bash
 aipc portal          # URL + card summary
-aipc portal open     # open browser
+aipc portal open     # open browser (auto-starts server if down)
 aipc portal serve    # foreground server (live-host / pre-bootc fallback)
+aipc voice status    # closed-loop probe including portal health
 ```
 
 On hosts that have not yet bootc-switched this module, `serve` loads

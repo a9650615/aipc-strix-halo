@@ -7,19 +7,29 @@ LangGraph supervisor (D1). Full design dispatches 4 sub-agents (D2):
 - Daily Assistant (default: `intent-3b` per spec; `ornith-35b` in
   practice, see below)
 
+## Closed loop (voice product)
+
+`POST /chat` is the **think** step of the always-on voice closed loop
+(SenseVoice → here → Kokoro + mem0). Standing default model is
+**`resident-small`** (NPU / Lemonade FLM via LiteLLM), so the loop does not
+depend on heavy Vulkan agent models. Override with env
+`AIPC_SUPERVISOR_MODEL` (e.g. after `aipc models use agent`). See
+`docs/voice-pipeline.md`.
+
+`GET /healthz` is for portal/doctor/loop probes (liveness only).
+
 ## Current status: basic skeleton + Daily Assistant sub-agent, enabled
 
 Implemented (tasks 1.1, 2.1, 2.2, 2.6, 7.1–7.3):
 - `files/usr/lib/aipc-agent/aipc_agent/graphs.py`: `supervisor()` answers
-  directly via LiteLLM (model alias `ornith-35b` — `main-70b`, the spec's
-  original supervisor default, was cut from the manifest in a 2026-07-04
-  trim; `ornith-35b`, a 35B reasoning + agentic-coding model, is the
-  closest remaining fit), OR routes to the Daily Assistant sub-graph on an
-  explicit keyword match (`calendar`, `schedule`, `meeting`, `email`,
-  `inbox`, `mail`, plus file/memory words). This is a simple keyword route, not the generic
-  multi-agent router the full spec eventually wants — that waits until
-  Researcher/Coder/Browser (2.3–2.5) exist too and a real decomposition
-  step is worth the complexity.
+  directly via LiteLLM. **Default model: `resident-small`** (closed loop;
+  was `ornith-35b` until 2026-07-10). Daily Assistant still uses
+  `ornith-35b` for tool-calling. Keyword route to Daily Assistant:
+  `calendar`, `schedule`, `meeting`, `email`, `inbox`, `mail`, `file`,
+  `read` — **not** remember/memory (those stay on supervisor + mem0).
+  This is a simple keyword route, not the generic multi-agent router the
+  full spec eventually wants — that waits until Researcher/Coder/Browser
+  (2.3–2.5) exist too and a real decomposition step is worth the complexity.
 - `files/usr/lib/aipc-agent/aipc_agent/daily_assistant.py` (task 2.6): the
   Daily Assistant sub-agent graph, model alias `ornith-35b`. Spec default
   `intent-3b` doesn't exist post-trim; the next candidate, `resident-small`
