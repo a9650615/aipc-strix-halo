@@ -249,7 +249,7 @@ class CodexBarApp:
         rem = remaining if remaining is not None else self._current_remaining
         if rem is None and percent is not None:
             rem = 100.0 - percent
-        # Always use official dual-capsule meter (not digits).
+        # Official dual-capsule meter only (no side "99" badge).
         icon_pm = paint_usage_pixmap(
             remaining=rem,
             error=error,
@@ -257,6 +257,7 @@ class CodexBarApp:
             primary_remaining=self._session_remaining,
             secondary_remaining=self._weekly_remaining,
             credits_remaining=self._credits_remaining,
+            show_percent=False,
         )
         self._tray.setIcon(QIcon(icon_pm))
 

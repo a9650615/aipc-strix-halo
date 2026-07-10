@@ -41,7 +41,7 @@ def test_color_and_paint() -> None:
     )
     assert not dual.isNull()
     rem = paint_usage_pixmap(
-        primary_remaining=68.0, secondary_remaining=40.0, size=22, show_percent=True
+        primary_remaining=68.0, secondary_remaining=40.0, size=22, show_percent=False
     )
     assert not rem.isNull()
 

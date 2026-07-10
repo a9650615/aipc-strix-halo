@@ -291,20 +291,23 @@ class _ProviderCard(QFrame):
                 f"color:{C['muted']}; border:none; background:transparent; font-size:11px;"
             )
             right.addWidget(acc)
-        icon = QLabel()
-        icon.setPixmap(
-            paint_dual_window_pixmap(
-                primary_remaining=(
-                    view.primary.remaining_percent if view.primary else None
-                ),
-                secondary_remaining=(
-                    view.secondary.remaining_percent if view.secondary else None
-                ),
-                size=34,
-                credits_remaining=view.credits_remaining,
+        # Clean dual-bar meter (no digit badge — % is in the meter rows)
+        if view.ok and (view.primary or view.secondary):
+            icon = QLabel()
+            icon.setPixmap(
+                paint_dual_window_pixmap(
+                    primary_remaining=(
+                        view.primary.remaining_percent if view.primary else None
+                    ),
+                    secondary_remaining=(
+                        view.secondary.remaining_percent if view.secondary else None
+                    ),
+                    size=32,
+                    credits_remaining=view.credits_remaining,
+                    show_percent=False,
+                )
             )
-        )
-        right.addWidget(icon, 0, Qt.AlignmentFlag.AlignRight)
+            right.addWidget(icon, 0, Qt.AlignmentFlag.AlignRight)
         head.addLayout(right)
         root.addLayout(head)
         root.addSpacing(4)
@@ -421,9 +424,10 @@ class _OverviewRow(QFrame):
                 secondary_remaining=(
                     view.secondary.remaining_percent if view.secondary else None
                 ),
-                size=28,
+                size=26,
                 credits_remaining=view.credits_remaining,
                 error=not view.ok,
+                show_percent=False,
             )
         )
         lay.addWidget(icon)
