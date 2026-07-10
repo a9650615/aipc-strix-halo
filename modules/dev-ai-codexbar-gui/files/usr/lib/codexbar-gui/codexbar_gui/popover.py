@@ -728,6 +728,9 @@ class UsagePopover(QWidget):
         QDesktopServices.openUrl(QUrl(self._web_url))
 
     def show_at_cursor(self) -> None:
+        # Prefer Overview on open so multi-provider 5h bars are scannable immediately.
+        if len(self._views) > 1:
+            self._active = "overview"
         self.reload()
         pos = QCursor.pos()
         geo = self.frameGeometry()
