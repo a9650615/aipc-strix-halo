@@ -50,12 +50,12 @@ logger = logging.getLogger("codexbar_gui.popover")
 C = {
     "bg": "#0f1117",
     "surface": "#171a22",
-    "surface_a": "rgba(23, 26, 34, 220)",  # ~86% — true glass over desktop
-    "card": "rgba(28, 32, 48, 235)",
+    "surface_a": "rgba(23, 26, 34, 242)",  # mostly solid glass — avoids footer ghosting
+    "card": "rgba(28, 32, 48, 250)",
     "card_solid": "#1c2030",
-    "card2": "rgba(34, 40, 56, 240)",
+    "card2": "rgba(34, 40, 56, 250)",
     "card2_solid": "#222838",
-    "border": "rgba(90, 100, 130, 120)",
+    "border": "rgba(90, 100, 130, 160)",
     "border_solid": "#2a3144",
     "text": "#e8ecf4",
     "muted": "#9aa3b5",
@@ -898,6 +898,7 @@ class UsagePopover(QWidget):
         self._hide_armed = False
         self._last_anchor: Optional[QRect] = None
         self._pin_top_left: Optional[QPoint] = None  # keep corner after resize (Wayland)
+        self._ui_stale = True  # rebuild once when we have new data while hidden
 
         # Window itself is fully transparent; children sit in a glass shell.
         self.setStyleSheet(
@@ -994,7 +995,7 @@ class UsagePopover(QWidget):
         self._foot.setObjectName("Footer")
         self._foot.setStyleSheet(
             f"#Footer {{"
-            f"  background: rgba(20, 22, 30, 160);"
+            f"  background: rgba(18, 20, 28, 250);"
             f"  border: none;"
             f"  border-top: 1px solid {C['border']};"
             f"  border-bottom-left-radius: {_RADIUS}px;"
@@ -1087,84 +1088,99 @@ class UsagePopover(QWidget):
         self.show_at_tray(None, click_pos=QCursor.pos())
 
     def apply_tray_views(self, views: list) -> None:
-        """Seed / refresh cache from tray background poll (no full cost fetch).
+        """Seed cache from tray background poll only — never rebuild here.
 
-        Keeps last known usage so the next open paints immediately.
+        Rebuilding while the panel is opening caused blank/ghost UI and could
+        fight geometry (window jumped to center). UI refresh is show + reload.
         """
-        if not views:
+        if views:
+            self._views = list(views)
+
+    def _reassert_pin(self) -> None:
+        """Force window back to pinned top-left (WM sometimes recenters Tool)."""
+        if not self.isVisible() or self._pin_top_left is None:
             return
-        self._views = list(views)
-        # If panel is open, refresh body quietly without a blank flash
-        if self.isVisible() and not (
-            self._worker is not None and self._worker.isRunning()
-        ):
-            if self._active is None or (
-                self._active != "overview"
-                and self._active not in {v.provider for v in self._views}
-            ):
-                self._active = (
-                    "overview"
-                    if len(self._views) > 1
-                    else self._views[0].provider
-                )
-            self._rebuild_tabs()
-            self._rebuild_body()
+        p = self._pin_top_left
+        w = max(self.width(), 420)
+        h = max(self.height(), 200)
+        self.setGeometry(p.x(), p.y(), w, h)
+        self.move(p)
+        wh = self.windowHandle()
+        if wh is not None:
+            try:
+                wh.setFramePosition(p)
+            except Exception:
+                pass
 
     def show_at_tray(
         self,
         tray: Optional[QSystemTrayIcon] = None,
         click_pos: Optional[QPoint] = None,
     ) -> None:
-        """Open docked under the system-tray corner — stable every click.
+        """Open docked under the tray corner — keep last frame, no blank flash.
 
-        Paints **cached** usage immediately (from last tray poll / last open),
-        then refreshes in the background. Never blank the panel while waiting.
+        Critical: do **not** rebuild tabs/body on every open (deleteLater + glass
+        compositing = ghost footer + blank). Reuse widgets; quiet-refresh only.
         """
         del click_pos  # intentionally ignored — unstable on KDE SNI
 
         if len(self._views) > 1:
             self._active = "overview"
-        elif self._views and self._active is None:
+        elif self._views and (
+            self._active is None
+            or (
+                self._active != "overview"
+                and self._active not in {v.provider for v in self._views}
+            )
+        ):
             self._active = self._views[0].provider
 
         w = 420
-        # Prefer last fitted height so reopen does not shrink-flash
-        probe_h = max(self.height(), 360) if self.height() > 200 else 360
+        has_ui = self._body_layout.count() > 0 and not self._ui_stale
+        probe_h = max(self.height(), 400) if self._body_layout.count() > 0 else 400
         x, y = self._stable_dock_pos(tray, w, probe_h)
         self._pin_top_left = QPoint(x, y)
         self._last_anchor = QRect(x + w - 28, y - 2, 24, 1)
 
+        # Geometry BEFORE show so the WM maps at the dock, not screen center
         self.setGeometry(x, y, w, probe_h)
+        self.move(x, y)
 
-        # Instant UI from cache (tray already polls every N seconds)
-        if self._views:
-            self._rebuild_tabs()
-            self._rebuild_body()
-            self._status.setText(
-                (self._status.text() or "Ready").split(" · refreshing")[0]
-                + " · refreshing..."
-            )
-            self.reload(quiet=True)
+        if not has_ui:
+            # First paint or data arrived while we were hidden
+            if self._views:
+                self._rebuild_tabs()
+                self._rebuild_body()
+                self._ui_stale = False
+                self.reload(quiet=True)
+            else:
+                self._status.setText("Loading providers...")
+                self.reload(quiet=False)
         else:
-            # First open ever — no cache yet
-            self._status.setText("Loading providers...")
-            self.reload(quiet=False)
+            # Reuse last painted frame — only background refresh (no blank flash)
+            base = self._status.text().split(" · refreshing")[0].strip()
+            if not base or base.startswith("Loading"):
+                ok_n = sum(1 for v in self._views if v.ok)
+                base = f"{ok_n}/{len(self._views)} providers" if self._views else "Ready"
+            self._status.setText(f"{base} · refreshing...")
+            self.reload(quiet=True)
 
         self.show()
-        self.move(x, y)
+        self._reassert_pin()
         self.raise_()
         self.activateWindow()
         self.setFocus(Qt.FocusReason.PopupFocusReason)
+        # WM may re-center Tool windows on map — pin again after events
+        QTimer.singleShot(0, self._reassert_pin)
+        QTimer.singleShot(50, self._reassert_pin)
+        QTimer.singleShot(200, self._reassert_pin)
 
-        screen = QGuiApplication.primaryScreen()
-        if screen is not None:
-            logger.info(
-                "popover show pin=%s cached=%d full=%s avail=%s",
-                self._pin_top_left,
-                len(self._views),
-                screen.geometry(),
-                screen.availableGeometry(),
-            )
+        logger.info(
+            "popover show pin=%s cached=%d has_ui=%s",
+            self._pin_top_left,
+            len(self._views),
+            has_ui,
+        )
 
     @staticmethod
     def _stable_dock_pos(
@@ -1232,6 +1248,7 @@ class UsagePopover(QWidget):
             height = min(height, max_h)
         # Keep exact pin — do not re-clamp X
         self.setGeometry(pin.x(), pin.y(), width, height)
+        self.move(pin)
 
     def reload(self, quiet: bool = False) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -1282,8 +1299,15 @@ class UsagePopover(QWidget):
                 "overview" if len(self._views) > 1 else (self._views[0].provider if self._views else "overview")
             )
         self._set_footer_enabled(True)
-        self._rebuild_tabs()
-        self._rebuild_body()
+        # Rebuild when open; if hidden, mark stale so next show paints once
+        if self.isVisible() or self._body_layout.count() == 0:
+            self._rebuild_tabs()
+            self._rebuild_body()
+            self._ui_stale = False
+            self._reassert_pin()
+            QTimer.singleShot(0, self._reassert_pin)
+        else:
+            self._ui_stale = True
 
     def _clear(self, layout) -> None:
         while layout.count():
