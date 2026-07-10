@@ -165,11 +165,10 @@ class _UsageMeter(QWidget):
         )
         right.addWidget(resets)
         if win.pace is not None:
-            lasts = (
-                "Lasts until reset"
-                if win.pace.will_last_to_reset
-                else "May run out early"
-            )
+            if win.pace.status == "deficit":
+                lasts = "May run out early"
+            else:
+                lasts = "Lasts until reset"
             ll = QLabel(lasts)
             ll.setAlignment(Qt.AlignmentFlag.AlignRight)
             ll.setStyleSheet(
