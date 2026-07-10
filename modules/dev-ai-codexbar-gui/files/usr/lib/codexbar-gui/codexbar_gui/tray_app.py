@@ -145,6 +145,7 @@ class CodexBarApp:
             print(f"CodexBar Web UI failed: {web_msg}", file=sys.stderr, flush=True)
 
         self._popover = UsagePopover(self._host, self._port, web_url=self._web_url)
+        self._popover.quit_requested.connect(self._quit_app)
         self._init_tray()
         self._start_server()
         self._refresh_data()
@@ -320,17 +321,35 @@ class CodexBarApp:
                 return
             self._open_popover(click_pos=click)
 
+    def _quit_app(self) -> None:
+        """Real quit from popover footer — stop tray, web, timers, exit process."""
+        logger.info("Quit CodexBar requested")
+        self._cleanup()
+        if self._app is not None:
+            self._app.quit()
+
     def _cleanup(self) -> None:
         if self._refresh_timer:
             self._refresh_timer.stop()
+            self._refresh_timer = None
         if self._fetch is not None and self._fetch.isRunning():
             self._fetch.wait(2000)
-        kill_server()
-        stop_web()
-        if self._popover:
+        # Only stop local web UI we own; do not kill shared `codexbar serve`
+        # if another instance may be using it (kill_server is best-effort).
+        try:
+            stop_web()
+        except Exception:
+            logger.debug("stop_web on quit", exc_info=True)
+        try:
+            kill_server()
+        except Exception:
+            logger.debug("kill_server on quit", exc_info=True)
+        if self._popover is not None:
             self._popover.hide()
-        if self._tray:
+            self._popover.close()
+        if self._tray is not None:
             self._tray.hide()
+            self._tray.setVisible(False)
 
 
 def main(

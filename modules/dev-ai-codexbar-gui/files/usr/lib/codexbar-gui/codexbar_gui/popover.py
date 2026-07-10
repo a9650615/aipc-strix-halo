@@ -840,6 +840,10 @@ def _is_wayland() -> bool:
 
 
 class UsagePopover(QWidget):
+    """Tray popover shell. ``quit_requested`` exits the whole app (not just hide)."""
+
+    quit_requested = Signal()
+
     def __init__(
         self,
         host: str = "127.0.0.1",
@@ -985,9 +989,14 @@ class UsagePopover(QWidget):
         self._btn_settings = _MenuButton("  ⚙    Settings…")
         self._btn_settings.clicked.connect(self._open_settings)
         actions.addWidget(self._btn_settings)
-        self._btn_close = _MenuButton("  ✕    Close")
+        self._btn_close = _MenuButton("  ✕    Close panel")
+        self._btn_close.setToolTip("Hide this panel; tray keeps running")
         self._btn_close.clicked.connect(self.hide)
         actions.addWidget(self._btn_close)
+        self._btn_quit = _MenuButton("  ⏻    Quit CodexBar")
+        self._btn_quit.setToolTip("Stop tray icon, web UI, and exit completely")
+        self._btn_quit.clicked.connect(self._request_quit)
+        actions.addWidget(self._btn_quit)
         outer.addWidget(self._foot, 0)
 
         self._set_web_url(web_url)
@@ -1011,6 +1020,11 @@ class UsagePopover(QWidget):
         from PySide6.QtGui import QDesktopServices
 
         QDesktopServices.openUrl(QUrl(self._web_url))
+
+    def _request_quit(self) -> None:
+        """Hide panel then ask the tray host to fully exit."""
+        self.hide()
+        self.quit_requested.emit()
 
     def show_at_cursor(self) -> None:
         """Back-compat: open at current pointer / panel corner."""
