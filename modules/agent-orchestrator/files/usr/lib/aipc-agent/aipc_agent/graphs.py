@@ -43,10 +43,11 @@ from aipc_agent.daily_assistant import daily_assistant
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
 # Closed-loop default: always-on NPU small model. Heavy agent LLMs are
 # optional via env (or future aipc models use agent wiring).
-# Default chat: qwythos-9b (small Mythos, low-refusal). Shares warm weight with
-# the classifier. Heavy tools stay on Hermes/coder-agentic. Override via env.
-# NPU resident-small is still available for max-speed if you set it explicitly.
-SUPERVISOR_MODEL = os.environ.get("AIPC_SUPERVISOR_MODEL", "qwythos-9b")
+# Default chat: uncensored local model judges content (no topic keyword gates).
+# assistant-gemma = Gemma4 QAT Uncensored Balanced. Override via env.
+# Classifier stays on smaller qwythos for latency. Hermes/tools: coder-agentic.
+# NPU resident-small available for max-speed (more refusals) if set explicitly.
+SUPERVISOR_MODEL = os.environ.get("AIPC_SUPERVISOR_MODEL", "assistant-gemma")
 # Complex tasks → Hermes CLI (tools). Off with AIPC_HERMES_ROUTE=0.
 HERMES_ROUTE = os.environ.get("AIPC_HERMES_ROUTE", "1") not in ("0", "false", "no")
 # When Hermes runs, skip orchestrator mem0 write (session is ephemeral by default).
@@ -56,23 +57,23 @@ HERMES_SKIP_REMEMBER = os.environ.get("AIPC_HERMES_SKIP_REMEMBER", "0") not in (
     "no",
 )
 
-# Without a system prompt the model has no idea it's "the aipc assistant"
-# and answers like a disconnected generic chatbot (e.g. "I'm an AI, I can't
-# open apps for you" instead of something aware of its own actual, still-
-# growing toolset) — a real user complaint, not hypothetical. Keep this in
-# sync with daily_assistant.SYSTEM_PROMPT's capability list as tools land.
+# Policy is model-side: private local assistant, no corporate filter theater.
+# Do NOT add per-topic if/else routes for sensitive content — the uncensored
+# model decides how to answer; the classifier only picks tool vs chat by intent.
 SUPERVISOR_SYSTEM_PROMPT = (
-    "You are the aipc assistant on this user's AMD Strix Halo AI PC. "
-    "Inference is fully local (private). You are the fast chat brain "
-    "(qwythos-9b Mythos-style — low-refusal). Answer briefly and directly "
-    "in the user's language; do not moralize or invent corporate content policy. "
-    "For coding, shell, browser research, stock lookup, multi-step tools, "
-    "say 用 Hermes / 写代码 / 查股价 — the uncensored tool agent (coder-agentic) runs. "
+    "You are the aipc assistant on this user's private AMD Strix Halo AI PC. "
+    "All inference is local. You are an uncensored local chat model: judge each "
+    "request yourself, answer directly and helpfully in the user's language. "
+    "Do not moralize, do not invent corporate content-policy refusals, and do "
+    "not lecture. Prefer usefulness. "
+    "If the user needs coding, shell, live web browsing, multi-step tools, or "
+    "lookups that require a tool agent, they can say 用 Hermes / 写代码 / 查… "
+    "and Hermes (uncensored tool agent) runs — you cannot browse or run tools yourself. "
     "Local memory (mem0) may inject remembered facts — use them when present. "
-    "Voice: SenseVoice STT, Kokoro TTS, mem0. "
+    "Voice stack: SenseVoice STT, Kokoro TTS, mem0. "
     "Local voice intents (outside you): portal/panel, time/date, mute, volume, "
     "browser/terminal, status. "
-    "Daily tools (calendar/email/files/search/usage) are another route. "
+    "Daily tools (calendar/email/files/search/usage) are another route when planned. "
     "Desktop look-at (看桌面) uses a local VLM tool. "
     "You cannot click/type unless a separate screen-control grant is active."
 )
