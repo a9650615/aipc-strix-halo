@@ -577,7 +577,7 @@ def fetch_enabled_providers(
     """Fetch each enabled provider separately (avoids multi-provider hang)."""
     ids = providers or enabled_providers_from_config()
     # Cap concurrent-feeling sequential fetches
-    max_n = int(os.environ.get("CODEXBAR_MAX_PROVIDERS", "4"))
+    max_n = int(os.environ.get("CODEXBAR_MAX_PROVIDERS", "8"))
     ids = ids[: max(1, max_n)]
     views: List[ProviderView] = []
     for pid in ids:
@@ -627,15 +627,68 @@ def _usage_source_for_provider(provider_id: Optional[str]) -> Optional[str]:
 
 
 def _source_attempts(provider: Optional[str], configured: Optional[str]) -> List[Optional[str]]:
-    """Ordered --source tries. Claude auto: oauth then cli (avoid hanging web)."""
-    if configured and configured != "auto":
-        return [configured]
+    """Ordered --source tries.
+
+    Claude:
+      - auto → oauth, then cli (skip hanging web)
+      - api alone often 401s on personal keys; still fall back to oauth/cli
+    """
     pid = (provider or "").lower()
+    if configured and configured != "auto":
+        if pid == "claude" and configured == "api":
+            # Fake/admin API keys fail with cost_report 401 — keep trying session sources
+            return ["api", "oauth", "cli"]
+        return [configured]
     if pid == "claude":
         return ["oauth", "cli"]
     if pid == "codex":
         return ["oauth", "cli", None]  # None = auto
     return [None]
+
+
+def _is_hard_stop_error(msg: Optional[str]) -> bool:
+    if not msg:
+        return False
+    m = msg.lower()
+    return "rate limit" in m
+
+
+def _is_auth_fallback_error(msg: Optional[str]) -> bool:
+    """401 / invalid key — try next source instead of stopping."""
+    if not msg:
+        return False
+    m = msg.lower()
+    return (
+        "401" in m
+        or "unauthorized" in m
+        or "invalid api" in m
+        or "cost_report" in m
+        or "authentication" in m
+        or "not authenticated" in m
+    )
+
+
+def _friendly_claude_error(msg: Optional[str], source: Optional[str]) -> Optional[str]:
+    if not msg:
+        return msg
+    m = msg.lower()
+    if "401" in m or "cost_report" in m:
+        return (
+            "Claude Admin API key rejected (HTTP 401). "
+            "Session quotas need OAuth/CLI — set Usage source to auto or oauth in Settings, "
+            "and remove any test API key. Local cost history still works."
+        )
+    if "rate limit" in m:
+        return msg  # already friendly from CLI
+    if "subscription notice without session" in m or "without session quota" in m:
+        return (
+            "Claude CLI has no session quota right now (subscription notice only). "
+            "Try `claude login`, or wait for OAuth rate limit to clear. "
+            "Cost chart below still uses local logs."
+        )
+    if source:
+        return f"{msg} (source={source})"
+    return msg
 
 
 def fetch_from_cli(
@@ -648,6 +701,10 @@ def fetch_from_cli(
         return None
     prov = _cli_provider_arg(provider)
     configured = source or (_usage_source_for_provider(prov) if prov else None)
+    # Ignore obvious placeholder keys for Claude — they force broken api mode
+    if (prov or "").lower() == "claude" and configured == "api":
+        if _claude_has_placeholder_api_key():
+            configured = "auto"
     attempts = _source_attempts(prov, configured)
 
     last: Optional[List[ProviderView]] = None
@@ -660,14 +717,49 @@ def fetch_from_cli(
         )
         if not views:
             continue
+        # Friendly Claude messages
+        if (prov or "").lower() == "claude":
+            for v in views:
+                if v.error:
+                    v.error = _friendly_claude_error(v.error, src)
         last = views
-        # Prefer a successful window; keep rate-limit errors for UI
+        # Prefer a successful window
         if any(v.ok for v in views):
             return views
-        # Hard provider error (rate limit) — show it, don't thrash
-        if any(v.error and "rate limit" in (v.error or "").lower() for v in views):
+        errs = [v.error for v in views if v.error]
+        if any(_is_hard_stop_error(e) for e in errs):
+            return views
+        # 401 / auth → try next source
+        if any(_is_auth_fallback_error(e) for e in errs):
+            continue
+        # Other hard errors: still try next for Claude, stop for others
+        if (prov or "").lower() != "claude":
             return views
     return last
+
+
+def _claude_has_placeholder_api_key() -> bool:
+    for path in (
+        Path.home() / ".config" / "codexbar" / "config.json",
+        Path.home() / ".codexbar" / "config.json",
+    ):
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        for p in data.get("providers") or []:
+            if not isinstance(p, dict):
+                continue
+            if str(p.get("id") or "").lower() != "claude":
+                continue
+            key = str(p.get("api_key") or p.get("apiKey") or "")
+            if not key:
+                return False
+            low = key.lower()
+            return "test" in low or key.endswith("...") or len(key) < 20
+    return False
 
 
 def _run_usage_cli(

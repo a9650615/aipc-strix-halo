@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QLayoutItem,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -848,6 +850,81 @@ class _ReloadWorker(QThread):
         self.done.emit(views, costs)
 
 
+class _FlowLayout(QLayout):
+    """Wrap chips to the next row when the tab strip is full."""
+
+    def __init__(self, parent: Optional[QWidget] = None, spacing: int = 4) -> None:
+        super().__init__(parent)
+        self._items: List[QLayoutItem] = []
+        self.setContentsMargins(4, 4, 4, 4)
+        self.setSpacing(spacing)
+
+    def addItem(self, item: QLayoutItem) -> None:  # noqa: N802
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> Optional[QLayoutItem]:  # noqa: N802
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int) -> Optional[QLayoutItem]:  # noqa: N802
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self) -> Qt.Orientation:  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect: QRect) -> None:  # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self):  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self):  # noqa: N802
+        from PySide6.QtCore import QSize
+
+        size = QSize(0, 0)
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        m = self.contentsMargins()
+        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x = effective.x()
+        y = effective.y()
+        line_h = 0
+        space = self.spacing()
+        for item in self._items:
+            wid = item.widget()
+            space_x = space
+            space_y = space
+            next_x = x + item.sizeHint().width() + space_x
+            if next_x - space_x > effective.right() and line_h > 0:
+                x = effective.x()
+                y = y + line_h + space_y
+                next_x = x + item.sizeHint().width() + space_x
+                line_h = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
+            x = next_x
+            line_h = max(line_h, item.sizeHint().height())
+        return y + line_h - rect.y() + m.bottom()
+
+
 def _is_wayland() -> bool:
     if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
         return True
@@ -956,12 +1033,12 @@ class UsagePopover(QWidget):
             f"  border-radius: 11px;"
             f"}}"
         )
-        self._tabs = QHBoxLayout(self._tab_track)
-        self._tabs.setContentsMargins(4, 4, 4, 4)
-        self._tabs.setSpacing(4)
-        self._tabs.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        # Room for uniform 48px chips (label + mini bar)
+        # Flow layout: wrap to next row when many providers (Codex/Claude/Grok/Zai…)
+        self._tabs = _FlowLayout(self._tab_track, spacing=4)
         self._tab_track.setMinimumHeight(_TabChip.TAB_H + 8)
+        self._tab_track.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
         tab_outer.addWidget(self._tab_track)
         shell_l.addWidget(self._tab_wrap, 0)
 
@@ -1325,7 +1402,7 @@ class UsagePopover(QWidget):
             chip = _TabChip("Overview", accent=C["accent"], show_bar=False)
             chip.clicked.connect(lambda: self._select_tab("overview"))
             self._tab_buttons["overview"] = chip
-            self._tabs.addWidget(chip, 1)
+            self._tabs.addWidget(chip)
         for v in self._views:
             rem: Optional[float] = None
             exp: Optional[float] = None
@@ -1340,10 +1417,23 @@ class UsagePopover(QWidget):
                 expected_used=exp,
                 show_bar=True,
             )
+            # Fixed-ish width so flow wraps cleanly (not stretched to one row)
+            chip.setMinimumWidth(88)
+            chip.setMaximumWidth(120)
+            chip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             chip.clicked.connect(lambda p=v.provider: self._select_tab(p))
             self._tab_buttons[v.provider] = chip
-            self._tabs.addWidget(chip, 1)
+            self._tabs.addWidget(chip)
+        # Overview chip same width policy
+        ov = self._tab_buttons.get("overview")
+        if ov is not None:
+            ov.setMinimumWidth(88)
+            ov.setMaximumWidth(120)
+            ov.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self._paint_tabs()
+        # Let flow layout grow the pill track height for 2+ rows
+        self._tab_track.updateGeometry()
+        self._tab_wrap.updateGeometry()
 
     def _select_tab(self, key: str) -> None:
         self._active = key
