@@ -34,6 +34,12 @@ depend on heavy Vulkan agent models. Override with env
   block TTS.
 - **Episodes**: JSONL under `/var/lib/aipc-agent/episodes/` for
   self-improvement critique (Phase B timer still optional).
+- **Skill tree (not in this repo):** durable skills live as **modular
+  folders on the machine** (e.g. `~/.hermes/skills/`, optional
+  `/var/lib/aipc-agent/skills/`). This module only supplies the
+  **process** (episodes, internalize, future critique/gap→install).
+  Do not commit skill corpora into `modules/**`. See OpenSpec
+  `assistant-self-improvement` (skill tree boundary + closed loop).
 - **Classifier**: daily intents are **model-judged**
   (`AIPC_CLASSIFIER=always`); stock/live price multi-turn routes to
   Hermes tool path, not “没有工具” chat.

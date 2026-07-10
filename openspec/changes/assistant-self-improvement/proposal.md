@@ -53,8 +53,13 @@ turn or inventing uncontrolled self-modifying agents.
   good vs bad dismiss for later thr proposals (human-approved).
 - **Safety envelope**: no automatic weight fine-tune; no silent tool
   grant widen; no off-box upload; no auto-edit of modules/systemd.
+- **Skill tree placement**: skills grow as **modular folders on each
+  machine** (e.g. Hermes skills dir, `/var/lib/aipc-agent/skills`). The
+  aipc **project only provides the learning/install process**, not the
+  skill corpus. Git/image rebuild reinstalls process; skill tree stays
+  on local persistent state.
 - **Observability**: doctor/portal for sessions open, activity queue,
-  last infer, self-improve health.
+  last infer, self-improve health, local skill-root presence.
 
 ## Capabilities
 

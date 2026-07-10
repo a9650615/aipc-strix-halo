@@ -138,6 +138,59 @@ Daily-assistant detection for ordinary productivity intents SHALL be performed b
 - **WHEN** the user asks for calendar/email/search/usage with phrasing not present in any static keyword list
 - **THEN** the classifier model path SHALL still be eligible to select `daily_assistant` under its timeout policy
 
+### Requirement: Local modular skill tree (outside the aipc project)
+
+The durable **skill tree** (installable capabilities, Hermes skills,
+playbooks, user-grown procedures) SHALL live as **modular directories on
+the machine**, not as content inside the aipc git repository.
+
+- Default discovery roots SHALL be on-box paths such as the primary
+  user’s Hermes skills directory and/or `/var/lib/aipc-agent/skills/`
+  (exact list configurable by env).
+- The aipc project SHALL provide only the **learning / install process**
+  (episode log, gap detection, critique, proposal ledger, hooks that
+  write into those local roots).
+- Image rebuild SHALL reinstall process code without wiping the local
+  skill tree (skill data on persistent local state).
+
+#### Scenario: Skills are not in git modules
+
+- **WHEN** a new skill is learned or installed for this machine
+- **THEN** its files SHALL appear under a configured local skill root
+  and SHALL NOT be written into `modules/**` or other aipc source paths
+
+#### Scenario: Runtime loads from local roots only
+
+- **WHEN** Hermes or another worker needs a skill
+- **THEN** it SHALL discover it from configured local skill directories
+  (not from the aipc checkout tree)
+
+#### Scenario: Process without content
+
+- **WHEN** the aipc image is built from the repository
+- **THEN** the image MAY include empty skill-root scaffolding or path
+  documentation, but SHALL NOT ship a product skill corpus as the user’s
+  skill tree
+
+### Requirement: Need-triggered skill growth closed loop
+
+The system SHALL support a closed loop:
+
+1. Demand or failure is observed (episode / user request / tool gap)
+2. Process (model-judged) decides whether a durable skill, few-shot, or
+   mem0 fact is warranted
+3. Apply is limited to on-box learning stores or local skill folders;
+   changes that would edit the image source or widen security require a
+   human-facing proposal only
+4. Later turns load the updated local skill tree / priors
+
+#### Scenario: Gap does not edit the repo
+
+- **WHEN** a missing capability is detected
+- **THEN** the system MAY install or propose a skill under the local
+  skill root, and MUST NOT commit or patch the aipc project tree as the
+  skill store
+
 ### Requirement: Safety envelope
 
 Self-improvement SHALL NOT:
@@ -146,6 +199,7 @@ Self-improvement SHALL NOT:
 - Widen tool permission grants automatically
 - Upload episodes or memories off-box
 - Edit `modules/**` or systemd unit files automatically
+- Use the aipc git tree as the writable skill-tree store
 
 #### Scenario: Risky self-edit blocked
 

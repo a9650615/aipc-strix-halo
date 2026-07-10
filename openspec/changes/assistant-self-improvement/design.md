@@ -13,6 +13,35 @@ production weights on the fly. Learning is:
 All four stay **on-box**, async to the voice critical path
 (STT → plan → reply → TTS).
 
+### Skill tree boundary (non-negotiable)
+
+The **skill tree is not part of the aipc git project.**  
+The project only ships **process / plumbing**; each machine grows its own
+modular skill tree in **local folders**.
+
+| What | Where | Who owns content |
+|------|--------|------------------|
+| Skill **tree** (capabilities, Hermes skills, playbooks, user-grown procedures) | **On-box directories only** — e.g. `~/.hermes/skills/`, optional `/var/lib/aipc-agent/skills/`, user `~/…` trees | Each machine / primary user |
+| Learning **process** (episode log, internalize, critique timer, gap detect, install/proposal hooks, safety ledger) | `modules/agent-orchestrator/`, optional timer units, OpenSpec for the *flow* | aipc repo |
+| Durable **facts** (preferences, habits) | mem0 on-box | each machine |
+| Soft **priors** (routing few-shots, STT map) | e.g. `/var/lib/aipc-agent/learning/` | each machine (generated) |
+
+**Invariants**
+
+1. **No skill corpus in git.** Do not commit skill trees, scraped playbooks,
+   or per-user procedures under `modules/**` or `openspec/**` as product
+   content. Repo may document *paths and APIs* only.
+2. **Modular on disk.** One skill = one folder (or one Hermes skill unit)
+   with its own README/manifest; install/remove is filesystem-local.
+3. **Process without content.** Orchestrator loads/discovers skills from
+   configured local roots at runtime; missing skill → gap episode →
+   learn/install **into the local tree**, not into the image source tree.
+4. **Auto-grow, bounded.** Idle/need-triggered learning may write under
+   local skill/learning dirs; it MUST NOT auto-edit `modules/**` or
+   systemd. Risky changes → proposal ledger only.
+5. **Rebuild-safe.** Image rebuild reinstalls *process*; skill tree and
+   mem0 stay on persistent local state (home / `/var/lib/aipc-agent`).
+
 ### Architecture (target)
 
 ```
