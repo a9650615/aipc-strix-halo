@@ -268,9 +268,30 @@ def _pace_from_cli(pace_blob: Optional[dict]) -> Optional[PaceInfo]:
         # Default official sign: negative delta → reserve
         reserve = -delta
     runs_out = ""
-    m = re.search(r"run(?:s)? out in\s*~?\s*([^|]+)", summary_s, re.I)
+    m = re.search(
+        r"(?:run(?:s)? out in|projected empty in|empty in)\s*~?\s*([^|]+)",
+        summary_s,
+        re.I,
+    )
     if m:
         runs_out = m.group(1).strip()
+    # etaSeconds from official CLI
+    if not runs_out:
+        try:
+            eta = float(pace_blob.get("etaSeconds"))
+            if eta > 0:
+                h = int(eta // 3600)
+                mnt = int((eta % 3600) // 60)
+                if h >= 24:
+                    d = h // 24
+                    h = h % 24
+                    runs_out = f"{d}d {h}h" if h else f"{d}d"
+                elif h > 0:
+                    runs_out = f"{h}h {mnt}m" if mnt else f"{h}h"
+                else:
+                    runs_out = f"{mnt}m"
+        except (TypeError, ValueError):
+            pass
     return PaceInfo(
         reserve_percent=reserve,
         expected_used_percent=expected,
@@ -407,13 +428,16 @@ def _window_from_dict(
         or data.get("id")
     )
     label_map = {
-        300: "Session",
+        300: "Session (5h)",
         10080: "Weekly",
     }
     if title:
         label = str(title).replace("_", " ").replace("-", " ").title()
+        if mins_i == 300 and "5h" not in label.lower() and "session" in label.lower():
+            label = "Session (5h)"
     elif mins_i in label_map and label in {
         "Session",
+        "Session (5h)",
         "Weekly",
         "Extra",
         "Primary",
@@ -521,21 +545,36 @@ def parse_upstream_item(item: dict[str, Any]) -> ProviderView:
         or item.get("updatedAt")
     )
 
+    # Primary = Session 5h (windowMinutes 300); secondary = Weekly (10080)
     primary = _window_from_dict(
-        "Session", usage.get("primary"), cli_pace=pace_primary or None
+        "Session (5h)", usage.get("primary"), cli_pace=pace_primary or None
     )
     secondary = _window_from_dict(
         "Weekly", usage.get("secondary"), cli_pace=pace_secondary or None
     )
-    tertiary = _window_from_dict("Extra", usage.get("tertiary"))
+    tertiary = _window_from_dict("Extra", usage.get("tertiary"), cli_pace=None)
+    # Tertiary pace if CLI provides it
+    pace_tertiary = pace.get("tertiary") if isinstance(pace.get("tertiary"), dict) else {}
+    if tertiary is not None and pace_tertiary and tertiary.pace is None:
+        tertiary.pace = _pace_from_cli(pace_tertiary)
     extras = _extra_windows_from_usage(usage)
 
-    # Prefer weekly pace for card-level summary (official menu highlights weekly reserve)
+    # Ensure Session always has a pace prediction (CLI primary first, else compute)
+    if primary is not None and primary.pace is None:
+        primary.pace = compute_pace(
+            primary.used_percent, primary.window_minutes, primary.resets_at
+        )
+    if secondary is not None and secondary.pace is None:
+        secondary.pace = compute_pace(
+            secondary.used_percent, secondary.window_minutes, secondary.resets_at
+        )
+
+    # Card-level summary: prefer 5h session (what users watch most), then weekly
     card_pace = None
-    if secondary and secondary.pace:
-        card_pace = secondary.pace.summary
-    elif primary and primary.pace:
+    if primary and primary.pace:
         card_pace = primary.pace.summary
+    elif secondary and secondary.pace:
+        card_pace = secondary.pace.summary
     elif pace_primary.get("summary"):
         card_pace = str(pace_primary.get("summary"))
 

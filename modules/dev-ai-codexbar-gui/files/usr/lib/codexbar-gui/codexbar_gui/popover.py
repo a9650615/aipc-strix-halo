@@ -785,42 +785,54 @@ class _OverviewRow(QFrame):
         head.addWidget(open_btn)
         root.addLayout(head)
 
-        if view.ok and view.primary is not None:
-            sess = view.primary
-            rem = sess.remaining_percent
-            color = accent if rem > 50 else _rem_color(rem)
-            meta = QHBoxLayout()
-            lab = QLabel("Session (5h)")
-            lab.setStyleSheet(
-                f"color:{C['muted']}; border:none; background:transparent; font-size:11px;"
-            )
-            meta.addWidget(lab)
-            meta.addStretch()
-            if sess.resets_in:
-                rs = QLabel(sess.resets_in)
-                rs.setStyleSheet(
-                    f"color:{C['dim']}; border:none; background:transparent; font-size:10px;"
+        if view.ok and (view.primary is not None or view.secondary is not None):
+            # Official overview: Session 5h + Weekly, each with pace vs expected
+            for win in (view.primary, view.secondary):
+                if win is None:
+                    continue
+                rem = win.remaining_percent
+                color = accent if rem > 50 else _rem_color(rem)
+                # Prefer CLI label; force 5h naming for 300-minute windows
+                title = win.label
+                if win.window_minutes == 300 and "5h" not in title.lower():
+                    title = "Session (5h)"
+                elif win.window_minutes == 10080 and "week" not in title.lower():
+                    title = "Weekly"
+                meta = QHBoxLayout()
+                lab = QLabel(title)
+                lab.setStyleSheet(
+                    f"color:{C['muted']}; border:none; background:transparent; "
+                    f"font-size:11px; font-weight:600;"
                 )
-                meta.addWidget(rs)
-            root.addLayout(meta)
-            root.addWidget(
-                _PaceBar(
+                meta.addWidget(lab)
+                meta.addStretch()
+                if win.resets_in:
+                    rs = QLabel(win.resets_in)
+                    rs.setStyleSheet(
+                        f"color:{C['dim']}; border:none; background:transparent; "
+                        f"font-size:10px;"
+                    )
+                    meta.addWidget(rs)
+                root.addLayout(meta)
+                root.addWidget(
+                    _PaceBar(
+                        remaining=rem,
+                        expected_used=(
+                            win.pace.expected_used_percent if win.pace else None
+                        ),
+                        color=color,
+                        height=12 if win is view.secondary else 14,
+                    )
+                )
+                _add_pace_footer(
+                    root,
                     remaining=rem,
-                    expected_used=(
-                        sess.pace.expected_used_percent if sess.pace else None
-                    ),
-                    color=color,
-                    height=14,
+                    rem_color=color,
+                    resets_in=win.resets_in or "",
+                    pace=win.pace,
                 )
-            )
-            # Official: % left + reserve/deficit vs expected | resets + lasts-until
-            _add_pace_footer(
-                root,
-                remaining=rem,
-                rem_color=color,
-                resets_in=sess.resets_in or "",
-                pace=sess.pace,
-            )
+                if win is view.primary and view.secondary is not None:
+                    root.addSpacing(8)
         else:
             err = QLabel(view.error or "Unavailable")
             err.setWordWrap(True)
