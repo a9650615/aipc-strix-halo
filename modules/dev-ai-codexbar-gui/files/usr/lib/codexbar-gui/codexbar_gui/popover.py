@@ -155,44 +155,146 @@ _PROVIDER_ACCENT = {
 }
 
 
-class _TabChip(QPushButton):
-    """Uniform tab pill — fixed height, equal stretch, real button hit-target."""
+class _TabChip(QFrame):
+    """Uniform tab: same height for all; provider tabs embed a mini Session bar.
+
+    No per-tab bottom borders — active is a single solid pill (official look).
+    """
+
+    clicked = Signal()
+
+    # One height for Overview + providers so the strip never looks staggered
+    TAB_H = 48
 
     def __init__(
         self,
         title: str,
         *,
         accent: Optional[str] = None,
+        remaining: Optional[float] = None,
+        expected_used: Optional[float] = None,
+        show_bar: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
-        super().__init__(title, parent)
-        self._accent = accent or C["accent"]
-        self.setCheckable(True)
+        super().__init__(parent)
+        self.setObjectName("TabChip")
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(36)
-        self.setMinimumWidth(78)
+        self.setFixedHeight(self.TAB_H)
+        self.setMinimumWidth(86)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._accent = accent or C["accent"]
+        self._show_bar = show_bar
+        self._remaining = remaining
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 6, 10, 6)
+        root.setSpacing(3)
+
+        self._title = QLabel(title)
+        self._title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        root.addWidget(self._title)
+
+        # Always reserve the same bar row height so every tab is identical size
+        bar_row = QHBoxLayout()
+        bar_row.setContentsMargins(0, 0, 0, 0)
+        bar_row.setSpacing(4)
+        self._bar_host = QWidget()
+        self._bar_host.setFixedHeight(10)
+        self._bar_host.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        bh = QHBoxLayout(self._bar_host)
+        bh.setContentsMargins(0, 0, 0, 0)
+        bh.setSpacing(4)
+
+        self._bar: Optional[_PaceBar] = None
+        self._pct: Optional[QLabel] = None
+        if show_bar:
+            rem = 0.0 if remaining is None else float(remaining)
+            color = _rem_color(remaining) if remaining is not None else C["dim"]
+            self._bar = _PaceBar(
+                remaining=rem if remaining is not None else 0.0,
+                expected_used=expected_used,
+                color=color if remaining is not None else C["dim"],
+                height=6,
+                min_width=36,
+            )
+            self._bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            bh.addWidget(self._bar, 1)
+            self._pct = QLabel("—" if remaining is None else f"{int(round(rem))}")
+            self._pct.setFixedWidth(28)
+            self._pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self._pct.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            bh.addWidget(self._pct)
+        bar_row.addWidget(self._bar_host, 1)
+        root.addLayout(bar_row)
+
         self.set_active(False)
 
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
     def set_active(self, active: bool) -> None:
-        self.setChecked(active)
         if active:
             self.setStyleSheet(
-                f"QPushButton {{"
-                f"  background:{C['accent']}; color:#0b0d12; border:none;"
-                f"  border-radius:9px; padding:0 12px; font-size:12.5px; font-weight:700;"
+                f"#TabChip {{"
+                f"  background:{C['accent']}; border:none; border-radius:10px;"
                 f"}}"
             )
+            self._title.setStyleSheet(
+                "color:#0b0d12; border:none; background:transparent; "
+                "font-size:12px; font-weight:700;"
+            )
+            if self._pct is not None:
+                self._pct.setStyleSheet(
+                    "color:#0b0d12; border:none; background:transparent; "
+                    "font-size:10px; font-weight:700;"
+                )
+            if self._bar is not None:
+                # Active: fill stays brand-ish; track lighter on blue pill
+                self._bar._track.setStyleSheet(
+                    f"#PaceTrack {{ background:rgba(11,13,18,0.25); border:none; "
+                    f"border-radius:3px; }}"
+                )
+                self._bar._fill.setStyleSheet(
+                    f"#PaceFill {{ background:#0b0d12; border:none; border-radius:3px; }}"
+                )
         else:
-            # Bottom border = accent underline (uniform box for every tab)
             self.setStyleSheet(
-                f"QPushButton {{"
-                f"  background:transparent; color:{C['muted']};"
-                f"  border:none; border-bottom:2px solid {self._accent};"
-                f"  border-radius:9px; padding:0 12px; font-size:12.5px; font-weight:600;"
+                f"#TabChip {{"
+                f"  background:transparent; border:none; border-radius:10px;"
                 f"}}"
-                f"QPushButton:hover {{ background:{C['card2']}; color:{C['text']}; }}"
+                f"#TabChip:hover {{ background:{C['card2']}; }}"
             )
+            self._title.setStyleSheet(
+                f"color:{C['muted']}; border:none; background:transparent; "
+                f"font-size:12px; font-weight:600;"
+            )
+            if self._pct is not None:
+                color = (
+                    C["dim"]
+                    if self._remaining is None
+                    else _rem_color(self._remaining)
+                )
+                self._pct.setStyleSheet(
+                    f"color:{color}; border:none; background:transparent; "
+                    f"font-size:10px; font-weight:600;"
+                )
+            if self._bar is not None:
+                fill = (
+                    C["dim"]
+                    if self._remaining is None
+                    else _rem_color(self._remaining)
+                )
+                self._bar._track.setStyleSheet(
+                    f"#PaceTrack {{ background:{C['track']}; border:1px solid {C['border']}; "
+                    f"border-radius:3px; }}"
+                )
+                self._bar._fill.setStyleSheet(
+                    f"#PaceFill {{ background:{fill}; border:none; border-radius:3px; }}"
+                )
 
 
 class _UsageMeter(QWidget):
@@ -804,8 +906,9 @@ class UsagePopover(QWidget):
         self._tabs = QHBoxLayout(self._tab_track)
         self._tabs.setContentsMargins(4, 4, 4, 4)
         self._tabs.setSpacing(4)
-        # Equal-width slots so Overview / Codex / Claude / Zai match height+width
         self._tabs.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        # Room for uniform 48px chips (label + mini bar)
+        self._tab_track.setMinimumHeight(_TabChip.TAB_H + 8)
         tab_outer.addWidget(self._tab_track)
         outer.addWidget(self._tab_wrap, 0)
 
@@ -953,21 +1056,27 @@ class UsagePopover(QWidget):
         self._clear(self._tabs)
         self._tab_buttons.clear()
         if len(self._views) > 1:
-            chip = _TabChip("Overview", accent=C["accent"])
-            chip.clicked.connect(lambda _checked=False: self._select_tab("overview"))
+            chip = _TabChip("Overview", accent=C["accent"], show_bar=False)
+            chip.clicked.connect(lambda: self._select_tab("overview"))
             self._tab_buttons["overview"] = chip
             self._tabs.addWidget(chip, 1)
         for v in self._views:
+            rem: Optional[float] = None
+            exp: Optional[float] = None
+            if v.ok and v.primary is not None:
+                rem = v.primary.remaining_percent
+                if v.primary.pace is not None:
+                    exp = v.primary.pace.expected_used_percent
             chip = _TabChip(
                 v.display_name,
                 accent=_PROVIDER_ACCENT.get(v.provider.lower(), C["accent"]),
+                remaining=rem,
+                expected_used=exp,
+                show_bar=True,
             )
-            chip.clicked.connect(
-                lambda _checked=False, p=v.provider: self._select_tab(p)
-            )
+            chip.clicked.connect(lambda p=v.provider: self._select_tab(p))
             self._tab_buttons[v.provider] = chip
             self._tabs.addWidget(chip, 1)
-        # No trailing stretch — equal stretch factors keep uniform tab widths
         self._paint_tabs()
 
     def _select_tab(self, key: str) -> None:
