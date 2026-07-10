@@ -592,7 +592,10 @@ def fetch_enabled_providers(
             views.append(
                 ProviderView(
                     provider=pid,
-                    error=f"No data for {pid} (timeout or not configured)",
+                    error=(
+                        f"No data for {pid}. Check Settings → Usage source, "
+                        f"or run: codexbar usage --provider {pid} --format json"
+                    ),
                 )
             )
     return views
@@ -623,15 +626,61 @@ def _usage_source_for_provider(provider_id: Optional[str]) -> Optional[str]:
     return None
 
 
+def _source_attempts(provider: Optional[str], configured: Optional[str]) -> List[Optional[str]]:
+    """Ordered --source tries. Claude auto: oauth then cli (avoid hanging web)."""
+    if configured and configured != "auto":
+        return [configured]
+    pid = (provider or "").lower()
+    if pid == "claude":
+        return ["oauth", "cli"]
+    if pid == "codex":
+        return ["oauth", "cli", None]  # None = auto
+    return [None]
+
+
 def fetch_from_cli(
     provider: Optional[str] = None,
     timeout: float = CLI_TIMEOUT,
+    source: Optional[str] = None,
 ) -> Optional[List[ProviderView]]:
     binary = find_codexbar_binary()
     if not binary:
         return None
-    # Cap upstream web scrape so one slow provider cannot hang forever.
-    web_to = max(5, min(int(timeout), 60))
+    prov = _cli_provider_arg(provider)
+    configured = source or (_usage_source_for_provider(prov) if prov else None)
+    attempts = _source_attempts(prov, configured)
+
+    last: Optional[List[ProviderView]] = None
+    for src in attempts:
+        views = _run_usage_cli(
+            binary,
+            provider=prov,
+            source=src,
+            timeout=timeout,
+        )
+        if not views:
+            continue
+        last = views
+        # Prefer a successful window; keep rate-limit errors for UI
+        if any(v.ok for v in views):
+            return views
+        # Hard provider error (rate limit) — show it, don't thrash
+        if any(v.error and "rate limit" in (v.error or "").lower() for v in views):
+            return views
+    return last
+
+
+def _run_usage_cli(
+    binary: str,
+    *,
+    provider: Optional[str],
+    source: Optional[str],
+    timeout: float,
+) -> Optional[List[ProviderView]]:
+    web_to = max(5, min(int(timeout), 45))
+    # Claude oauth is usually fast; keep web scrape short to avoid multi-minute hangs
+    if (provider or "").lower() == "claude" and (source or "oauth") in {"oauth", "cli"}:
+        web_to = min(web_to, 20)
     cmd = [
         binary,
         "usage",
@@ -640,13 +689,10 @@ def fetch_from_cli(
         "--web-timeout",
         str(web_to),
     ]
-    prov = _cli_provider_arg(provider)
-    if prov:
-        cmd.extend(["--provider", prov])
-        src = _usage_source_for_provider(prov)
-        # Official CLI: --source auto|web|cli|oauth|api
-        if src and src != "auto":
-            cmd.extend(["--source", src])
+    if provider:
+        cmd.extend(["--provider", provider])
+    if source:
+        cmd.extend(["--source", source])
     logger.info("CLI: %s", " ".join(cmd))
     try:
         proc = subprocess.run(
@@ -656,15 +702,32 @@ def fetch_from_cli(
             timeout=timeout + 5.0,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired:
+        logger.warning("codexbar CLI timed out: %s", " ".join(cmd))
+        if provider:
+            return [
+                ProviderView(
+                    provider=provider,
+                    source=source or "auto",
+                    error=(
+                        f"Timed out after {int(timeout)}s"
+                        + (f" (source={source})" if source else "")
+                        + ". Try Settings → Usage source, or wait and Refresh."
+                    ),
+                )
+            ]
+        return None
+    except OSError as exc:
         logger.warning("codexbar CLI failed: %s", exc)
         return None
-    # JSON may be on stdout even when exit != 0 (partial providers).
+
     text = (proc.stdout or "").strip()
     if not text:
-        logger.warning("codexbar CLI empty stdout: %s", (proc.stderr or "")[:200])
+        err = (proc.stderr or "").strip()
+        logger.warning("codexbar CLI empty stdout: %s", err[:200])
+        if provider and err:
+            return [ProviderView(provider=provider, source=source or "", error=err[:300])]
         return None
-    # Some builds mix logs — find first '['
     start = text.find("[")
     if start < 0:
         return None
