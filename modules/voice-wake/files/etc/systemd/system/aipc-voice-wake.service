@@ -1,6 +1,6 @@
 [Unit]
 Description=aipc voice wake (custom phrase / openWakeWord / energy)
-After=sound.target
+After=sound.target sleep.target
 # Desktop PipeWire must exist for the mic (system root cannot open it).
 Requires=user@1000.service
 After=user@1000.service
@@ -23,19 +23,23 @@ Environment=AIPC_WAKE_PHRASES_FILE=/etc/aipc/wake/phrases
 # Ambient ~700 RMS; speech often 3k–20k. 2000 gates noise without deafness.
 Environment=AIPC_WAKE_ENERGY=1500
 Environment=AIPC_WAKE_ENERGY_FRAMES=4
-Environment=AIPC_WAKE_CAPTURE_S=1.8
+Environment=AIPC_WAKE_CAPTURE_S=2.0
 Environment=AIPC_WAKE_COOLDOWN=8
+Environment=AIPC_WAKE_CMD_MAX_S=6
+Environment=AIPC_WAKE_CMD_END_SILENCE_MS=450
+Environment=AIPC_WAKE_CMD_START_TIMEOUT=2.5
 Environment=AIPC_VOICE_STT_URL=http://127.0.0.1:9001/transcribe
 Environment=AIPC_VOICE_DUCK=1
 Environment=AIPC_VOICE_DENOISE=1
-Environment=AIPC_VOICE_DUCK_FACTOR=0.30
-Environment=AIPC_VOICE_UX_NOTIFY=auto
-Environment=PYTHONPATH=/var/lib/aipc-voice/lib
+Environment=AIPC_VOICE_DUCK_FACTOR=0.55
+Environment=AIPC_VOICE_DUCK_FLOOR=40
+Environment=AIPC_VOICE_DUCK_MS=200
 Environment=AIPC_VOICE_UX_NOTIFY=auto
 Environment=AIPC_VOICE_UX_CUE=0
 Environment=PYTHONPATH=/var/lib/aipc-voice/lib
-Restart=on-failure
-RestartSec=2
+# Survive mic/PipeWire death across suspend/resume
+Restart=always
+RestartSec=3
 ExecStartPre=/bin/mkdir -p /var/lib/aipc-voice/wake /run/aipc /etc/aipc/wake
 
 [Install]

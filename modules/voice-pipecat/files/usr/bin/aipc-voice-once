@@ -35,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -72,12 +73,15 @@ RECORD_SECONDS = int(os.environ.get("AIPC_VOICE_RECORD_SECONDS", "5"))
 MAX_SECONDS = int(os.environ.get("AIPC_VOICE_MAX_SECONDS", "20"))
 VAD_DEFAULT = os.environ.get("AIPC_VOICE_VAD", "1") != "0"
 VAD_ENERGY = float(os.environ.get("AIPC_VOICE_VAD_ENERGY", "1800"))
-END_SILENCE_MS = int(os.environ.get("AIPC_VOICE_END_SILENCE_MS", "800"))
-START_TIMEOUT_S = float(os.environ.get("AIPC_VOICE_START_TIMEOUT", "3"))
+END_SILENCE_MS = int(os.environ.get("AIPC_VOICE_END_SILENCE_MS", "450"))
+START_TIMEOUT_S = float(os.environ.get("AIPC_VOICE_START_TIMEOUT", "2.5"))
 SAMPLE_RATE = 16000
 FRAME_MS = 30
 SESSION_ID = os.environ.get("AIPC_VOICE_SESSION_ID", "voice-assistant")
-CHAT_TIMEOUT = float(os.environ.get("AIPC_VOICE_CHAT_TIMEOUT", "180"))
+# Must be > AIPC_HERMES_VOICE_TIMEOUT (default 720) so Hermes returns an
+# explicit timeout message instead of urllib hanging as a mystery failure.
+# Long / background Hermes acks return fast; sync multi-step can run ~12 min.
+CHAT_TIMEOUT = float(os.environ.get("AIPC_VOICE_CHAT_TIMEOUT", "780"))
 # Closed loop default: direct orchestrator /chat (resident-small). Aggregator
 # is optional (mode routing / online) — opt in with AIPC_VOICE_USE_AGGREGATOR=1.
 # Default was 1 and double-failed (NPU+agent 502) before falling back to /chat.
@@ -133,6 +137,11 @@ def build_parser():
         "--wav",
         default=None,
         help="use existing WAV (skip mic record) — for wake pipeline handoff",
+    )
+    ap.add_argument(
+        "--text",
+        default=None,
+        help="use this transcript (skip STT) — progressive STT from wake handoff",
     )
     ap.add_argument("--session-id", default=SESSION_ID, help="agent-orchestrator session id")
     ap.add_argument(
@@ -304,13 +313,76 @@ def transcribe(wav_path):
         return _parse_text_field(resp.read())
 
 
+def _is_timeout_exc(exc: BaseException) -> bool:
+    """True for bare TimeoutError and urllib.urlopen timeouts (URLError(reason=TimeoutError))."""
+    if isinstance(exc, TimeoutError):
+        return True
+    try:
+        import socket
+
+        if isinstance(exc, socket.timeout):
+            return True
+    except Exception:
+        pass
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, TimeoutError):
+            return True
+        try:
+            import socket
+
+            if isinstance(reason, socket.timeout):
+                return True
+        except Exception:
+            pass
+        r = str(reason or exc).lower()
+        if "timed out" in r or "timeout" in r:
+            return True
+    if isinstance(exc, OSError) and "timed out" in str(exc).lower():
+        return True
+    return False
+
+
+def _chat_timeout_text() -> str:
+    return f"处理超时了（超过 {CHAT_TIMEOUT:.0f} 秒），请简化问题后再试。"
+
+
 def chat(text, session_id):
-    payload = json.dumps({"text": text, "session_id": session_id}).encode()
+    """Return (reply_text, end_session, session_id). end_session → wake should not re-open 接话."""
+    payload = json.dumps(
+        {"text": text, "session_id": session_id, "source": "voice"}
+    ).encode()
     req = urllib.request.Request(
         CHAT_URL, data=payload, method="POST", headers={"Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=CHAT_TIMEOUT) as resp:
-        return _parse_text_field(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=CHAT_TIMEOUT) as resp:
+            body = resp.read()
+    except TimeoutError:
+        return _chat_timeout_text(), False, session_id
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read()
+            data = json.loads(raw.decode(errors="replace"))
+            if isinstance(data, dict) and data.get("text"):
+                return str(data["text"]), bool(data.get("end_session")), str(data.get("session_id") or session_id)
+            if isinstance(data, dict) and data.get("error"):
+                msg = data["error"]
+                if isinstance(msg, dict):
+                    msg = msg.get("message") or msg
+                return f"助手暂时无法完成：{msg}", False, session_id
+        except Exception:
+            pass
+        raise
+    except urllib.error.URLError as exc:
+        if _is_timeout_exc(exc):
+            return _chat_timeout_text(), False, session_id
+        raise
+    data = json.loads(body.decode() or "{}")
+    if isinstance(data, dict):
+        return str(data.get("text") or ""), bool(data.get("end_session")), str(data.get("session_id") or session_id)
+    return str(data), False, session_id
+
 
 
 def chat_via_aggregator(text, session_id):
@@ -366,9 +438,96 @@ def chat_via_aggregator(text, session_id):
         return out
 
 
+def _overlay_active() -> bool:
+    if voice_ux is None:
+        return False
+    try:
+        st, ok = voice_ux.overlay_status()
+        return bool(ok or st == "active")
+    except Exception:
+        return False
+
+
+def _reply_notify(title: str, body: str, *, timeout_ms: int = 5000) -> None:
+    """Rare native bubble — overlay owns normal UX."""
+    if not shutil.which("notify-send"):
+        return
+    try:
+        subprocess.run(
+            [
+                "notify-send",
+                "--app-name=AIPC Voice",
+                "--urgency=low",
+                f"--expire-time={timeout_ms}",
+                "--transient",
+                "--hint=string:x-canonical-private-synchronous:aipc-voice-reply",
+                title,
+                (body or "")[:240],
+            ],
+            check=False,
+            timeout=2,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def _long_wait_watchdog(detail: str = "", delay_s: float | None = None):
+    """Periodic low-urgency notify while LLM/Hermes still running (long tasks).
+
+    First ping after delay_s (default 8s), then every interval_s (default 45s).
+    """
+    if delay_s is None:
+        delay_s = float(os.environ.get("AIPC_VOICE_LONG_WAIT_S", "8"))
+    try:
+        interval_s = float(os.environ.get("AIPC_VOICE_LONG_WAIT_INTERVAL_S", "45"))
+    except ValueError:
+        interval_s = 45.0
+    if delay_s <= 0 or os.environ.get("AIPC_VOICE_UX_NOTIFY", "auto") in (
+        "0",
+        "off",
+        "false",
+        "no",
+    ):
+        class _Nop:
+            def cancel(self) -> None:
+                return None
+
+        return _Nop()
+    done = threading.Event()
+    t0 = time.monotonic()
+
+    def _run() -> None:
+        if done.wait(delay_s):
+            return
+        n = 0
+        while not done.is_set():
+            n += 1
+            elapsed = time.monotonic() - t0
+            body = (detail or "仍在處理，請稍候…")[:80]
+            body = f"{body}（已 {elapsed:.0f}s）"
+            _reply_notify("AIPC · 還在處理", body, timeout_ms=4000)
+            print(
+                f"aipc-voice-once: long-wait notify #{n} after {elapsed:.0f}s",
+                file=sys.stderr,
+            )
+            _ux("working", body[:60], force=True)
+            if interval_s <= 0 or done.wait(interval_s):
+                return
+
+    threading.Thread(target=_run, name="aipc-long-wait", daemon=True).start()
+
+    class _Watch:
+        def cancel(self) -> None:
+            done.set()
+
+    return _Watch()
+
+
 def show(reply):
+    """Speak reply via TTS; status goes to overlay. Native notify only as fallback."""
     _ux("speaking", (reply or "")[:80], force=True)
-    """Speak the reply when TTS is ready; always keep text notification too."""
     spoke = False
     if os.environ.get("AIPC_VOICE_TTS", "1") == "0":
         print("aipc-voice-once: TTS skipped (AIPC_VOICE_TTS=0)", file=sys.stderr)
@@ -387,10 +546,16 @@ def show(reply):
         print("aipc-voice-once: spoke reply via TTS")
     else:
         print("aipc-voice-once: TTS did not play (text-only this turn)", file=sys.stderr)
-    if shutil.which("notify-send"):
-        subprocess.run(["notify-send", "AIPC Assistant", reply], check=False)
-    elif not spoke:
-        print(f"aipc-voice-once: (notify-send unavailable) reply: {reply}")
+    # Default: no desktop bubble (overlay is the HUD). Notify only when:
+    # - AIPC_VOICE_REPLY_NOTIFY=1/force, or
+    # - TTS failed AND overlay is not running (user would otherwise see nothing).
+    mode = (os.environ.get("AIPC_VOICE_REPLY_NOTIFY") or "auto").strip().lower()
+    if mode in ("1", "on", "true", "yes", "force", "always"):
+        _reply_notify("AIPC Assistant", reply or "")
+    elif mode not in ("0", "off", "false", "no") and not spoke and not _overlay_active():
+        _reply_notify("AIPC Assistant", reply or "")
+    elif not spoke and not _overlay_active():
+        print(f"aipc-voice-once: reply (no TTS/overlay): {reply}")
 
 
 def _matches_open_portal(text: str) -> bool:
@@ -500,6 +665,9 @@ def _self_test():
     assert not usable_transcript("我")
     assert usable_transcript("今天天气如何")
     assert len(compress_for_speech("第一句。第二句。第三句很长" * 5)) <= 85
+    # --text without --wav must not require mic (closed-loop text gate)
+    ns_text = build_parser().parse_args(["--text", "你好"])
+    assert ns_text.text == "你好" and ns_text.wav is None
     print("aipc-voice-once: self-test OK")
     return 0
 
@@ -551,12 +719,18 @@ def main(argv=None):
         return _self_test()
 
     unlink_wav = False
+    wav_path = None
+    # --text alone: skip mic (closed-loop text/WAV gate; wake still uses --wav).
+    text_only = args.text is not None and str(args.text).strip() and not args.wav
     if args.wav:
         wav_path = args.wav
         if not Path(wav_path).is_file():
             print(f"aipc-voice-once: --wav not found: {wav_path}", file=sys.stderr)
             return 1
         print(f"aipc-voice-once: using provided wav {wav_path}", flush=True)
+        _ux("thinking", "處理指令", force=True)
+    elif text_only:
+        print("aipc-voice-once: --text without --wav; skip mic", flush=True)
         _ux("thinking", "處理指令", force=True)
     else:
         if not shutil.which("arecord"):
@@ -569,7 +743,8 @@ def main(argv=None):
             if args.vad:
                 max_s = args.seconds if args.seconds is not None else MAX_SECONDS
                 print(
-                    f"aipc-voice-once: recording until silence "                    f"(max {max_s}s, end_silence={args.end_silence_ms}ms)...",
+                    f"aipc-voice-once: recording until silence "
+                    f"(max {max_s}s, end_silence={args.end_silence_ms}ms)...",
                     flush=True,
                 )
                 _ux("recording", force=True)
@@ -611,11 +786,15 @@ def main(argv=None):
 
     try:
         _ux("thinking", force=True)
-        try:
-            text = transcribe(wav_path)
-        except (urllib.error.URLError, OSError) as exc:
-            print(f"aipc-voice-once: STT service unreachable at {STT_URL}: {exc}", file=sys.stderr)
-            return 1
+        if args.text is not None and str(args.text).strip():
+            text = str(args.text).strip()
+            print(f"aipc-voice-once: using progressive text: {text}", flush=True)
+        else:
+            try:
+                text = transcribe(wav_path)
+            except (urllib.error.URLError, OSError) as exc:
+                print(f"aipc-voice-once: STT service unreachable at {STT_URL}: {exc}", file=sys.stderr)
+                return 1
         print(f"aipc-voice-once: you said: {text}")
         _ux("thinking", (text or "")[:40], force=True)
 
@@ -627,18 +806,33 @@ def main(argv=None):
             _ux("done", force=True)
             return 0
 
-        # Local intents (dashboard open) run in this process so DISPLAY/session
-        # from push-to-talk is preserved; skip the LLM for these phrases.
-        if _matches_open_portal(text):
-            reply = _open_portal_local()
-            print(f"aipc-voice-once: local-intent open-portal → {reply}")
+        # Local intents run here (DISPLAY/Pulse session preserved); skip LLM.
+        try:
+            from aipc_lib.voice_intents import resolve_intent
+
+            hit = resolve_intent(text)
+        except Exception:
+            hit = None
+            if _matches_open_portal(text):
+                reply = _open_portal_local()
+                print(f"aipc-voice-once: local-intent open-portal → {reply}")
+                show(reply)
+                return 0
+        if hit is not None:
+            reply = hit.reply
+            print(f"aipc-voice-once: local-intent {hit.name} → {reply}")
             show(reply)
+            _ux("done", hit.name, force=True)
             return 0
 
+        # Visible progress while orchestrator / tools / Hermes run
+        _ux("thinking", (text or "處理中")[:40], force=True)
+        wait = _long_wait_watchdog((text or "")[:60])
+        end_session = False
         try:
             if USE_AGGREGATOR:
                 try:
-                    reply = chat_via_aggregator(text, args.session_id)
+                    reply = chat_via_aggregator(text, args.session_id); end_session = False
                     print("aipc-voice-once: via aggregator")
                 except (FileNotFoundError, RuntimeError, subprocess.TimeoutExpired) as exc:
                     print(
@@ -646,12 +840,22 @@ def main(argv=None):
                         f"falling back to direct /chat",
                         file=sys.stderr,
                     )
-                    reply = chat(text, args.session_id)
+                    reply, end_session, _sid = chat(text, args.session_id)
             else:
-                reply = chat(text, args.session_id)
-        except (urllib.error.URLError, OSError) as exc:
-            print(f"aipc-voice-once: agent-orchestrator unreachable at {CHAT_URL}: {exc}", file=sys.stderr)
-            return 1
+                reply, end_session, _sid = chat(text, args.session_id)
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            # chat() already maps urlopen timeouts → spoken text; if anything
+            # still surfaces here, speak timeout instead of silent exit 1.
+            if _is_timeout_exc(exc):
+                reply = _chat_timeout_text()
+            else:
+                print(
+                    f"aipc-voice-once: agent-orchestrator unreachable at {CHAT_URL}: {exc}",
+                    file=sys.stderr,
+                )
+                return 1
+        finally:
+            wait.cancel()
     finally:
         if unlink_wav:
             try:
@@ -660,8 +864,17 @@ def main(argv=None):
                 pass
 
     print(f"aipc-voice-once: assistant: {reply}")
+    if end_session:
+        print("aipc-voice-once: session complete", flush=True)
     show(reply)
-    _ux("done", force=True)
+    # end_session=2 → wake closes 接话 + overlay; 0 → may open follow-up
+    if end_session:
+        print("aipc-voice-once: end_session → dismiss multi-turn", flush=True)
+        _ux("done", "会话结束", force=True)
+        return 2
+    # Wake opens followup after process exit; skip done flash that hides overlay mid multi-turn.
+    if os.environ.get("AIPC_VOICE_SKIP_DONE", "0") != "1":
+        _ux("done", force=True)
     return 0
 
 

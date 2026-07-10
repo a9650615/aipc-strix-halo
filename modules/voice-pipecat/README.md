@@ -50,9 +50,12 @@ All surfaces share one status file and state vocabulary:
 |---|---|
 | `state` | `listening` / `wake` / `recording` / `thinking` / `speaking` / `done` / … |
 | `detail` / `partial` | transcript or reply snippet for overlay |
+| `source` / `priority` | owning widget id + preempt priority (voice default 100) |
 | path | `$XDG_RUNTIME_DIR/aipc-voice-state.json` |
 
-Consumers: voice-wake, voice-once, **aipc-voice-overlay**, KRunner, portal helpers, any script that calls `aipc voice ux set …`.
+**Widget control API** (preferred for future assistant HUDs): Unix socket
+`$XDG_RUNTIME_DIR/aipc-overlay.sock`, one JSON line per request/response.
+Library: `aipc_lib.overlay_api` (`rpc` / `set_status` / `show` / `hide` / `ping`).
 
 ```bash
 aipc voice status          # includes ux-state + overlay + wake
@@ -60,11 +63,23 @@ aipc voice ux              # current UX line + probes
 aipc voice ux set thinking "demo"
 aipc voice ptt             # same as 控制中心 (wake sock)
 aipc voice overlay start   # user unit aipc-voice-overlay
+aipc voice overlay ping    # control-plane health
+aipc voice overlay api set thinking --detail "agent…" --source hermes
+aipc voice overlay api hide
 ```
 
-`aipc-voice-overlay` (user session, PySide6) watches the status file and shows
-a bottom-center glass card (pulsing orb + state + detail). Esc hides the panel
-only — does not cancel the pipeline.
+Python (any widget):
+
+```python
+from aipc_lib.overlay_api import set_status, hide, ping
+ping()
+set_status("thinking", "working…", source="my-widget", priority=50)
+hide()
+```
+
+`aipc-voice-overlay` (user session, PySide6) watches the status file **and**
+serves the control socket. Top-center glass card (pulsing orb + state + detail).
+Esc hides the panel only — does not cancel the pipeline.
 
 The helper reads `/etc/aipc/voice/hotkey` by default; the repo ships `F20` as
 the default shortcut. KDE autostart runs the binder inside the login session,

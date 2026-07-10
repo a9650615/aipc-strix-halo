@@ -16,7 +16,31 @@ depend on heavy Vulkan agent models. Override with env
 `AIPC_SUPERVISOR_MODEL` (e.g. after `aipc models use agent`). See
 `docs/voice-pipeline.md`.
 
-`GET /healthz` is for portal/doctor/loop probes (liveness only).
+`GET /healthz` is for portal/doctor/loop probes (liveness + `sessions_open`).
+
+### Sessions, activity, internalization (productized)
+
+- **Session registry** (`session_registry.py`): open conversation with
+  status `active|working|waiting_user|done|failed`. Short-term memory
+  (`agent_context`) stays for the open session so multi-turn tool use
+  (e.g. 查 AMD 股價 → 那昨天呢) keeps context. Farewell / `end_session`
+  consolidates into mem0 then clears STM.
+- **Activity** (`activity.py` + `task_jobs`): live progress for long
+  workers → overlay (`ux_bridge`), throttled desktop notify, and
+  `GET /activity` + `GET /sessions`. Completing a job leaves the session
+  `active` for follow-ups unless the user ends the session.
+- **Internalize** (`memory.internalize`): every successful turn enqueues
+  async mem0 `infer=true` (chat-lane mirror for tool agents). Does not
+  block TTS.
+- **Episodes**: JSONL under `/var/lib/aipc-agent/episodes/` for
+  self-improvement critique (Phase B timer still optional).
+- **Classifier**: daily intents are **model-judged**
+  (`AIPC_CLASSIFIER=always`); stock/live price multi-turn routes to
+  Hermes tool path, not “没有工具” chat.
+
+Voice clients should pass a stable `session_id` (default
+`voice-assistant`) and treat `end_session: true` as session complete
+(wake: no follow-up arm).
 
 ## Current status: basic skeleton + Daily Assistant sub-agent, enabled
 

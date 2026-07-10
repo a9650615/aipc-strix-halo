@@ -42,6 +42,8 @@ Tool backend state:
 - memory: optional mem0 HTTP client; missing/unreachable memory fails soft.
 """
 
+import os
+import re
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -51,25 +53,29 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from aipc_agent import memory
+from aipc_agent import memory, ux_bridge
 from aipc_agent._util import text_of
 
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
-DAILY_ASSISTANT_MODEL = "ornith-35b"
+# Heavy tool-calling model (Vulkan). Simple single-tool asks should use
+# try_direct_tool() and never pay ornith cold-start.
+DAILY_ASSISTANT_MODEL = os.environ.get("AIPC_DAILY_MODEL", "ornith-35b")
 
 # Keep this list in sync with TOOLS above and graphs.SUPERVISOR_SYSTEM_PROMPT
 # as real backends land — a user hit this directly: without a system prompt
 # the model apologized like a disconnected generic chatbot instead of using
 # its own tools and reporting their real (not_configured) status.
 SYSTEM_PROMPT = (
-    "You are the aipc assistant's Daily Assistant persona, running locally "
-    "on the user's own AI PC. You have tools for calendar, email, file "
-    "access, web search, and AI coding usage/quota lookup (Claude, Codex, "
-    "LiteLLM, etc. via usage_lookup), plus best-effort local memory when "
-    "mem0 is available. Some tool backends may still be incomplete — when a "
-    "tool returns a not_configured status, tell the user plainly that this "
-    "specific feature isn't set up yet, don't apologize generically. You "
-    "cannot control the screen or launch applications."
+    "You are the aipc assistant's Daily / tools agent (NOT the coding agent). "
+    "You run locally on the user's AI PC. Use tools iteratively: call a tool, "
+    "read the result, call more tools if needed, then answer briefly. "
+    "Tools: calendar, email, files.read, web search, usage_lookup (coding "
+    "quotas only — not for writing code), screen_describe (read-only VLM). "
+    "When a tool returns not_configured, say that feature is not set up yet. "
+    "You do not write or refactor code — if the user wants coding, say they "
+    "should ask the coding/Hermes agent. "
+    "Relevant memories and prior turns for THIS agent only may be injected; "
+    "use them for follow-ups like「再查一下」."
 )
 
 
@@ -150,6 +156,8 @@ def files_read(path: str) -> dict:
         return {"status": "ok", "tool": "files.read", "content": read_file(path)}
     except PermissionError as exc:
         return {"status": "denied", "tool": "files.read", "detail": str(exc)}
+    except OSError as exc:
+        return {"status": "error", "tool": "files.read", "detail": str(exc)}
 
 
 @tool
@@ -170,7 +178,24 @@ def usage_lookup(providers: str = "") -> dict:
     return lookup_usage(providers or None)
 
 
-TOOLS = [calendar_lookup, email_lookup, files_read, search, search_tavily, usage_lookup]
+@tool
+def screen_describe(question: str = "") -> dict:
+    """Look at the user's desktop (screenshot + local VLM). Read-only —
+    does not click or type. Use when the user asks what is on screen/desktop."""
+    from aipc_agent import screen_see
+
+    return screen_see.describe_desktop(question or "")
+
+
+TOOLS = [
+    calendar_lookup,
+    email_lookup,
+    files_read,
+    search,
+    search_tavily,
+    usage_lookup,
+    screen_describe,
+]
 
 
 class DailyAssistantState(TypedDict):
@@ -180,47 +205,227 @@ class DailyAssistantState(TypedDict):
 
 
 def _chat_model() -> ChatLiteLLM:
+    # Voice / tool path: fail faster — ornith cold start should not retry×45s.
+    timeout = float(os.environ.get("AIPC_DAILY_LLM_TIMEOUT", os.environ.get("AIPC_LLM_REQUEST_TIMEOUT", "30")))
+    retries = int(os.environ.get("AIPC_DAILY_LLM_MAX_RETRIES", os.environ.get("AIPC_LLM_MAX_RETRIES", "0")))
     return ChatLiteLLM(
         model=DAILY_ASSISTANT_MODEL,
         api_base=LITELLM_BASE_URL,
         custom_llm_provider="openai",
         api_key="aipc-local",
+        request_timeout=timeout,
+        max_retries=retries,
+        max_tokens=int(os.environ.get("AIPC_DAILY_MAX_TOKENS", "512")),
     ).bind_tools(TOOLS)
 
 
+def _format_usage_speech(result: dict) -> str:
+    st = result.get("status") or "error"
+    if st == "not_configured":
+        return "用量工具还没配置好（需要 codexbar）。"
+    if st != "ok":
+        return f"查用量暂时失败：{result.get('detail') or st}"
+    providers = result.get("providers") or []
+    if not providers:
+        return "用量查询没有返回供应商数据。"
+    bits = []
+    for p in providers[:3]:
+        if not isinstance(p, dict):
+            continue
+        name = p.get("name") or p.get("id") or "?"
+        used = p.get("used_percent")
+        rem = p.get("remaining_percent")
+        reset = p.get("reset") or ""
+        if used is not None and rem is not None:
+            bits.append(f"{name} 已用约 {used:.0f}%，剩余约 {rem:.0f}%{('，重置 ' + str(reset)) if reset else ''}")
+        else:
+            bits.append(f"{name}: {p.get('status') or 'ok'}")
+    return "；".join(bits) if bits else "用量查询完成。"
+
+
+def try_direct_tool(text: str) -> str | None:
+    """Optional hard-coded single-tool shortcut (off by default).
+
+    Prefer the iterative tool-calling loop so the model can chain tools and
+    use agent-scoped memory. Set AIPC_DAILY_DIRECT_TOOLS=1 only for emergency
+    speed when ornith is cold.
+    """
+    # Default on: clear single-tool asks must not wait for ornith tool-loop.
+    # Set AIPC_DAILY_DIRECT_TOOLS=0 to force full iterative agent always.
+    if os.environ.get("AIPC_DAILY_DIRECT_TOOLS", "1") in ("0", "false", "no", "off"):
+        return None
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    low = raw.lower()
+
+    # usage / quota
+    if any(k in raw for k in ("用量", "额度", "額度")) or any(
+        k in low for k in ("quota", "usage", "token")
+    ):
+        ux_bridge.progress("直接查用量…", source="daily-direct")
+        try:
+            result = usage_lookup.invoke({"providers": ""})
+        except Exception as exc:  # noqa: BLE001
+            return f"查用量失败：{exc}"
+        return _format_usage_speech(result if isinstance(result, dict) else {"status": "error"})
+
+    # calendar today-ish
+    if any(k in raw for k in ("日历", "日曆", "日程", "会议", "會議", "行程")) or "calendar" in low:
+        ux_bridge.progress("直接查日曆…", source="daily-direct")
+        try:
+            result = calendar_lookup.invoke({"query": raw[:80]})
+        except Exception as exc:  # noqa: BLE001
+            return f"查日曆失败：{exc}"
+        if not isinstance(result, dict):
+            return "日曆查询无结果。"
+        if result.get("status") == "not_configured":
+            return "日曆工具还没配置好。"
+        if result.get("status") != "ok":
+            return f"日曆查询：{result.get('detail') or result.get('status')}"
+        # Best-effort speech summary
+        events = result.get("events") or result.get("items") or result.get("data") or []
+        if isinstance(events, list) and events:
+            titles = []
+            for e in events[:5]:
+                if isinstance(e, dict):
+                    titles.append(str(e.get("summary") or e.get("title") or e)[:40])
+                else:
+                    titles.append(str(e)[:40])
+            return "今天的安排：" + "；".join(titles)
+        return str(result.get("detail") or result.get("message") or "没有找到相关日程。")[:200]
+
+    # simple web search — only short explicit forms (avoid eating complex research)
+    if re.search(r"^(搜一下|搜索|搜尋|查一下)\s*.{1,40}$", raw) or re.search(
+        r"^(search|web search)\s+.{1,40}$", low
+    ):
+        q = re.sub(r"^(搜一下|搜索|搜尋|查一下|search|web search)\s*", "", raw, flags=re.I).strip()
+        if not q or any(k in q for k in ("用量", "日历", "日曆", "代码", "代碼")):
+            return None
+        ux_bridge.progress(f"直接搜尋：{q[:30]}", source="daily-direct")
+        try:
+            result = search.invoke({"query": q, "limit": 3})
+        except Exception as exc:  # noqa: BLE001
+            return f"搜索失败：{exc}"
+        if not isinstance(result, dict):
+            return "搜索无结果。"
+        if result.get("status") in ("not_configured", "error"):
+            return f"搜索：{result.get('detail') or result.get('status')}"
+        hits = result.get("results") or result.get("items") or []
+        if isinstance(hits, list) and hits:
+            lines = []
+            for h in hits[:3]:
+                if isinstance(h, dict):
+                    lines.append(str(h.get("title") or h.get("url") or h)[:60])
+                else:
+                    lines.append(str(h)[:60])
+            return "搜索结果：" + "；".join(lines)
+        return "没有搜到相关结果。"
+
+    return None
+
+
 def _memory_messages(state: DailyAssistantState) -> list[SystemMessage]:
-    remembered = memory.recall(state["text"], state["session_id"])
-    if not remembered:
+    # Isolated lane: daily tools never see coder/hermes memories
+    remembered = memory.recall(
+        state["text"], state["session_id"], agent=memory.AGENT_DAILY
+    )
+    parts = []
+    if remembered:
+        parts.append(f"Relevant daily-agent memories (not coding):\n{remembered}")
+    try:
+        from aipc_agent import agent_context
+
+        hist = agent_context.format_history(state["session_id"], memory.AGENT_DAILY)
+        if hist:
+            parts.append(f"Recent daily-agent turns:\n{hist}")
+    except Exception:
+        pass
+    if not parts:
         return []
-    return [SystemMessage(content=f"Relevant remembered facts:\n{remembered}")]
+    return [SystemMessage(content="\n\n".join(parts))]
 
 
 def _seed(state: DailyAssistantState) -> dict:
-    return {"messages": [SystemMessage(content=SYSTEM_PROMPT), *_memory_messages(state), HumanMessage(content=state["text"])]}
+    return {
+        "messages": [
+            SystemMessage(content=SYSTEM_PROMPT),
+            *_memory_messages(state),
+            HumanMessage(content=state["text"]),
+        ]
+    }
+
+
+def _job_progress(detail: str, *, thinking: str = "") -> None:
+    """Push to background job when present; always update overlay."""
+    try:
+        from aipc_agent import task_jobs
+
+        if task_jobs.current_job_id():
+            task_jobs.job_update(detail, thinking=thinking or detail)
+            return
+    except Exception:
+        pass
+    ux_bridge.progress(detail[:120], source="daily-assistant")
 
 
 def _agent(state: DailyAssistantState) -> dict:
-    reply = _chat_model().invoke(state["messages"])
+    _job_progress("日曆/工具助手思考中…", thinking="决定下一步工具")
+    try:
+        reply = _chat_model().invoke(state["messages"])
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent: daily LLM fail: {exc}", flush=True)
+        from langchain_core.messages import AIMessage
+
+        msg = AIMessage(
+            content="本地工具模型暂时连不上，请稍后再试（检查 LiteLLM / ornith-35b）。"
+        )
+        return {"messages": [msg]}
     # ornith-35b (a reasoning model) returns content as a block list
     # (e.g. {"type": "thinking", ...}); llama-server rejects that shape if
     # this message is ever re-sent as history on the next tool-loop turn
     # ("unsupported content[].type" — hardware-verified 2026-07-06).
     # Normalize before it lands in state; tool_calls are untouched.
     reply.content = text_of(reply.content)
+    names = ux_bridge.tool_names_from_message(reply)
+    if names:
+        label = ux_bridge.humanize_tools(names)
+        _job_progress(label, thinking=label)
     return {"messages": [reply]}
+
+
+def _tools_node(state: DailyAssistantState) -> dict:
+    """Run tools with visible UX so the user is not left in a silent wait."""
+    last = (state.get("messages") or [None])[-1]
+    names = ux_bridge.tool_names_from_message(last) if last is not None else []
+    label = ux_bridge.humanize_tools(names)
+    _job_progress(label, thinking=f"执行 {label}")
+    return ToolNode(TOOLS).invoke(state)
 
 
 def _finish(state: DailyAssistantState) -> dict:
     text = text_of(state["messages"][-1].content)
-    memory.remember(f"User: {state['text']}\nAssistant: {text}", state["session_id"])
-    return {"text": text, "session_id": state["session_id"]}
+    sid = state["session_id"]
+    memory.internalize(
+        state["text"], text, sid, agent=memory.AGENT_DAILY, kind="daily"
+    )
+    try:
+        from aipc_agent import agent_context
+
+        agent_context.append_turn(sid, memory.AGENT_DAILY, "user", state["text"])
+        agent_context.append_turn(sid, memory.AGENT_DAILY, "assistant", text)
+        agent_context.append_turn(sid, memory.AGENT_CHAT, "user", state["text"])
+        agent_context.append_turn(sid, memory.AGENT_CHAT, "assistant", text[:500])
+    except Exception:
+        pass
+    return {"text": text, "session_id": sid}
 
 
 def daily_assistant():
     graph = StateGraph(DailyAssistantState)
     graph.add_node("seed", _seed)
     graph.add_node("agent", _agent)
-    graph.add_node("tools", ToolNode(TOOLS))
+    graph.add_node("tools", _tools_node)
     graph.add_node("finish", _finish)
     graph.set_entry_point("seed")
     graph.add_edge("seed", "agent")

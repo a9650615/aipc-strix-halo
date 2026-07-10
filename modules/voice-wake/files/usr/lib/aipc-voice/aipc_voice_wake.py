@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -51,8 +52,77 @@ def _ux(state: str, detail: str = "", **kw) -> None:
         print(f"aipc-voice-wake: ux fail: {exc}", flush=True)
 
 
+def _playback_active(*, include_tts: bool = False) -> bool:
+    """True when speakers likely output sound (for echo / bleed gating)."""
+    if not ECHO_GATE:
+        return False
+    try:
+        from aipc_lib.voice_audio import playback_active as _pa
+
+        return bool(_pa(include_tts=include_tts))
+    except Exception:
+        pass
+    try:
+        import voice_audio  # type: ignore
+
+        return bool(voice_audio.playback_active(include_tts=include_tts))
+    except Exception:
+        return False
+
+
+def _effective_energy_thr(
+    base: float, *, playback: bool, bleed_floor: float = 0.0
+) -> float:
+    """Raise threshold while media/TTS plays so speaker bleed is not 'speech'."""
+    try:
+        from aipc_lib.voice_audio import effective_energy_thr as _eet
+
+        return float(
+            _eet(
+                base,
+                playback=playback,
+                ratio=PLAYBACK_ENERGY_RATIO,
+                extra=PLAYBACK_ENERGY_EXTRA,
+                bleed_floor=bleed_floor,
+            )
+        )
+    except Exception:
+        pass
+    try:
+        import voice_audio  # type: ignore
+
+        return float(
+            voice_audio.effective_energy_thr(
+                base,
+                playback=playback,
+                ratio=PLAYBACK_ENERGY_RATIO,
+                extra=PLAYBACK_ENERGY_EXTRA,
+                bleed_floor=bleed_floor,
+            )
+        )
+    except Exception:
+        if not playback:
+            return float(base)
+        if bleed_floor > 0:
+            return max(float(base), bleed_floor * 1.45 + 2800.0)
+        return max(
+            float(base) * PLAYBACK_ENERGY_RATIO,
+            float(base) + PLAYBACK_ENERGY_EXTRA,
+            12000.0,
+        )
+
+
 MUTE_FLAG = Path(os.environ.get("AIPC_VOICE_MUTE_FLAG", "/run/aipc/voice-mute"))
+USER_MUTE_FLAG = Path(
+    os.environ.get(
+        "AIPC_VOICE_MUTE_FLAG_USER",
+        str(Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "aipc-voice-mute"),
+    )
+)
 ONCE_CMD = os.environ.get("AIPC_VOICE_ONCE", "/usr/bin/aipc-voice-once")
+# Streaming turn worker (voice-streaming-turn). Default off until hardware-verified.
+STREAM_CMD = os.environ.get("AIPC_VOICE_STREAM_CMD", "/usr/bin/aipc-voice-stream")
+VOICE_STREAM = os.environ.get("AIPC_VOICE_STREAM", "0") not in ("0", "false", "no", "")
 SAMPLE_RATE = 16000
 FRAME_MS = 30
 # Higher default than old energy-only: phrase mode re-checks with STT.
@@ -60,10 +130,77 @@ ENERGY_THRESHOLD = float(os.environ.get("AIPC_WAKE_ENERGY", "2000"))
 COOLDOWN_S = float(os.environ.get("AIPC_WAKE_COOLDOWN", "8"))
 # Frames of continuous energy before STT (5×30ms ≈ 150ms)
 ENERGY_FRAMES = int(os.environ.get("AIPC_WAKE_ENERGY_FRAMES", "5"))
-CAPTURE_S = float(os.environ.get("AIPC_WAKE_CAPTURE_S", "3.2"))
-CMD_MAX_S = float(os.environ.get("AIPC_WAKE_CMD_MAX_S", "15"))
-CMD_END_SILENCE_MS = int(os.environ.get("AIPC_WAKE_CMD_END_SILENCE_MS", "800"))
-CMD_START_TIMEOUT_S = float(os.environ.get("AIPC_WAKE_CMD_START_TIMEOUT", "4"))
+CAPTURE_S = float(os.environ.get("AIPC_WAKE_CAPTURE_S", "2.0"))
+# Command capture: end quickly after user stops (was 800ms + often hit max).
+CMD_MAX_S = float(os.environ.get("AIPC_WAKE_CMD_MAX_S", "10"))
+# Base silence to end. 650ms was cutting mid-phrase (logs: 「那现在。」@1.9s).
+CMD_END_SILENCE_MS = int(os.environ.get("AIPC_WAKE_CMD_END_SILENCE_MS", "1100"))
+# Only for *complete-looking* progressive text; never for short/incomplete.
+CMD_END_SILENCE_FAST_MS = int(os.environ.get("AIPC_WAKE_CMD_END_SILENCE_FAST_MS", "850"))
+CMD_START_TIMEOUT_S = float(os.environ.get("AIPC_WAKE_CMD_START_TIMEOUT", "5"))
+# Don't allow end-of-speech until this much speech audio is buffered.
+CMD_MIN_SPEECH_MS = int(os.environ.get("AIPC_WAKE_CMD_MIN_SPEECH_MS", "700"))
+# Progressive STT while user is still talking (seconds between snapshots).
+PARTIAL_STT_S = float(os.environ.get("AIPC_WAKE_PARTIAL_STT_S", "0.9"))
+PARTIAL_STT_MIN_S = float(os.environ.get("AIPC_WAKE_PARTIAL_STT_MIN_S", "0.7"))
+# Progressive text must stay stable this long AND energy must drop (never end while still loud).
+CMD_TEXT_STABLE_S = float(os.environ.get("AIPC_WAKE_CMD_TEXT_STABLE_S", "2.0"))
+# Min spoken time before text_stable EOS is allowed (avoid cutting mid-sentence).
+CMD_TEXT_STABLE_MIN_SPEECH_S = float(
+    os.environ.get("AIPC_WAKE_CMD_TEXT_STABLE_MIN_SPEECH_S", "2.4")
+)
+# After a successful turn, stay open for follow-up speech without re-wake.
+# Multi-turn follow-up (all turns after a reply):
+# - always VAD-based close (sustained silence)
+# - 2nd+ also enforces min open ≈ last TTS length (+ buffer) so window isn't tiny
+FOLLOWUP_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP_S", "10"))  # fallback if no TTS dur
+FOLLOWUP_MIN_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP_MIN_S", "4"))
+FOLLOWUP_MAX_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP_MAX_S", "28"))
+FOLLOWUP_SILENCE_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP_SILENCE_S", "2.6"))
+FOLLOWUP_GRACE_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP_GRACE_S", "1.0"))
+# More frames = less ambient false open (was 4×30ms → noise opens "接话")
+FOLLOWUP_ENERGY_FRAMES = int(os.environ.get("AIPC_WAKE_FOLLOWUP_ENERGY_FRAMES", "10"))
+FOLLOWUP_POST_TTS_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP_POST_TTS_S", "0.55"))
+# After reply: immediately open command capture (resident mic) instead of
+# energy-gate wait. User: 可接话等待启动收音太长 → 常驻收音.
+FOLLOWUP_DIRECT = os.environ.get("AIPC_WAKE_FOLLOWUP_DIRECT", "1") not in (
+    "0", "false", "no", "off",
+)
+# Legacy ratio only used as soft hint; thr is ambient-based (see _begin_followup).
+FOLLOWUP_ENERGY_RATIO = float(os.environ.get("AIPC_WAKE_FOLLOWUP_ENERGY_RATIO", "1.05"))
+# Human speech often 5–10k RMS on this mic; ambient ~3–6k. Cap must stay under
+# normal conversation (9000 made 接话 deaf — hardware 2026-07-10).
+FOLLOWUP_THR_CAP = float(os.environ.get("AIPC_WAKE_FOLLOWUP_THR_CAP", "6200"))
+FOLLOWUP_THR_FLOOR = float(os.environ.get("AIPC_WAKE_FOLLOWUP_THR_FLOOR", "3800"))
+# Extra seconds after TTS so user can start speaking (2nd+ min open = tts + this).
+# Keep modest — large pad + low thr caused empty 接话 loops (turn79–85).
+FOLLOWUP_TTS_PAD_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP_TTS_PAD_S", "2.0"))
+# After this many empty/junk captures in a follow-up chain, leave multi-turn
+# and hide the overlay (user: 没听到有意义内容就消失).
+FOLLOWUP_JUNK_MAX = int(os.environ.get("AIPC_WAKE_FOLLOWUP_JUNK_MAX", "1"))
+# Audio front gate (waveform ignore; fail-soft if down)
+AUDIO_FRONT = os.environ.get("AIPC_AUDIO_FRONT", "1") not in ("0", "false", "no", "off")
+AUDIO_FRONT_URL = os.environ.get(
+    "AIPC_AUDIO_FRONT_URL", "http://127.0.0.1:9010/gate"
+)
+AUDIO_FRONT_TIMEOUT_MS = float(os.environ.get("AIPC_AUDIO_FRONT_TIMEOUT_MS", "400"))
+# Barge-in while LLM/TTS is busy: user speech stops reply and starts capture.
+BARGE_ENABLE = os.environ.get("AIPC_WAKE_BARGE", "1") not in ("0", "false", "no")
+BARGE_ENERGY_RATIO = float(os.environ.get("AIPC_WAKE_BARGE_ENERGY_RATIO", "1.85"))
+BARGE_MIN_RMS = float(os.environ.get("AIPC_WAKE_BARGE_MIN_RMS", "20000"))
+BARGE_FRAMES = int(os.environ.get("AIPC_WAKE_BARGE_FRAMES", "12"))  # ~360ms
+# Reject mic energy that looks like speaker bleed (music/TTS into the mic).
+ECHO_GATE = os.environ.get("AIPC_WAKE_ECHO_GATE", "1") not in ("0", "false", "no")
+# Mild fixed raise when media plays; prefer adaptive bleed_floor (see voice_audio).
+PLAYBACK_ENERGY_RATIO = float(os.environ.get("AIPC_WAKE_PLAYBACK_ENERGY_RATIO", "1.55"))
+PLAYBACK_ENERGY_EXTRA = float(os.environ.get("AIPC_WAKE_PLAYBACK_ENERGY_EXTRA", "3500"))
+# While TTS is playing, barge needs mic peak clearly above recent bleed peak.
+BARGE_OVER_BLEED = float(os.environ.get("AIPC_WAKE_BARGE_OVER_BLEED", "1.35"))
+# After TTS ends, ignore follow-up energy this long (speaker ring-down).
+# (FOLLOWUP_POST_TTS_S is the main knob; raise default below.)
+# Compat aliases
+FOLLOWUP1_SILENCE_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP1_SILENCE_S", str(FOLLOWUP_SILENCE_S)))
+FOLLOWUP1_GRACE_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP1_GRACE_S", str(FOLLOWUP_GRACE_S)))
 WAKE_CTRL_SOCK = Path(os.environ.get("AIPC_WAKE_SOCK", "/run/user/1000/aipc-wake.sock"))
 STT_URL = os.environ.get("AIPC_VOICE_STT_URL", "http://127.0.0.1:9001/transcribe")
 STT_LANG = os.environ.get("AIPC_WAKE_STT_LANG", "zh")
@@ -121,7 +258,7 @@ def _capture_env() -> dict:
     return env
 
 def muted() -> bool:
-    return MUTE_FLAG.exists()
+    return MUTE_FLAG.exists() or USER_MUTE_FLAG.exists()
 
 
 def load_phrases() -> list[str]:
@@ -310,51 +447,189 @@ def _write_pcm_wav(path: str, pcm: bytes, rate: int = SAMPLE_RATE) -> None:
         w.writeframes(pcm)
 
 
+class PartialSttWorker:
+    """Background STT snapshots while the user is still talking."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._text = ""
+        self._busy = False
+        self._gen = 0
+        self._pending: bytes | None = None
+
+    def reset(self) -> None:
+        with self._lock:
+            self._gen += 1
+            self._text = ""
+            self._pending = None
+            self._busy = False
+
+    def get_text(self) -> str:
+        with self._lock:
+            return self._text
+
+    def request(self, pcm: bytes) -> None:
+        if len(pcm) < int(SAMPLE_RATE * PARTIAL_STT_MIN_S) * 2:
+            return
+        with self._lock:
+            if self._busy:
+                self._pending = bytes(pcm)
+                return
+            self._busy = True
+            gen = self._gen
+            snap = bytes(pcm)
+
+        def _run() -> None:
+            nonlocal snap, gen
+            while True:
+                text = ""
+                fd, path = tempfile.mkstemp(suffix=".wav", prefix="aipc-partial-")
+                os.close(fd)
+                try:
+                    _write_pcm_wav(path, snap)
+                    text = _stt_wav(path)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"aipc-voice-wake: partial STT fail: {exc}", flush=True)
+                    text = ""
+                finally:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+                with self._lock:
+                    if gen != self._gen:
+                        self._busy = False
+                        self._pending = None
+                        return
+                    if text and text.strip():
+                        self._text = text.strip()
+                        show = self._text
+                    else:
+                        show = self._text
+                    pending = self._pending
+                    self._pending = None
+                    if pending is None:
+                        self._busy = False
+                        if show:
+                            # Overlay partial while still recording
+                            if voice_ux:
+                                try:
+                                    voice_ux.write_status("recording", "", partial=show[:120])
+                                except Exception:
+                                    pass
+                            print(f"aipc-voice-wake: partial STT: {show[:80]!r}", flush=True)
+                        return
+                    snap = pending
+                    # keep busy, process latest snapshot
+
+        threading.Thread(target=_run, name="aipc-partial-stt", daemon=True).start()
+
+
+def _kill_process_group(proc: subprocess.Popen, reason: str = "") -> None:
+    """Stop once + paplay/ffplay children (once runs in its own session)."""
+    tag = f" ({reason})" if reason else ""
+    pid = proc.pid
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=0.45)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        print(f"aipc-voice-wake: kill once timed out{tag} pid={pid}", flush=True)
+
+
 class OnceWorker:
     """Background aipc-voice-once runner (no mic). Latest job wins.
 
     Policy:
     - submit while idle → start immediately
     - submit while busy → cancel current (barge-in) and start new
+    - energy/PTT barge while busy → cancel without on_finished side effects
     Mic stays owned by the phrase-loop stream; jobs only get --wav paths.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, on_finished=None) -> None:
         self._lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
         self._gen = 0
+        self._on_finished = on_finished  # callable(ok: bool, rc: int=0) | None
 
     def busy(self) -> bool:
         with self._lock:
             return self._proc is not None and self._proc.poll() is None
 
-    def cancel(self, reason: str = "barge-in") -> None:
+    def cancel(self, reason: str = "barge-in") -> bool:
+        """Cancel running once (process group). Returns True if a job was live."""
         with self._lock:
-            if self._proc is not None and self._proc.poll() is None:
-                print(f"aipc-voice-wake: cancel voice-once ({reason})", flush=True)
-                try:
-                    self._proc.terminate()
-                except OSError:
-                    pass
+            proc = self._proc
+            live = proc is not None and proc.poll() is None
+            self._proc = None
             self._gen += 1
+        if live and proc is not None:
+            print(f"aipc-voice-wake: cancel voice-once ({reason})", flush=True)
+            _kill_process_group(proc, reason)
+        return live
 
-    def submit_wav(self, wav_path: str) -> None:
-        """Run once --wav asynchronously; barge-in cancels prior job."""
+    def submit_wav(self, wav_path: str, text: str | None = None) -> None:
+        """Run once/stream --wav asynchronously; barge-in cancels prior job.
+
+        If text is provided, worker skips STT (progressive transcript).
+        When AIPC_VOICE_STREAM=1 and aipc-voice-stream is present, prefer the
+        streaming turn worker; otherwise batch aipc-voice-once (default).
+        """
         self.cancel(reason="new-job")
         gen = self._gen
 
         def _run() -> None:
             env = _desktop_user_env()
-            cmd = env.pop("AIPC_VOICE_ONCE_RESOLVED", None) or ONCE_CMD
+            use_stream = env.get("AIPC_VOICE_STREAM", os.environ.get("AIPC_VOICE_STREAM", "0"))
+            use_stream = use_stream not in ("0", "false", "no", "")
+            stream_cmd = env.get("AIPC_VOICE_STREAM_CMD") or STREAM_CMD
+            once_cmd = env.pop("AIPC_VOICE_ONCE_RESOLVED", None) or ONCE_CMD
+            cmd = once_cmd
+            if use_stream:
+                sc = stream_cmd
+                if not Path(sc).is_file() and shutil.which(sc):
+                    sc = shutil.which(sc) or sc
+                if Path(sc).is_file() or shutil.which(sc):
+                    cmd = sc
+                else:
+                    print(
+                        "aipc-voice-wake: AIPC_VOICE_STREAM=1 but stream worker missing; batch once",
+                        flush=True,
+                    )
             if not Path(cmd).is_file() and shutil.which(cmd):
                 cmd = shutil.which(cmd) or cmd
             argv = [cmd, "--wav", wav_path]
+            if text and text.strip():
+                argv.extend(["--text", text.strip()])
             as_user = env.get("AIPC_WAKE_AS_USER")
             # Already running as desktop user in service; no runuser needed.
             if as_user and os.geteuid() == 0 and as_user != "root":
                 argv = ["runuser", "-u", as_user, "--", *argv]
-            log_path = Path(env.get("HOME", "/tmp")) / ".cache/aipc/voice-once-from-wake.log"
+            log_name = (
+                "voice-stream-from-wake.log"
+                if "stream" in Path(cmd).name
+                else "voice-once-from-wake.log"
+            )
+            log_path = Path(env.get("HOME", "/tmp")) / ".cache/aipc" / log_name
             try:
                 log_path.parent.mkdir(parents=True, exist_ok=True)
                 log_f = open(log_path, "ab", buffering=0)  # noqa: SIM115
@@ -367,20 +642,50 @@ class OnceWorker:
                 )
             except OSError as exc:
                 print(f"aipc-voice-wake: once spawn failed: {exc}", flush=True)
+                with self._lock:
+                    superseded = gen != self._gen
+                if not superseded and self._on_finished:
+                    try:
+                        self._on_finished(False)
+                    except Exception:
+                        pass
                 return
             with self._lock:
                 if gen != self._gen:
-                    proc.terminate()
+                    _kill_process_group(proc, "superseded-at-start")
                     return
                 self._proc = proc
             rc = proc.wait()
-            print(f"aipc-voice-wake: async once finished rc={rc}", flush=True)
-            if rc == 0:
-                _ux("done", force=True)
-                _ux("listening")
+            with self._lock:
+                superseded = gen != self._gen
+                if self._proc is proc:
+                    self._proc = None
+            if superseded:
+                print(
+                    f"aipc-voice-wake: async once cancelled rc={rc} (no follow-up)",
+                    flush=True,
+                )
             else:
-                _ux("error", f"voice-once rc={rc}", force=True)
-                _ux("listening")
+                print(f"aipc-voice-wake: async once finished rc={rc}", flush=True)
+                # rc 0 = success+maybe follow-up; rc 2 = success end session
+                ok = rc in (0, 2)
+                if self._on_finished is not None:
+                    try:
+                        self._on_finished(ok, rc=rc)
+                    except TypeError:
+                        try:
+                            self._on_finished(ok)
+                        except Exception as exc:  # noqa: BLE001
+                            print(f"aipc-voice-wake: on_finished failed: {exc}", flush=True)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"aipc-voice-wake: on_finished failed: {exc}", flush=True)
+                else:
+                    if ok:
+                        _ux("done", force=True)
+                        _ux("listening")
+                    else:
+                        _ux("error", f"voice-once rc={rc}", force=True)
+                        _ux("listening")
             try:
                 os.unlink(wav_path)
             except OSError:
@@ -461,6 +766,80 @@ def _record_wav_seconds(path: str, seconds: float) -> None:
         check=True,
         capture_output=True,
     )
+
+
+def _progressive_core(text: str) -> str:
+    """Normalize transcript for stability (ignore emoji/punct flip-flops)."""
+    s = (text or "").strip()
+    return re.sub(r"[\s\W_😔😊😂😅…·。！？!?，,、；;：:\"'“”‘’]+", "", s, flags=re.UNICODE)
+
+
+_JUNK_PARTICLES = frozenset(
+    {
+        "我",
+        "嗯",
+        "啊",
+        "呃",
+        "哦",
+        "喔",
+        "呀",
+        "的",
+        "了",
+        "吗",
+        "呢",
+        "吧",
+        "哈",
+        "嘿",
+        "唔",
+        "恩",
+        "那个",
+        "就是",
+    }
+)
+
+
+def _progressive_usable(text: str) -> bool:
+    """True if progressive STT looks like a real utterance (not noise/punct).
+
+    Hardware 2026-07-10: ambient → STT '我。' / '。' was treated as content,
+    once returned rc=0, follow-up re-opened forever (turn79+ loop).
+    """
+    core = _progressive_core(text)
+    if len(core) < 2:
+        return False
+    if core in _JUNK_PARTICLES:
+        return False
+    cjk = sum(1 for c in core if "一" <= c <= "鿿")
+    if cjk >= 2:
+        return True
+    alnum = sum(1 for c in core if c.isalnum())
+    return alnum >= 3
+
+
+def _progressive_looks_complete(text: str) -> bool:
+    """Heuristic: progressive STT likely finished a thought (not mid-phrase).
+
+    Hardware 2026-07-10: end_silence_fast on usable-but-short text cut
+    mid-sentence (e.g. short fragments before the rest of the utterance).
+    """
+    core = _progressive_core(text)
+    if len(core) < 5:
+        return False
+    raw = (text or "").strip()
+    if any(raw.endswith(x) for x in ("？", "?", "！", "!", "吗", "呢", "吧", "啊")):
+        return len(core) >= 3
+    trailers = (
+        "的", "了", "是", "在", "和", "跟", "与", "把", "被", "就", "还", "會", "会",
+        "要", "想", "能", "可", "对", "對", "给", "給", "从", "從", "到", "比",
+        "那", "这", "這", "我", "你", "他", "她", "它", "们", "們",
+    )
+    for t in trailers:
+        if core.endswith(t):
+            return False
+    # Short cores are incomplete even if STT added a period
+    if len(core) < 8:
+        return False
+    return True
 
 
 def _stt_wav(path: str) -> str:
@@ -546,8 +925,10 @@ def _calibrate_noise(proc: subprocess.Popen, seconds: float = 1.5) -> float:
         return ENERGY_THRESHOLD
     vals.sort()
     noise = vals[max(0, len(vals) // 5)]
-    adaptive = max(ENERGY_THRESHOLD, noise * 1.25 + 400.0)
-    adaptive = min(adaptive, max(6000.0, noise + 3500.0), 12000.0)
+    # Sit above quiet ambient but leave room for normal speech (~1.5–3× noise).
+    adaptive = max(ENERGY_THRESHOLD, noise * 1.35 + 600.0)
+    adaptive = min(adaptive, max(5500.0, noise + 2800.0), 10000.0)
+
     print(
         f"aipc-voice-wake: calibrated noise_rms={noise:.0f} "
         f"threshold={adaptive:.0f} (min_env={ENERGY_THRESHOLD})",
@@ -596,6 +977,7 @@ def run_phrase_loop() -> int:
     Policy:
       - new wake/ptt while recording command → interrupt & restart command capture
       - new job while worker busy → barge-in cancel previous once
+      - user speech (or PTT) while once busy → barge-in: kill TTS, start command
     External PTT: write line "ptt" to $XDG_RUNTIME_DIR/aipc-wake.sock
     """
     import select
@@ -606,14 +988,252 @@ def run_phrase_loop() -> int:
     wake_frames = max(1, int(CAPTURE_S * 1000 // FRAME_MS))
     preroll_n = max(1, 700 // FRAME_MS)
     end_need = max(1, CMD_END_SILENCE_MS // FRAME_MS)
+    end_need_fast = max(1, CMD_END_SILENCE_FAST_MS // FRAME_MS)
+    min_speech_frames = max(1, CMD_MIN_SPEECH_MS // FRAME_MS)
     cmd_max_frames = max(1, int(CMD_MAX_S * 1000 // FRAME_MS))
-    worker = OnceWorker()
+    followup_until = 0.0  # hard deadline (tts mode or vad max cap)
+    followup_high = 0
+    followup_quiet = 0
+    followup_mode: str | None = None  # "vad" | "tts" | None
+    followup_started = 0.0
+    followup_speech_thr = 0.0
+    # Number of successful once turns in the current conversation chain.
+    followup_turn = 0
+    followup_quiet_need = max(1, int(FOLLOWUP_SILENCE_S * 1000 // FRAME_MS))
+    followup_min_open_s = 0.0  # set per turn in _begin_followup
+    followup_junk = 0  # consecutive empty/junk captures in this chain
+    last_submit_usable = False  # only re-open follow-up after real content
+    barge_high = 0  # loud frames while once busy (speech barge-in)
+    tts_bleed_peak = 0.0  # max mic RMS while once busy (speaker → mic)
+    playback_gate_log_t = 0.0  # rate-limit "playback gate" logs
+    bleed_floor = 0.0  # EMA of mic while not clearly speaking (music bleed)
+    miss_streak = 0  # consecutive energy-open without wake phrase
+
+    def _clear_followup(reason: str = "", *, hide: bool = True) -> None:
+        """End multi-turn; by default hide overlay (listening → disappear)."""
+        nonlocal followup_until, followup_high, followup_quiet, followup_mode
+        nonlocal followup_started, followup_turn, followup_speech_thr, followup_min_open_s
+        nonlocal followup_junk, last_submit_usable
+        was = followup_mode is not None or followup_turn > 0
+        followup_until = 0.0
+        followup_high = 0
+        followup_quiet = 0
+        followup_mode = None
+        followup_started = 0.0
+        followup_speech_thr = 0.0
+        followup_min_open_s = 0.0
+        followup_turn = 0
+        followup_junk = 0
+        last_submit_usable = False
+        if reason:
+            print(f"aipc-voice-wake: follow-up closed ({reason})", flush=True)
+        if hide and was:
+            # No "请再说" linger — go straight to idle hide.
+            _ux("listening", force=True)
+
+    def _drop_empty_capture(reason: str) -> None:
+        """No meaningful content: leave 接话 and hide UI (do not re-arm)."""
+        nonlocal followup_junk
+        followup_junk += 1
+        print(
+            f"aipc-voice-wake: empty/junk capture → dismiss ({reason}) "
+            f"junk={followup_junk}",
+            flush=True,
+        )
+        partial_stt.reset()
+        # Always dismiss on empty — user asked: 没听到有意义内容就消失
+        _clear_followup(reason, hide=True)
+
+    def _audio_front_ignore(wav_path: str) -> bool:
+        """True if front gate says ignore. Fail-soft (False) if gate down/slow."""
+        if not AUDIO_FRONT:
+            return False
+        try:
+            with open(wav_path, "rb") as f:
+                body = f.read()
+            req = urllib.request.Request(
+                AUDIO_FRONT_URL,
+                data=body,
+                method="POST",
+                headers={"Content-Type": "audio/wav"},
+            )
+            t0 = time.monotonic()
+            with urllib.request.urlopen(
+                req, timeout=max(0.05, AUDIO_FRONT_TIMEOUT_MS / 1000.0)
+            ) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            ms = (time.monotonic() - t0) * 1000
+            action = str(data.get("action") or "")
+            conf = data.get("confidence")
+            print(
+                f"aipc-voice-wake: audio-front action={action} conf={conf} "
+                f"ms={ms:.0f} rms={data.get('rms')}",
+                flush=True,
+            )
+            return action == "ignore"
+        except Exception as exc:  # noqa: BLE001
+            print(f"aipc-voice-wake: audio-front fail-soft: {exc}", flush=True)
+            return False
+
+    def _read_last_tts_sec() -> float | None:
+        try:
+            from aipc_voice_tts import read_last_tts_seconds
+
+            return read_last_tts_seconds()
+        except Exception:
+            pass
+        xdg = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        for p in (
+            Path(xdg) / "aipc-last-tts-sec",
+            Path("/tmp/aipc-last-tts-sec"),
+            Path.home() / ".cache/aipc/last-tts-sec",
+        ):
+            try:
+                v = float(p.read_text(encoding="utf-8").strip())
+                return v if v > 0 else None
+            except (OSError, ValueError):
+                continue
+        return None
+
+    def _begin_followup() -> None:
+        nonlocal followup_until, followup_high, followup_quiet, followup_mode
+        nonlocal followup_started, followup_turn, followup_speech_thr, followup_min_open_s
+        if FOLLOWUP_S < 0:
+            _ux("done", force=True)
+            _ux("listening")
+            return
+        followup_turn += 1
+        followup_high = 0
+        followup_quiet = 0
+        # Post-TTS cooldown: ignore energy briefly (speaker bleed).
+        followup_started = time.monotonic() + FOLLOWUP_POST_TTS_S
+        # Root: do NOT derive thr from wake energy_thr. Miss-streak inflates it
+        # to 12k → follow-up caps at 9k → normal speech never opens (user:
+        # 接话听不到). Mirror command VAD: thr from recent ambient (preroll).
+        noise = _percentile_rms(list(preroll), 0.25) if preroll else 0.0
+        if noise < 500.0:
+            noise = max(float(cmd_noise or 0.0), float(bleed_floor) * 0.85, 2800.0)
+        noise = max(800.0, min(noise, 5200.0))
+        thr = max(FOLLOWUP_THR_FLOOR, noise * 1.32 + 350.0)
+        if bleed_floor > 0:
+            thr = max(thr, min(bleed_floor * 1.18 + 500.0, FOLLOWUP_THR_CAP))
+        if cmd_speech_thr > 0:
+            thr = min(thr, max(cmd_speech_thr * 1.05, FOLLOWUP_THR_FLOOR))
+        followup_speech_thr = min(max(thr, FOLLOWUP_THR_FLOOR), FOLLOWUP_THR_CAP)
+        tts_sec = _read_last_tts_sec()
+        # All multi-turn follow-ups use VAD silence to close (dynamic).
+        # Min open: 1st = grace; 2nd+ = max(tts+pad, FOLLOWUP_MIN) capped modestly.
+        followup_mode = "vad"
+        if followup_turn <= 1:
+            followup_min_open_s = FOLLOWUP_GRACE_S
+            why = "turn1-vad"
+        else:
+            tts_v = float(tts_sec) if tts_sec and tts_sec > 0 else FOLLOWUP_S
+            # Cap pad so short junk TTS (「没听清」~2s) does not keep 11s windows
+            followup_min_open_s = max(
+                FOLLOWUP_MIN_S,
+                min(FOLLOWUP_MAX_S, min(tts_v, 8.0) + FOLLOWUP_TTS_PAD_S),
+            )
+            why = f"turn{followup_turn}-vad min=tts+pad ({tts_sec!r}+{FOLLOWUP_TTS_PAD_S})"
+        followup_until = followup_started + FOLLOWUP_MAX_S
+        direct = "direct" if FOLLOWUP_DIRECT else "energy-gate"
+        print(
+            f"aipc-voice-wake: follow-up open {direct} {why} "
+            f"speech>={followup_speech_thr:.0f} min_open={followup_min_open_s:.1f}s "
+            f"silence≥{FOLLOWUP_SILENCE_S:.0f}s post_tts={FOLLOWUP_POST_TTS_S:.1f}s "
+            f"cap={FOLLOWUP_MAX_S:.0f}s bleed={bleed_floor:.0f}",
+            flush=True,
+        )
+        if FOLLOWUP_DIRECT:
+            _ux(
+                "followup",
+                f"可接话 · 正在听 · 说完停一下 · 安静{FOLLOWUP_SILENCE_S:.0f}s结束",
+                force=True,
+            )
+        else:
+            _ux(
+                "followup",
+                f"可接话 · 至少{followup_min_open_s:.0f}s · 安静{FOLLOWUP_SILENCE_S:.0f}s结束",
+                force=True,
+            )
+
+    def _on_once_finished(ok: bool, rc: int = 0) -> None:
+        nonlocal followup_turn, last_submit_usable, followup_junk
+        nonlocal miss_streak, energy_thr
+        # rc=2: agent said conversation is over (再见/没事了…) — hide, no 接话
+        if ok and rc == 2:
+            last_submit_usable = False
+            print("aipc-voice-wake: session-end → dismiss", flush=True)
+            _clear_followup("session-end", hide=True)
+            _ux("listening", force=True)
+            return
+        if ok and last_submit_usable:
+            # Only continue multi-turn after a real utterance (not junk STT).
+            followup_junk = 0
+            last_submit_usable = False
+            miss_streak = 0
+            energy_thr = max(float(ENERGY_THRESHOLD), min(energy_thr * 0.85, 6500.0))
+            _begin_followup()
+        elif ok and not last_submit_usable:
+            # once "succeeded" but we never marked usable (legacy path) — close chain
+            print("aipc-voice-wake: once ok but no usable submit → no follow-up", flush=True)
+            _clear_followup("once-no-usable")
+            _ux("listening")
+        else:
+            _clear_followup("once-failed")
+            _ux("error", "voice-once failed", force=True)
+            _ux("listening")
+
+    worker = OnceWorker(on_finished=_on_once_finished)
+    partial_stt = PartialSttWorker()
+    partial_last_req = 0.0
+
+    def _percentile_rms(chunks: list[bytes], p: float) -> float:
+        vals = [_rms(c) for c in chunks if c]
+        if not vals:
+            return 0.0
+        vals.sort()
+        idx = max(0, min(len(vals) - 1, int(round((len(vals) - 1) * p))))
+        return float(vals[idx])
+
+    def _arm_command_vad(
+        seed_chunks: list[bytes] | None = None,
+        *,
+        entry_rms: float | None = None,
+    ) -> None:
+        """Per-turn VAD. Prefer quiet percentile so preroll speech doesn't inflate noise."""
+        nonlocal cmd_noise, cmd_peak, cmd_speech_thr, cmd_end_level_base
+        seeds = list(seed_chunks or [])
+        if not seeds and preroll:
+            seeds = list(preroll)
+        # Quiet floor — never above energy_thr (inflated seeds caused 18k speech thr).
+        noise = _percentile_rms(seeds, 0.20) if seeds else float(energy_thr) * 0.5
+        noise = max(600.0, min(noise, float(energy_thr) * 0.85, 7000.0))
+        cmd_noise = noise
+        # Prefer noise-relative thr; human speech often 5–8k — hard cap.
+        cmd_cap = float(os.environ.get("AIPC_WAKE_CMD_SPEECH_CAP", "7000"))
+        cmd_speech_thr = max(noise * 1.3, 2200.0)
+        cmd_speech_thr = min(cmd_speech_thr, cmd_cap)
+        # Follow-up entry already proved energy at entry_rms — thr must not be higher.
+        if entry_rms is not None and entry_rms > 0:
+            cmd_speech_thr = min(
+                cmd_speech_thr, max(entry_rms * 0.6, noise * 1.15, 2500.0)
+            )
+        cmd_end_level_base = max(noise * 1.1, 800.0)
+        cmd_peak = max(noise, entry_rms or 0.0)
+        print(
+            f"aipc-voice-wake: cmd VAD noise={cmd_noise:.0f} "
+            f"speech>={cmd_speech_thr:.0f} end_base={cmd_end_level_base:.0f} "
+            f"entry_rms={entry_rms!r} end_silence={CMD_END_SILENCE_MS}ms "
+            f"min_speech={CMD_MIN_SPEECH_MS}ms max={CMD_MAX_S}s",
+            flush=True,
+        )
 
     print(
         f"aipc-voice-wake: phrase mode phrases={phrases!r} "
         f"energy>={ENERGY_THRESHOLD} wake_cap={CAPTURE_S}s "
         f"cmd_max={CMD_MAX_S}s end_silence={CMD_END_SILENCE_MS}ms "
-        f"cooldown={COOLDOWN_S}s stt={STT_URL} (single-mic async)",
+        f"followup={FOLLOWUP_S}s cooldown={COOLDOWN_S}s stt={STT_URL} (single-mic async)",
         flush=True,
     )
     if not stt_available():
@@ -662,11 +1282,22 @@ def run_phrase_loop() -> int:
     cmd_frames = 0
     cmd_silent = 0
     cmd_speech = False
+    cmd_speech_run = 0
+    cmd_speech_frames = 0
     cmd_t0 = 0.0
+    cmd_noise = 0.0
+    cmd_peak = 0.0
+    cmd_speech_thr = 0.0
+    cmd_end_level_base = 0.0
+    cmd_prog_text = ""
+    cmd_prog_stable_since = 0.0
     ptt_requested = False
 
     def _poll_ctrl() -> None:
-        nonlocal ptt_requested, mode, cmd_buf, cmd_frames, cmd_silent, cmd_speech, cmd_t0
+        nonlocal ptt_requested, mode, cmd_buf, cmd_frames, cmd_silent, cmd_speech
+        nonlocal cmd_speech_run, cmd_speech_frames, cmd_t0
+        nonlocal followup_until, followup_turn, followup_mode, followup_high, followup_quiet
+        nonlocal partial_last_req, cmd_prog_text, cmd_prog_stable_since
         if ctrl is None:
             return
         try:
@@ -687,34 +1318,89 @@ def run_phrase_loop() -> int:
             return
         if data in ("ptt", "command", "1", "push"):
             print("aipc-voice-wake: ctrl ptt → command capture (interrupt if needed)", flush=True)
+            if worker.busy():
+                worker.cancel("ptt-barge")
             _ux("wake", "控制中心", force=True)
             _ux("recording", force=True)
             ptt_requested = True
+            # Fresh PTT starts a new conversation chain
+            followup_until = 0.0
+            followup_turn = 0
+            followup_mode = None
+            followup_high = 0
+            followup_quiet = 0
             # interrupt wake_buf or restart command
             mode = "command"
             cmd_buf = bytearray()
-            for f in preroll:
+            seed = list(preroll)
+            for f in seed:
                 cmd_buf.extend(f)
             cmd_frames = 0
             cmd_silent = 0
             cmd_speech = False
+            cmd_speech_run = 0
+            cmd_speech_frames = 0
             cmd_t0 = time.monotonic()
+            cmd_prog_text = ""
+            cmd_prog_stable_since = 0.0
+            partial_stt.reset()
+            partial_last_req = 0.0
+            _arm_command_vad(seed)
 
     def _finish_command(pcm: bytes, reason: str) -> None:
-        if len(pcm) < SAMPLE_RATE:  # <0.5s
+        nonlocal partial_last_req, last_submit_usable, followup_junk
+        nonlocal followup_mode, followup_high, followup_quiet
+        nonlocal followup_started, followup_min_open_s, followup_until
+        if len(pcm) < SAMPLE_RATE // 2:  # <0.25s
             print(f"aipc-voice-wake: command too short reason={reason}", flush=True)
+            partial_stt.reset()
             return
+        progressive = partial_stt.get_text()
+        # Reject ambient→STT junk: dismiss multi-turn, hide overlay (no re-arm).
+        if progressive and not _progressive_usable(progressive):
+            _drop_empty_capture(f"junk:{progressive[:24]!r}")
+            return
+
         fd, wav_path = tempfile.mkstemp(suffix=".wav", prefix="aipc-cmd-")
         os.close(fd)
         _write_pcm_wav(wav_path, bytes(pcm))
+        # Front gate on waveform (no STT text required). ignore → dismiss.
+        if _audio_front_ignore(wav_path):
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
+            partial_stt.reset()
+            _drop_empty_capture("audio-front-ignore")
+            return
         print(
             f"aipc-voice-wake: command captured {len(pcm)/2/SAMPLE_RATE:.2f}s "
-            f"reason={reason} → async once",
+            f"reason={reason} progressive={progressive[:40]!r} → async once",
             flush=True,
         )
         if reason == "end_silence" or reason == "max":
-            _ux("thinking", f"{len(pcm)/2/SAMPLE_RATE:.1f}s", force=True)
-        worker.submit_wav(wav_path)
+            detail = progressive[:50] if progressive else f"{len(pcm)/2/SAMPLE_RATE:.1f}s"
+            _ux("thinking", detail, force=True)
+        if progressive and _progressive_usable(progressive):
+            last_submit_usable = True
+            followup_junk = 0
+            worker.submit_wav(wav_path, text=progressive)
+        else:
+            # No usable progressive — if peak is weak, treat as silence and dismiss.
+            if cmd_peak < (cmd_speech_thr or energy_thr) * 1.2:
+                try:
+                    os.unlink(wav_path)
+                except OSError:
+                    pass
+                partial_stt.reset()
+                _drop_empty_capture(
+                    f"weak-peak peak={cmd_peak:.0f} thr={cmd_speech_thr:.0f}"
+                )
+                return
+            last_submit_usable = True
+            worker.submit_wav(wav_path)
+        partial_stt.reset()
+        partial_last_req = 0.0
 
     try:
         while True:
@@ -725,6 +1411,7 @@ def run_phrase_loop() -> int:
                 time.sleep(0.2)
                 proc.stdout.read(frame_bytes)
                 high = 0
+                _clear_followup("muted")
                 mode = "listen"
                 continue
 
@@ -740,15 +1427,88 @@ def run_phrase_loop() -> int:
                             pass
                     print(
                         f"aipc-voice-wake: arecord died rc={proc.poll()} "
-                        f"{err.decode(errors='replace')[:200]}",
+                        f"{err.decode(errors='replace')[:200]} — reconnect "
+                        f"(suspend/resume or PipeWire restart)",
                         flush=True,
                     )
-                    return 2
+                    # Survive suspend/resume: reopen mic instead of exiting.
+                    worker.cancel(reason="mic-reconnect")
+                    mode = "listen"
+                    high = 0
+                    _clear_followup("mic-reconnect")
+                    try:
+                        if proc.poll() is None:
+                            proc.terminate()
+                            proc.wait(timeout=2)
+                    except Exception:
+                        pass
+                    reopened = False
+                    for attempt in range(1, 16):
+                        try:
+                            try:
+                                from aipc_lib.voice_audio import ensure_denoise_source
+
+                                ensure_denoise_source()
+                            except Exception:
+                                try:
+                                    import voice_audio  # type: ignore
+
+                                    voice_audio.ensure_denoise_source()
+                                except Exception:
+                                    pass
+                            proc = _open_arecord_raw()
+                            assert proc.stdout is not None
+                            energy_thr = _calibrate_noise(proc, seconds=0.8)
+                            empty_reads = 0
+                            reopened = True
+                            print(
+                                f"aipc-voice-wake: mic reconnected attempt={attempt} "
+                                f"thr={energy_thr:.0f}",
+                                flush=True,
+                            )
+                            _ux("listening", force=True)
+                            break
+                        except Exception as exc:
+                            print(
+                                f"aipc-voice-wake: mic reconnect {attempt}/15 fail: {exc}",
+                                flush=True,
+                            )
+                            time.sleep(min(2.0, 0.4 * attempt))
+                    if not reopened:
+                        print("aipc-voice-wake: mic reconnect gave up", flush=True)
+                        return 2
+                    continue
                 time.sleep(0.05)
                 continue
             empty_reads = 0
             rms = _rms(data)
-            loud = rms >= energy_thr
+            # Speaker bleed: media/TTS → speakers → mic looks like speech energy.
+            # Track bleed floor so thr can sit just above music (no need to mute).
+            pb = _playback_active(include_tts=worker.busy())
+            # Never train bleed_floor on command-wait / user speech — that races thr upward
+            # (user talks → bleed rises → speech_thr outruns voice → "deaf" start timeout).
+            train_bleed = mode not in ("command", "wake_buf")
+            if train_bleed:
+                try:
+                    from aipc_lib.voice_audio import update_bleed_floor as _ubf
+
+                    bleed_floor = float(_ubf(bleed_floor, rms))
+                except Exception:
+                    try:
+                        import voice_audio as _va  # type: ignore
+
+                        bleed_floor = float(_va.update_bleed_floor(bleed_floor, rms))
+                    except Exception:
+                        if bleed_floor <= 0:
+                            bleed_floor = rms
+                        elif rms < bleed_floor:
+                            bleed_floor = 0.88 * bleed_floor + 0.12 * rms
+                        else:
+                            bleed_floor = 0.96 * bleed_floor + 0.04 * rms
+            gate_thr = _effective_energy_thr(
+                energy_thr, playback=pb, bleed_floor=bleed_floor if pb else 0.0
+            )
+            loud = rms >= gate_thr
 
             if mode != "wake_buf" and mode != "command":
                 preroll.append(data)
@@ -759,27 +1519,166 @@ def run_phrase_loop() -> int:
             if mode == "command":
                 cmd_buf.extend(data)
                 cmd_frames += 1
-                if loud:
-                    cmd_speech = True
-                    cmd_silent = 0
-                elif cmd_speech:
-                    cmd_silent += 1
-                    if cmd_silent >= end_need:
+                if rms > cmd_peak:
+                    cmd_peak = rms
+                # Media still on: mild thr bump only — hard cap so human speech (~12–22k)
+                # still opens; never let bleed EMA race speech_thr to 30k+.
+                if pb and bleed_floor > 0 and not cmd_speech:
+                    try:
+                        cmd_cap = float(os.environ.get("AIPC_WAKE_CMD_SPEECH_CAP", "18000"))
+                    except ValueError:
+                        cmd_cap = 18000.0
+                    bumped = max(
+                        cmd_speech_thr,
+                        min(bleed_floor * 1.15 + 1200.0, cmd_cap),
+                        float(energy_thr) * 1.05,
+                    )
+                    cmd_speech_thr = min(bumped, cmd_cap)
+
+                # Progressive STT: while speaking, snapshot every PARTIAL_STT_S
+                if cmd_speech and PARTIAL_STT_S > 0:
+                    now_p = time.monotonic()
+                    if (now_p - partial_last_req) >= PARTIAL_STT_S:
+                        partial_last_req = now_p
+                        partial_stt.request(bytes(cmd_buf))
+                # Track progressive text stability (normalize emoji/punct so thrashing doesn't reset)
+                prog = partial_stt.get_text()
+                if _progressive_core(prog) != _progressive_core(cmd_prog_text):
+                    cmd_prog_text = prog
+                    cmd_prog_stable_since = time.monotonic() if _progressive_usable(prog) else 0.0
+                elif not cmd_prog_text and prog:
+                    cmd_prog_text = prog
+                    cmd_prog_stable_since = time.monotonic() if _progressive_usable(prog) else 0.0
+                prog_ok = _progressive_usable(cmd_prog_text)
+                prog_done = prog_ok and _progressive_looks_complete(cmd_prog_text)
+                # Fast end ONLY when progressive looks complete. Incomplete
+                # usable text (「那现在。」) used to take 400ms fast path → cut.
+                if prog_done and cmd_peak > cmd_speech_thr:
+                    end_level = max(
+                        cmd_noise * 1.25,
+                        cmd_peak * 0.48,
+                        cmd_end_level_base * 0.95,
+                    )
+                    need_silent = end_need_fast
+                    need_speech = max(min_speech_frames, int(0.9 * 1000 // FRAME_MS))
+                else:
+                    # Mid-utterance / no text: wait longer; quieter speech still "loud"
+                    end_level = max(
+                        cmd_end_level_base,
+                        cmd_noise + 0.40 * max(0.0, cmd_peak - cmd_noise),
+                        cmd_peak * 0.45 if cmd_peak > cmd_speech_thr else cmd_end_level_base,
+                    )
+                    need_silent = end_need
+                    # Incomplete progressive: require more speech audio before EOS
+                    if prog_ok and not prog_done:
+                        need_silent = max(need_silent, int(1300 // FRAME_MS))
+                        need_speech = max(min_speech_frames, int(1.8 * 1000 // FRAME_MS))
+                    else:
+                        need_speech = min_speech_frames
+                # Music still playing: "quiet" means back near bleed floor, not absolute silence
+                if pb and bleed_floor > 0:
+                    end_level = max(end_level, bleed_floor * 1.12)
+                if not cmd_speech:
+                    if rms >= cmd_speech_thr:
+                        cmd_speech_run += 1
+                        if cmd_speech_run >= 4:  # ~120ms clear speech
+                            cmd_speech = True
+                            cmd_silent = 0
+                            cmd_speech_frames = 0
+                            partial_last_req = 0.0  # allow first partial soon
+                    else:
+                        cmd_speech_run = 0
+                else:
+                    cmd_speech_frames += 1
+                    # Noise-as-speech: peak never clearly above thr → abort
+                    if (
+                        cmd_speech_frames >= min_speech_frames
+                        and cmd_peak < cmd_speech_thr * 1.12
+                    ):
                         mode = "listen"
-                        _finish_command(bytes(cmd_buf), "end_silence")
+                        print(
+                            f"aipc-voice-wake: command abort noise "
+                            f"(peak={cmd_peak:.0f} thr={cmd_speech_thr:.0f})",
+                            flush=True,
+                        )
+                        partial_stt.reset()
+                        # No meaningful speech → end 接话 and hide
+                        if followup_turn > 0 or last_submit_usable:
+                            _clear_followup("command-noise", hide=True)
+                        else:
+                            _ux("listening", force=True)
+                        high = 0
+                        continue
+                    # Still-loud = user likely still talking (don't cut mid-utterance).
+                    # 0.82 was too high — soft mid-phrase syllables counted as silence.
+                    still_loud = rms >= max(cmd_speech_thr * 0.62, end_level * 0.95, cmd_noise * 1.25)
+                    spoken_s = cmd_speech_frames * FRAME_MS / 1000.0
+                    # Update silence counter first so text_stable sees current quiet run.
+                    if rms < end_level:
+                        cmd_silent += 1
+                    else:
+                        cmd_silent = 0
+                    # text_stable ONLY with concurrent quiet — never mid-sentence.
+                    # Use full end_need silence (not fast) so brief mid-phrase pauses
+                    # after a stable partial STT don't kill the turn.
+                    if (
+                        prog_ok
+                        and not still_loud
+                        and cmd_prog_stable_since > 0
+                        and (time.monotonic() - cmd_prog_stable_since) >= CMD_TEXT_STABLE_S
+                        and spoken_s >= CMD_TEXT_STABLE_MIN_SPEECH_S
+                        and cmd_silent >= end_need
+                    ):
+                        mode = "listen"
+                        print(
+                            f"aipc-voice-wake: EOS text-stable+quiet "
+                            f"({CMD_TEXT_STABLE_S:.2f}s silent={cmd_silent * FRAME_MS}ms) "
+                            f"{cmd_prog_text[:40]!r}",
+                            flush=True,
+                        )
+                        _finish_command(bytes(cmd_buf), "text_stable")
                         last_wake_check = time.monotonic()
                         high = 0
                         continue
+                    if (
+                        cmd_silent >= need_silent
+                        and cmd_speech_frames >= need_speech
+                        and not still_loud
+                    ):
+                        # Incomplete progressive: never end on a brief dip
+                        if prog_ok and not prog_done and spoken_s < 3.0:
+                            pass
+                        else:
+                            mode = "listen"
+                            _finish_command(bytes(cmd_buf), "end_silence")
+                            last_wake_check = time.monotonic()
+                            high = 0
+                            continue
                 if not cmd_speech and (time.monotonic() - cmd_t0) >= CMD_START_TIMEOUT_S:
                     mode = "listen"
-                    print("aipc-voice-wake: command start timeout", flush=True)
-                    _ux("no_speech", force=True)
-                    _ux("listening")
+                    print(
+                        f"aipc-voice-wake: command start timeout "
+                        f"(speech_thr={cmd_speech_thr:.0f} last_rms={rms:.0f})",
+                        flush=True,
+                    )
+                    partial_stt.reset()
+                    # Opened 接话 but never spoke → dismiss UI
+                    _clear_followup("start-timeout", hide=True)
                     high = 0
                     continue
                 if cmd_frames >= cmd_max_frames:
                     mode = "listen"
-                    _finish_command(bytes(cmd_buf), "max")
+                    # If max without a real peak, don't send garbage to STT/LLM
+                    if cmd_peak < cmd_speech_thr * 1.12:
+                        print(
+                            f"aipc-voice-wake: command max discarded as noise "
+                            f"(peak={cmd_peak:.0f})",
+                            flush=True,
+                        )
+                        partial_stt.reset()
+                        _clear_followup("max-noise", hide=True)
+                    else:
+                        _finish_command(bytes(cmd_buf), "max")
                     last_wake_check = time.monotonic()
                     high = 0
                 continue
@@ -808,7 +1707,16 @@ def run_phrase_loop() -> int:
                     hit = phrase_hit(text, phrases) if text else None
                     print(f"aipc-voice-wake: heard {text!r} hit={hit!r}", flush=True)
                     if text and not hit:
-                        # Quiet miss — no overlay spam
+                        # Quiet miss — no overlay spam; raise thr / cooldown if spammy
+                        miss_streak += 1
+                        if miss_streak >= 3:
+                            energy_thr = min(max(energy_thr * 1.08, energy_thr + 200), 12000)
+                            last_wake_check = time.monotonic() + min(4.0, COOLDOWN_S)
+                            print(
+                                f"aipc-voice-wake: miss streak={miss_streak} "
+                                f"thr→{energy_thr:.0f} cooldown+",
+                                flush=True,
+                            )
                         if voice_ux:
                             try:
                                 voice_ux.write_status("miss", text[:40])
@@ -816,6 +1724,7 @@ def run_phrase_loop() -> int:
                                 pass
                         _ux("listening")
                     elif not text:
+                        miss_streak += 1
                         if voice_ux:
                             try:
                                 voice_ux.write_status("no_speech", "")
@@ -823,22 +1732,46 @@ def run_phrase_loop() -> int:
                                 pass
                         _ux("listening")
                     if hit:
+                        miss_streak = 0
+                        # Miss-streak can push thr to 12k; after a real wake, decay
+                        # so follow-up/ambient stay in human speech range.
+                        energy_thr = max(
+                            float(ENERGY_THRESHOLD),
+                            min(energy_thr * 0.75, 6500.0),
+                        )
                         print(
                             f"aipc-voice-wake: phrase {hit!r} → command mode "
-                            f"(mic stays open, once is async)",
+                            f"(mic stays open, once is async thr={energy_thr:.0f})",
                             flush=True,
                         )
                         _ux("wake", str(hit), force=True)
                         _ux("recording", force=True)
+                        followup_until = 0.0
+                        followup_turn = 0  # new conversation chain
+                        followup_mode = None
+                        followup_high = 0
+                        followup_quiet = 0
                         mode = "command"
                         cmd_buf = bytearray()
                         # keep a little post-wake audio from end of wake clip
                         tail = bytes(wake_buf[-(frame_bytes * 10) :])
                         cmd_buf.extend(tail)
+                        tail_chunks = [
+                            wake_buf[i : i + frame_bytes]
+                            for i in range(0, len(wake_buf), frame_bytes)
+                            if len(wake_buf[i : i + frame_bytes]) == frame_bytes
+                        ][-12:]
                         cmd_frames = 0
                         cmd_silent = 0
                         cmd_speech = False
+                        cmd_speech_run = 0
+                        cmd_speech_frames = 0
                         cmd_t0 = time.monotonic()
+                        cmd_prog_text = ""
+                        cmd_prog_stable_since = 0.0
+                        partial_stt.reset()
+                        partial_last_req = 0.0
+                        _arm_command_vad(tail_chunks or list(preroll))
                         last_wake_check = time.monotonic()
                 finally:
                     try:
@@ -851,9 +1784,171 @@ def run_phrase_loop() -> int:
 
             # ---- listen: energy gate ----
             if ptt_requested:
+                # Already switched to command in _poll_ctrl. Do NOT call
+                # _clear_followup here — it wiped last_submit_usable after a
+                # just-finished PTT turn (log: closed(ptt) then no usable).
                 ptt_requested = False
-                # already switched in _poll_ctrl
                 continue
+
+            # Follow-up: open command capture without re-wake.
+            # Default DIRECT: after short post-TTS, immediately arm command
+            # (resident listen) — no energy-gate wait for speech start.
+            if followup_mode and mode == "listen":
+                now_fu = time.monotonic()
+                # Still in post-TTS cooldown: keep preroll, do not arm yet.
+                if now_fu < followup_started:
+                    followup_high = 0
+                    continue
+
+                def _arm_followup_command(reason: str, entry: float | None = None) -> None:
+                    nonlocal followup_mode, followup_until, followup_high, followup_quiet
+                    nonlocal mode, cmd_buf, cmd_frames, cmd_silent, cmd_speech
+                    nonlocal cmd_speech_run, cmd_speech_frames, cmd_t0
+                    nonlocal cmd_prog_text, cmd_prog_stable_since, partial_last_req, high
+                    print(
+                        f"aipc-voice-wake: follow-up → command ({reason})",
+                        flush=True,
+                    )
+                    followup_mode = None
+                    followup_until = 0.0
+                    followup_high = 0
+                    followup_quiet = 0
+                    high = 0
+                    mode = "command"
+                    cmd_buf = bytearray()
+                    seed = list(preroll)
+                    for f in seed:
+                        cmd_buf.extend(f)
+                    cmd_frames = 0
+                    cmd_silent = 0
+                    cmd_speech = False
+                    cmd_speech_run = 0
+                    cmd_speech_frames = 0
+                    cmd_t0 = time.monotonic()
+                    cmd_prog_text = ""
+                    cmd_prog_stable_since = 0.0
+                    partial_stt.reset()
+                    partial_last_req = 0.0
+                    _arm_command_vad(seed, entry_rms=entry)
+                    _ux("recording", "接话中…", force=True)
+
+                if FOLLOWUP_DIRECT:
+                    _arm_followup_command(
+                        f"direct post_tts={FOLLOWUP_POST_TTS_S:.2f}s",
+                        entry=rms if rms > 0 else None,
+                    )
+                    continue
+
+                # Legacy energy-gate path (AIPC_WAKE_FOLLOWUP_DIRECT=0)
+                thr = followup_speech_thr or max(
+                    FOLLOWUP_THR_FLOOR,
+                    min(float(cmd_noise or 2800.0) * 1.32 + 350.0, FOLLOWUP_THR_CAP),
+                )
+                thr = max(FOLLOWUP_THR_FLOOR, min(thr, FOLLOWUP_THR_CAP))
+                if bleed_floor > 0:
+                    thr = max(thr, min(bleed_floor * 1.15 + 400.0, FOLLOWUP_THR_CAP))
+                if _playback_active(include_tts=False) and bleed_floor > 0:
+                    thr = min(
+                        max(thr, bleed_floor * 1.2 + 600.0),
+                        FOLLOWUP_THR_CAP,
+                    )
+                fu_loud = rms >= thr
+                if fu_loud:
+                    followup_high += 1
+                    followup_quiet = 0
+                else:
+                    followup_high = 0
+                    followup_quiet += 1
+
+                if followup_high >= FOLLOWUP_ENERGY_FRAMES:
+                    _arm_followup_command(
+                        f"energy rms={rms:.0f} thr={thr:.0f}",
+                        entry=rms,
+                    )
+                    continue
+
+                # Expire: need min_open (tts-based on 2nd+) then sustained silence
+                elapsed = now_fu - followup_started if followup_started else 0.0
+                min_open = max(FOLLOWUP_GRACE_S, followup_min_open_s)
+                if elapsed >= FOLLOWUP_MAX_S:
+                    # Window expired with no meaningful turn → disappear
+                    _clear_followup("vad-max", hide=True)
+                elif elapsed >= min_open and followup_quiet >= followup_quiet_need:
+                    # Sustained quiet — no speech entered → disappear
+                    _clear_followup(
+                        f"vad-silence {FOLLOWUP_SILENCE_S:.0f}s after {elapsed:.1f}s",
+                        hide=True,
+                    )
+                continue  # don't also fire wake STT during follow-up window
+
+            # While TTS/LLM (voice-once) is running: allow barge-in, not wake STT.
+            # Track mic peak as "bleed floor" — barge only if clearly louder.
+            if worker.busy() and mode == "listen":
+                high = 0
+                tts_bleed_peak = max(tts_bleed_peak, rms)
+                if not BARGE_ENABLE:
+                    barge_high = 0
+                    continue
+                try:
+                    from aipc_lib.voice_audio import barge_energy_thr as _bet
+
+                    barge_thr = float(
+                        _bet(
+                            energy_thr,
+                            bleed_peak=tts_bleed_peak,
+                            ratio=BARGE_ENERGY_RATIO,
+                            min_rms=BARGE_MIN_RMS,
+                            over_bleed=BARGE_OVER_BLEED,
+                        )
+                    )
+                except Exception:
+                    barge_thr = max(
+                        float(energy_thr) * BARGE_ENERGY_RATIO,
+                        BARGE_MIN_RMS,
+                        float(energy_thr) + 6000.0,
+                        tts_bleed_peak * BARGE_OVER_BLEED,
+                    )
+                if rms >= barge_thr:
+                    barge_high += 1
+                else:
+                    barge_high = 0
+                if barge_high >= BARGE_FRAMES:
+                    print(
+                        f"aipc-voice-wake: BARGE-IN speech → stop TTS + command "
+                        f"(rms={rms:.0f} thr={barge_thr:.0f} bleed_peak={tts_bleed_peak:.0f} "
+                        f"frames={BARGE_FRAMES})",
+                        flush=True,
+                    )
+                    worker.cancel("speech-barge")
+                    barge_high = 0
+                    tts_bleed_peak = 0.0
+                    # Keep multi-turn chain; only clear follow-up window state.
+                    followup_mode = None
+                    followup_until = 0.0
+                    followup_high = 0
+                    followup_quiet = 0
+                    mode = "command"
+                    cmd_buf = bytearray()
+                    seed = list(preroll)
+                    for f in seed:
+                        cmd_buf.extend(f)
+                    cmd_frames = 0
+                    cmd_silent = 0
+                    cmd_speech = False
+                    cmd_speech_run = 0
+                    cmd_speech_frames = 0
+                    cmd_t0 = time.monotonic()
+                    cmd_prog_text = ""
+                    cmd_prog_stable_since = 0.0
+                    partial_stt.reset()
+                    partial_last_req = 0.0
+                    _arm_command_vad(seed, entry_rms=rms)
+                    _ux("recording", "插斷 — 請繼續說…", force=True)
+                continue
+            else:
+                # Reset bleed tracker when not in TTS
+                if not worker.busy():
+                    tts_bleed_peak = 0.0
 
             if loud:
                 high += 1
@@ -861,6 +1956,18 @@ def run_phrase_loop() -> int:
                 high = 0
             now = time.monotonic()
             if high < ENERGY_FRAMES or (now - last_wake_check) < COOLDOWN_S:
+                continue
+
+            # Final playback re-check: media just started → don't open wake STT on bleed
+            if ECHO_GATE and _playback_active(include_tts=False) and rms < gate_thr * 1.05:
+                high = 0
+                if now - playback_gate_log_t > 8.0:
+                    playback_gate_log_t = now
+                    print(
+                        f"aipc-voice-wake: playback gate (skip wake STT) "
+                        f"rms={rms:.0f} thr={gate_thr:.0f}",
+                        flush=True,
+                    )
                 continue
 
             high = 0
@@ -871,7 +1978,11 @@ def run_phrase_loop() -> int:
                 wake_buf.extend(f)
             preroll.clear()
             wake_left = wake_frames
-            print("aipc-voice-wake: energy gate open → wake buffering", flush=True)
+            print(
+                f"aipc-voice-wake: energy gate open → wake buffering "
+                f"(rms={rms:.0f} thr={gate_thr:.0f} playback={pb})",
+                flush=True,
+            )
             # ambient energy: do not flash overlay (spam); status file only
             if voice_ux:
                 try:

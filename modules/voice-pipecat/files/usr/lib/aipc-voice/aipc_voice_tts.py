@@ -288,6 +288,46 @@ def _default_sink(env: dict[str, str] | None = None) -> str:
         return ""
 
 
+def _tts_duration_path() -> Path:
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        return Path(xdg) / "aipc-last-tts-sec"
+    return Path.home() / ".cache/aipc/last-tts-sec"
+
+
+def record_last_tts_seconds(seconds: float) -> None:
+    """Publish last playback length for wake follow-up window (2nd+ turns)."""
+    sec = max(0.0, float(seconds))
+    paths = [_tts_duration_path(), Path("/tmp/aipc-last-tts-sec")]
+    for p in paths:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(f"{sec:.3f}\n", encoding="utf-8")
+        except OSError:
+            continue
+    print(f"aipc-voice-tts: last_tts_sec={sec:.3f}", file=sys.stderr, flush=True)
+
+
+def read_last_tts_seconds() -> float | None:
+    try:
+        raw = _tts_duration_path().read_text(encoding="utf-8").strip()
+        v = float(raw)
+        return v if v > 0 else None
+    except (OSError, ValueError):
+        return None
+
+
+def _wav_duration_sec(path: str) -> float | None:
+    try:
+        import wave
+
+        with wave.open(path, "rb") as w:
+            rate = w.getframerate() or 1
+            return float(w.getnframes()) / float(rate)
+    except Exception:
+        return None
+
+
 def _play_audio_bytes(audio: bytes, suffix: str = ".wav") -> bool:
     if not audio:
         return False
@@ -397,13 +437,18 @@ def _play_audio_bytes(audio: bytes, suffix: str = ".wav") -> bool:
                     print(f"aipc-voice-tts: paplay → {sk or 'default'}", file=sys.stderr, flush=True)
             if procs:
                 _normalize_tts_stream_volumes()
+            # Prefer wall-clock play time as follow-up budget; fall back to WAV duration.
+            t0 = time.monotonic()
+            wav_sec = _wav_duration_sec(play_path)
             if not procs and shutil.which("ffplay"):
                 try:
                     subprocess.run(
                         ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", play_path],
                         check=True, capture_output=True, timeout=120, env=env,
                     )
-                    print(f"aipc-voice-tts: played {len(audio)}B via ffplay", file=sys.stderr, flush=True)
+                    elapsed = time.monotonic() - t0
+                    record_last_tts_seconds(elapsed if elapsed > 0.2 else (wav_sec or elapsed))
+                    print(f"aipc-voice-tts: played {len(audio)}B via ffplay ({elapsed:.2f}s)", file=sys.stderr, flush=True)
                     return True
                 except Exception as exc:
                     print(f"aipc-voice-tts: ffplay fail: {exc}", file=sys.stderr, flush=True)
@@ -419,8 +464,15 @@ def _play_audio_bytes(audio: bytes, suffix: str = ".wav") -> bool:
                         ok_any = True
                 except subprocess.TimeoutExpired:
                     p.kill()
+            elapsed = time.monotonic() - t0
             if ok_any:
-                print(f"aipc-voice-tts: played {len(audio)}B on {len(procs)} sink(s)", file=sys.stderr, flush=True)
+                record_last_tts_seconds(elapsed if elapsed > 0.2 else (wav_sec or elapsed))
+                print(
+                    f"aipc-voice-tts: played {len(audio)}B on {len(procs)} sink(s) "
+                    f"({elapsed:.2f}s)",
+                    file=sys.stderr,
+                    flush=True,
+                )
             return ok_any
 
         try:
