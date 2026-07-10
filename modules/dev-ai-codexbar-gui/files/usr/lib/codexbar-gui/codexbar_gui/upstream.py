@@ -492,6 +492,31 @@ def _cli_provider_arg(provider: Optional[str]) -> Optional[str]:
     return "codex"
 
 
+def _usage_source_for_provider(provider_id: Optional[str]) -> Optional[str]:
+    """Read official config.json ``source`` (auto|oauth|cli|web|api)."""
+    if not provider_id:
+        return None
+    for path in (
+        Path.home() / ".config" / "codexbar" / "config.json",
+        Path.home() / ".codexbar" / "config.json",
+    ):
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        for p in data.get("providers") or []:
+            if not isinstance(p, dict):
+                continue
+            if str(p.get("id") or "").lower() != provider_id.lower():
+                continue
+            src = str(p.get("source") or "").lower().strip()
+            if src in {"oauth", "cli", "web", "api", "auto"}:
+                return src
+    return None
+
+
 def fetch_from_cli(
     provider: Optional[str] = None,
     timeout: float = CLI_TIMEOUT,
@@ -512,6 +537,10 @@ def fetch_from_cli(
     prov = _cli_provider_arg(provider)
     if prov:
         cmd.extend(["--provider", prov])
+        src = _usage_source_for_provider(prov)
+        # Official CLI: --source auto|web|cli|oauth|api
+        if src and src != "auto":
+            cmd.extend(["--source", src])
     logger.info("CLI: %s", " ".join(cmd))
     try:
         proc = subprocess.run(
