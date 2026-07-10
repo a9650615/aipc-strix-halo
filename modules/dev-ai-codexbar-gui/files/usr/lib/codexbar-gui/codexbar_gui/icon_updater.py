@@ -1,15 +1,9 @@
-"""Tray icon — dual remaining bars matching official CodexBar IconRenderer.
+"""Tray icon — dual remaining bars + % (official CodexBar meter, Linux-safe).
 
-Upstream (steipete/CodexBar ``Sources/CodexBar/IconRenderer.swift``):
-
-- 18×18 pt template, rendered at 2× → 36×36 px canvas
-- bar width 30 px, centered
-- top (session/primary): y=19,h=12 in AppKit bottom-up coords → upper capsule
-- bottom (weekly/secondary): y=5,h=8 → lower thinner capsule
-- fill = percent **remaining** left-to-right; straight fill edge inside capsule
-
-When weekly is missing/exhausted and credits exist, official thickens the
-credits lane (we mirror that when ``credits_remaining`` is provided).
+Geometry based on steipete/CodexBar ``IconRenderer.swift`` (session top + weekly
+bottom capsules, fill = remaining). Plasma/KDE clips edge-to-edge icons, so we
+use a **safe inset** and a compact dual-bar column with a **percent label**
+(menu-bar display mode "both": bars + %).
 """
 
 from __future__ import annotations
@@ -18,13 +12,12 @@ import logging
 from typing import Optional
 
 from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPen, QPixmap
 
 logger = logging.getLogger("codexbar_gui.icon_updater")
 
-# Official output is 18pt; KDE trays are often ~22–32. We scale the 36px design.
-OFFICIAL_CANVAS_PX = 36
-DEFAULT_TRAY_SIZE = 24
+# Plasma tray slots are small; keep logical size modest and pad content hard.
+DEFAULT_TRAY_SIZE = 22
 CREDITS_CAP = 1000.0
 
 
@@ -59,7 +52,7 @@ def get_color_for_remaining(remaining: float) -> str:
         return "#f38ba8"
     if r <= 50:
         return "#fab387"
-    return "#cdd6f4"  # near monochrome/template on dark panels
+    return "#cdd6f4"
 
 
 def generate_svg(
@@ -70,22 +63,19 @@ def generate_svg(
     del size
     if error:
         return (
-            '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">'
-            '<rect width="24" height="24" rx="4" fill="#2c3e50"/>'
-            '<circle cx="12" cy="12" r="5" fill="#e74c3c"/></svg>'
+            '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22">'
+            '<rect x="2" y="4" width="10" height="5" rx="2.5" fill="#45475a"/>'
+            '<rect x="2" y="11" width="10" height="3" rx="1.5" fill="#45475a"/>'
+            '<text x="17" y="14" text-anchor="middle" font-size="8" fill="#f38ba8">!</text></svg>'
         )
     used = 0.0 if percent is None else _clamp(percent)
-    rem = 100.0 - used
-    # SVG dual-bar sketch (remaining fill)
-    top_w = max(0, min(20, int(20 * rem / 100)))
-    bot_w = max(0, min(20, int(20 * rem / 100)))
+    rem = int(round(100.0 - used))
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">'
-        f'<rect x="2" y="5" width="20" height="7" rx="3.5" fill="#313244"/>'
-        f'<rect x="2" y="5" width="{top_w}" height="7" rx="3.5" fill="#cdd6f4"/>'
-        f'<rect x="2" y="14" width="20" height="5" rx="2.5" fill="#313244"/>'
-        f'<rect x="2" y="14" width="{bot_w}" height="5" rx="2.5" fill="#a6adc8"/>'
-        f"</svg>"
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22">'
+        f'<rect x="1" y="5" width="11" height="5" rx="2.5" fill="#45475a"/>'
+        f'<rect x="1" y="12" width="11" height="3" rx="1.5" fill="#45475a"/>'
+        f'<text x="17" y="14" text-anchor="middle" font-size="8" '
+        f'font-family="sans-serif" font-weight="700" fill="#cdd6f4">{rem}</text></svg>'
     )
 
 
@@ -95,17 +85,18 @@ def svg_to_qicon_data(svg_string: str) -> str:
     return "data:image/svg+xml;utf8," + urllib.parse.quote(svg_string, safe="")
 
 
-def _new_canvas(size: int) -> tuple[QPixmap, QPainter, float]:
+def _new_canvas(size: int) -> tuple[QPixmap, QPainter]:
     dpr = _device_pixel_ratio()
-    phys = max(size, int(round(size * dpr)))
+    # Paint at least 2× physical so Plasma downscale stays sharp; keep content inset.
+    phys = max(size * 2, int(round(size * max(dpr, 2.0))))
     pixmap = QPixmap(phys, phys)
     pixmap.fill(Qt.GlobalColor.transparent)
-    pixmap.setDevicePixelRatio(dpr)
+    pixmap.setDevicePixelRatio(phys / float(size))
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    if dpr != 1.0 and size > 0:
-        painter.scale(phys / size, phys / size)
-    return pixmap, painter, dpr
+    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+    painter.scale(phys / float(size), phys / float(size))
+    return pixmap, painter
 
 
 def _draw_capsule_bar(
@@ -117,42 +108,28 @@ def _draw_capsule_bar(
     h: float,
     remaining: Optional[float],
     fill: QColor,
-    track_alpha: float = 0.28,
-    stroke_alpha: float = 0.44,
+    track_alpha: float = 0.32,
     dim: float = 1.0,
 ) -> None:
-    """One capsule like IconRenderer.drawBar — fill remaining left→right."""
+    """Capsule meter; fill = remaining, left→right. Thin stroke to avoid clip bloom."""
     radius = h / 2.0
-    track = QColor(fill)
+    track = QColor("#45475a")
     track.setAlphaF(max(0.0, min(1.0, track_alpha * dim)))
-    stroke = QColor(fill)
-    stroke.setAlphaF(max(0.0, min(1.0, stroke_alpha * dim)))
-
     rect = QRectF(x, y, w, h)
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(track)
     painter.drawRoundedRect(rect, radius, radius)
 
-    # Stroke inset ~1px equivalent
-    inset = max(0.5, h * 0.08)
-    painter.setPen(QPen(stroke, max(0.8, h * 0.12)))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawRoundedRect(
-        QRectF(x + inset, y + inset, w - 2 * inset, h - 2 * inset),
-        max(0.0, radius - inset),
-        max(0.0, radius - inset),
-    )
-
     if remaining is None:
         return
     rem = _clamp(remaining) / 100.0
     fill_w = w * rem
-    if fill_w <= 0.01:
+    if fill_w <= 0.5:
         return
-    painter.setPen(Qt.PenStyle.NoPen)
     solid = QColor(fill)
     solid.setAlphaF(max(0.0, min(1.0, dim)))
     painter.setBrush(solid)
+    # Straight right edge (official): clip capsule, paint left rect
     painter.setClipRect(QRectF(x, y, fill_w, h))
     painter.drawRoundedRect(rect, radius, radius)
     painter.setClipping(False)
@@ -166,39 +143,62 @@ def paint_dual_window_pixmap(
     credits_remaining: Optional[float] = None,
     stale: bool = False,
     error: bool = False,
+    show_percent: bool = True,
 ) -> QPixmap:
-    """Official dual-bar tray icon (session top + weekly bottom).
+    """Dual bars (session/weekly) + optional remaining % — safe for KDE tray crop.
 
-    Geometry scaled from IconRenderer 36×36 px layout.
+    Layout (logical size S)::
+
+        | pad |  dual bars (compact)  |  %  | pad |
+              top = session (thicker)
+              bot = weekly (thinner)
     """
     size = max(16, int(size))
-    pixmap, painter, _ = _new_canvas(size)
-    s = size / float(OFFICIAL_CANVAS_PX)  # scale factor from official px
+    pixmap, painter = _new_canvas(size)
 
-    # Official: barWidthPx=30, barXPx centered on 36
-    bar_w = 30.0 * s
-    bar_x = (size - bar_w) / 2.0
-    # AppKit y-up → Qt y-down:
-    # topRect (y=19,h=12) → Qt y = 36-19-12 = 5
-    # bottomRect (y=5,h=8) → Qt y = 36-5-8 = 23
-    top_y, top_h = 5.0 * s, 12.0 * s
-    bot_y, bot_h = 23.0 * s, 8.0 * s
-    # Credits thicker lane (y=14,h=16 AppKit) → Qt y = 36-14-16 = 6
-    cred_y, cred_h = 6.0 * s, 16.0 * s
-    cred_bot_y, cred_bot_h = 26.0 * s, 6.0 * s
+    # Hard pad so Plasma status-notifier never clips the capsule edges.
+    pad = max(1.5, size * 0.12)
+    inner = size - 2.0 * pad
+    dim = 0.55 if stale else 1.0
+
+    # Headline remaining for % label (session first, else weekly, else worst)
+    headline: Optional[float] = None
+    if primary_remaining is not None:
+        headline = primary_remaining
+    elif secondary_remaining is not None:
+        headline = secondary_remaining
+
+    # Split horizontal: bars left, percent right
+    pct_w = 0.0
+    if show_percent and not error:
+        # Reserve room for 1–3 digits
+        pct_w = max(size * 0.36, 7.0)
+    bars_w = inner - pct_w
+    if pct_w > 0:
+        bars_w = max(size * 0.42, bars_w - 0.5)
+
+    # Vertical: two bars stacked with gap, centered in remaining height
+    # Thinner than 1:1 IconRenderer scale so they don't dominate/clip.
+    top_h = max(2.5, size * 0.18)
+    bot_h = max(1.8, size * 0.11)
+    gap = max(1.2, size * 0.07)
+    stack_h = top_h + gap + bot_h
+    top_y = pad + max(0.0, (inner - stack_h) / 2.0)
+    bot_y = top_y + top_h + gap
+    bar_x = pad
+    bar_w = bars_w
 
     base = QColor("#cdd6f4")
     if error:
         base = QColor("#f38ba8")
-    dim = 0.55 if stale else 1.0
-    track_a = 0.18 if stale else 0.28
-    stroke_a = 0.28 if stale else 0.44
 
     has_weekly = secondary_remaining is not None
     weekly_available = has_weekly and (secondary_remaining or 0) > 0
     credits_ratio: Optional[float] = None
     if credits_remaining is not None:
-        credits_ratio = min(100.0, max(0.0, float(credits_remaining) / CREDITS_CAP * 100.0))
+        credits_ratio = min(
+            100.0, max(0.0, float(credits_remaining) / CREDITS_CAP * 100.0)
+        )
 
     if error:
         _draw_capsule_bar(
@@ -209,31 +209,6 @@ def paint_dual_window_pixmap(
             h=top_h,
             remaining=None,
             fill=base,
-            track_alpha=track_a,
-            stroke_alpha=stroke_a,
-            dim=dim,
-        )
-        painter.setPen(QColor("#f38ba8"))
-        font = QFont("Sans")
-        font.setBold(True)
-        font.setPixelSize(max(9, int(size * 0.45)))
-        painter.setFont(font)
-        painter.drawText(QRectF(0, 0, size, size), int(Qt.AlignmentFlag.AlignCenter), "!")
-        painter.end()
-        return pixmap
-
-    if weekly_available:
-        # Normal: top=primary session, bottom=weekly
-        _draw_capsule_bar(
-            painter,
-            x=bar_x,
-            y=top_y,
-            w=bar_w,
-            h=top_h,
-            remaining=primary_remaining,
-            fill=base if primary_remaining is None else QColor(get_color_for_remaining(primary_remaining)),
-            track_alpha=track_a,
-            stroke_alpha=stroke_a,
             dim=dim,
         )
         _draw_capsule_bar(
@@ -242,109 +217,105 @@ def paint_dual_window_pixmap(
             y=bot_y,
             w=bar_w,
             h=bot_h,
-            remaining=secondary_remaining,
-            fill=base
-            if secondary_remaining is None
-            else QColor(get_color_for_remaining(secondary_remaining)),
-            track_alpha=track_a,
-            stroke_alpha=stroke_a,
-            dim=dim,
+            remaining=None,
+            fill=base,
+            dim=0.45 * dim,
         )
-    elif not has_weekly:
-        # Weekly missing: session top + dim empty bottom (or credits-only)
-        if primary_remaining is None and credits_ratio is not None:
-            _draw_capsule_bar(
-                painter,
-                x=bar_x,
-                y=cred_y,
-                w=bar_w,
-                h=cred_h,
-                remaining=credits_ratio,
-                fill=QColor("#89b4fa"),
-                track_alpha=track_a,
-                stroke_alpha=stroke_a,
-                dim=dim,
-            )
-            _draw_capsule_bar(
-                painter,
-                x=bar_x,
-                y=cred_bot_y,
-                w=bar_w,
-                h=cred_bot_h,
-                remaining=None,
-                fill=base,
-                track_alpha=track_a,
-                stroke_alpha=stroke_a,
-                dim=0.45 * dim,
-            )
-        else:
-            _draw_capsule_bar(
-                painter,
-                x=bar_x,
-                y=top_y,
-                w=bar_w,
-                h=top_h,
-                remaining=primary_remaining,
-                fill=base
-                if primary_remaining is None
-                else QColor(get_color_for_remaining(primary_remaining)),
-                track_alpha=track_a,
-                stroke_alpha=stroke_a,
-                dim=dim,
-            )
-            _draw_capsule_bar(
-                painter,
-                x=bar_x,
-                y=bot_y,
-                w=bar_w,
-                h=bot_h,
-                remaining=None,
-                fill=base,
-                track_alpha=track_a,
-                stroke_alpha=stroke_a,
-                dim=0.45 * dim,
-            )
-    else:
-        # Weekly exhausted (0 left): credits thick top if any, weekly 0 bottom
-        if credits_ratio is not None and credits_ratio > 0:
-            _draw_capsule_bar(
-                painter,
-                x=bar_x,
-                y=cred_y,
-                w=bar_w,
-                h=cred_h,
-                remaining=credits_ratio,
-                fill=QColor("#89b4fa"),
-                track_alpha=track_a,
-                stroke_alpha=stroke_a,
-                dim=dim,
-            )
-        else:
-            _draw_capsule_bar(
-                painter,
-                x=bar_x,
-                y=top_y,
-                w=bar_w,
-                h=top_h,
-                remaining=primary_remaining,
-                fill=base
-                if primary_remaining is None
-                else QColor(get_color_for_remaining(primary_remaining)),
-                track_alpha=track_a,
-                stroke_alpha=stroke_a,
-                dim=dim,
-            )
+        painter.setPen(QColor("#f38ba8"))
+        font = QFont("Sans")
+        font.setBold(True)
+        font.setPixelSize(max(8, int(size * 0.42)))
+        painter.setFont(font)
+        painter.drawText(
+            QRectF(pad + bars_w, pad, pct_w if pct_w else inner, inner),
+            int(Qt.AlignmentFlag.AlignCenter),
+            "!",
+        )
+        painter.end()
+        return pixmap
+
+    # Top lane
+    if weekly_available or has_weekly or primary_remaining is not None:
+        top_rem = primary_remaining
+        top_fill = (
+            base
+            if top_rem is None
+            else QColor(get_color_for_remaining(top_rem))
+        )
+        # Credits override when weekly exhausted and credits available
+        if has_weekly and not weekly_available and credits_ratio and credits_ratio > 0:
+            top_rem = credits_ratio
+            top_fill = QColor("#89b4fa")
         _draw_capsule_bar(
             painter,
             x=bar_x,
-            y=cred_bot_y,
+            y=top_y,
             w=bar_w,
-            h=cred_bot_h,
-            remaining=0.0,
-            fill=QColor(get_color_for_remaining(0.0)),
-            track_alpha=track_a,
-            stroke_alpha=stroke_a,
+            h=top_h,
+            remaining=top_rem,
+            fill=top_fill,
             dim=dim,
+        )
+    else:
+        _draw_capsule_bar(
+            painter,
+            x=bar_x,
+            y=top_y,
+            w=bar_w,
+            h=top_h,
+            remaining=None,
+            fill=base,
+            dim=0.5 * dim,
+        )
+
+    # Bottom lane
+    if weekly_available:
+        bot_fill = QColor(get_color_for_remaining(secondary_remaining or 0.0))
+        _draw_capsule_bar(
+            painter,
+            x=bar_x,
+            y=bot_y,
+            w=bar_w,
+            h=bot_h,
+            remaining=secondary_remaining,
+            fill=bot_fill,
+            dim=dim,
+        )
+    else:
+        # Dim empty weekly track (N/A) — thinner visual weight
+        _draw_capsule_bar(
+            painter,
+            x=bar_x,
+            y=bot_y,
+            w=bar_w,
+            h=bot_h,
+            remaining=0.0 if has_weekly else None,
+            fill=QColor(get_color_for_remaining(0.0)) if has_weekly else base,
+            dim=0.4 * dim,
+        )
+
+    # Percent indicator (primary/session remaining, official "both" display mode)
+    if show_percent and headline is not None:
+        label = str(int(round(_clamp(headline))))
+        color = QColor(get_color_for_remaining(headline))
+        painter.setPen(color)
+        font = QFont("Sans")
+        font.setBold(True)
+        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+        # Fit 1–3 digits in the right column
+        max_px = max(7, int(size * (0.42 if len(label) < 3 else 0.34)))
+        font.setPixelSize(max_px)
+        # Shrink until it fits
+        fm = QFontMetrics(font)
+        while font.pixelSize() > 6 and fm.horizontalAdvance(label) > pct_w - 0.5:
+            font.setPixelSize(font.pixelSize() - 1)
+            fm = QFontMetrics(font)
+        painter.setFont(font)
+        text_rect = QRectF(pad + bars_w, pad, pct_w, inner)
+        painter.drawText(
+            text_rect,
+            int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter),
+            label,
         )
 
     painter.end()
@@ -361,12 +332,12 @@ def paint_usage_pixmap(
     secondary_remaining: Optional[float] = None,
     credits_remaining: Optional[float] = None,
     stale: bool = False,
+    show_percent: bool = True,
 ) -> QPixmap:
-    """Tray icon entry point — prefers official dual bars when both windows known."""
+    """Tray entry — dual bars + % (safe insets for system tray)."""
     if remaining is None and percent is not None:
         remaining = 100.0 - _clamp(percent)
 
-    # Prefer dual-bar path (official default menu-bar meter).
     if primary_remaining is not None or secondary_remaining is not None:
         return paint_dual_window_pixmap(
             primary_remaining=primary_remaining
@@ -377,9 +348,9 @@ def paint_usage_pixmap(
             credits_remaining=credits_remaining,
             stale=stale,
             error=error,
+            show_percent=show_percent,
         )
 
-    # Single remaining → dual with empty dim weekly track (matches "weekly N/A")
     if remaining is not None or error:
         return paint_dual_window_pixmap(
             primary_remaining=remaining,
@@ -388,15 +359,16 @@ def paint_usage_pixmap(
             credits_remaining=credits_remaining,
             stale=stale,
             error=error,
+            show_percent=show_percent,
         )
 
-    # Unknown: empty dual tracks
     return paint_dual_window_pixmap(
         primary_remaining=None,
         secondary_remaining=None,
         size=size,
         stale=True,
         error=False,
+        show_percent=False,
     )
 
 
@@ -408,35 +380,11 @@ def svg_to_qicon_pixmap(svg_string: str) -> QPixmap:
 def make_simple_pixmap(
     text: str, size: int = DEFAULT_TRAY_SIZE, color: str = "#89b4fa"
 ) -> QPixmap:
-    """Fallback letter tile (loading / no data yet)."""
-    pixmap, painter, _ = _new_canvas(size)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor("#1e1e2e"))
-    painter.drawRoundedRect(1, 1, size - 2, size - 2, 6, 6)
-    # Two empty capsules so loading still looks like the meter
-    s = size / float(OFFICIAL_CANVAS_PX)
-    bar_w = 30.0 * s
-    bar_x = (size - bar_w) / 2.0
-    base = QColor(color)
-    _draw_capsule_bar(
-        painter,
-        x=bar_x,
-        y=5.0 * s,
-        w=bar_w,
-        h=12.0 * s,
-        remaining=None,
-        fill=base,
-        dim=0.7,
+    """Loading placeholder: empty dual bars, no digit."""
+    return paint_dual_window_pixmap(
+        primary_remaining=None,
+        secondary_remaining=None,
+        size=size,
+        stale=True,
+        show_percent=False,
     )
-    _draw_capsule_bar(
-        painter,
-        x=bar_x,
-        y=23.0 * s,
-        w=bar_w,
-        h=8.0 * s,
-        remaining=None,
-        fill=base,
-        dim=0.45,
-    )
-    painter.end()
-    return pixmap

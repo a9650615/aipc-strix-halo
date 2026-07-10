@@ -37,12 +37,11 @@ def test_color_and_paint() -> None:
     assert not paint_usage_pixmap(percent=32).isNull()
     # Dual-bar official geometry (session + weekly remaining)
     dual = paint_dual_window_pixmap(
-        primary_remaining=99.0, secondary_remaining=100.0, size=24
+        primary_remaining=99.0, secondary_remaining=100.0, size=22
     )
     assert not dual.isNull()
-    assert dual.width() >= 24
     rem = paint_usage_pixmap(
-        primary_remaining=68.0, secondary_remaining=40.0, size=24
+        primary_remaining=68.0, secondary_remaining=40.0, size=22, show_percent=True
     )
     assert not rem.isNull()
 
