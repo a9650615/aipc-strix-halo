@@ -73,14 +73,17 @@ class _PaceBar(QWidget):
         remaining: float,
         expected_used: Optional[float] = None,
         color: str = C["bar"],
+        *,
+        height: int = 9,
+        min_width: int = 140,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._remaining = max(0.0, min(100.0, remaining))
         self._expected_used = expected_used
         self._color = color
-        self.setFixedHeight(9)
-        self.setMinimumWidth(140)
+        self.setFixedHeight(height)
+        self.setMinimumWidth(min_width)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -88,20 +91,126 @@ class _PaceBar(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = float(self.width()), float(self.height())
-        track = QRectF(0, 1.5, w, h - 3)
+        pad_y = max(0.5, h * 0.15)
+        track = QRectF(0, pad_y, w, h - pad_y * 2)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(C["track"]))
         p.drawRoundedRect(track, h / 2, h / 2)
         fill_w = w * (self._remaining / 100.0)
         if fill_w > 0.5:
             p.setBrush(QColor(self._color))
-            p.drawRoundedRect(QRectF(0, 1.5, fill_w, h - 3), h / 2, h / 2)
+            p.drawRoundedRect(QRectF(0, pad_y, fill_w, h - pad_y * 2), h / 2, h / 2)
         if self._expected_used is not None:
             exp_rem = max(0.0, min(100.0, 100.0 - self._expected_used))
             x = w * (exp_rem / 100.0)
-            p.setPen(QPen(QColor(C["good"]), 2.0))
+            p.setPen(QPen(QColor(C["good"]), 1.5 if h < 8 else 2.0))
             p.drawLine(int(round(x)), 0, int(round(x)), int(h))
         p.end()
+
+
+class _TabChip(QFrame):
+    """Tab chip: title, optional Session-5h mini bar for at-a-glance scan."""
+
+    clicked = Signal()
+
+    def __init__(
+        self,
+        title: str,
+        *,
+        remaining: Optional[float] = None,
+        expected_used: Optional[float] = None,
+        show_bar: bool = False,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("TabChip")
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 6, 10, 6)
+        root.setSpacing(3)
+
+        self._title = QLabel(title)
+        self._title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._title.setStyleSheet(
+            "border:none; background:transparent; font-size:12px; font-weight:600;"
+        )
+        root.addWidget(self._title)
+
+        self._bar: Optional[_PaceBar] = None
+        self._pct: Optional[QLabel] = None
+        if show_bar:
+            rem = 0.0 if remaining is None else remaining
+            color = _rem_color(remaining)
+            self._bar = _PaceBar(
+                remaining=rem if remaining is not None else 0.0,
+                expected_used=expected_used,
+                color=color if remaining is not None else C["dim"],
+                height=5,
+                min_width=52,
+            )
+            self._bar.setFixedWidth(64)
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(4)
+            row.addStretch()
+            row.addWidget(self._bar)
+            self._pct = QLabel("—" if remaining is None else f"{int(round(rem))}%")
+            self._pct.setStyleSheet(
+                f"color:{color}; border:none; background:transparent; "
+                f"font-size:10px; font-weight:600;"
+            )
+            row.addWidget(self._pct)
+            row.addStretch()
+            root.addLayout(row)
+
+        self.set_active(False)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+    def set_active(self, active: bool) -> None:
+        if active:
+            self.setStyleSheet(
+                f"#TabChip {{"
+                f"  background:{C['accent']}; border:none; border-radius:8px;"
+                f"}}"
+            )
+            self._title.setStyleSheet(
+                "color:#0b0d12; border:none; background:transparent; "
+                "font-size:12px; font-weight:600;"
+            )
+            if self._pct is not None:
+                self._pct.setStyleSheet(
+                    "color:#0b0d12; border:none; background:transparent; "
+                    "font-size:10px; font-weight:700;"
+                )
+        else:
+            self.setStyleSheet(
+                f"#TabChip {{"
+                f"  background:transparent; border:none; border-radius:8px;"
+                f"}}"
+                f"#TabChip:hover {{ background:{C['card2']}; }}"
+            )
+            self._title.setStyleSheet(
+                f"color:{C['muted']}; border:none; background:transparent; "
+                f"font-size:12px; font-weight:600;"
+            )
+            if self._pct is not None and self._bar is not None:
+                rem = self._bar._remaining
+                # Unavailable bars keep dim %
+                color = (
+                    C["dim"]
+                    if self._pct.text() == "—"
+                    else _rem_color(rem)
+                )
+                self._pct.setStyleSheet(
+                    f"color:{color}; border:none; background:transparent; "
+                    f"font-size:10px; font-weight:600;"
+                )
 
 
 class _UsageMeter(QWidget):
@@ -580,7 +689,7 @@ class UsagePopover(QWidget):
         self._costs: Dict[str, CostView] = {}
         self._active: Optional[str] = None
         self._worker: Optional[_ReloadWorker] = None
-        self._tab_buttons: Dict[str, QPushButton] = {}
+        self._tab_buttons: Dict[str, _TabChip] = {}
 
         # Single continuous surface — avoids black voids between scroll/chrome
         self.setStyleSheet(
@@ -789,19 +898,28 @@ class UsagePopover(QWidget):
         self._clear(self._tabs)
         self._tab_buttons.clear()
         if len(self._views) > 1:
-            self._add_tab("overview", "Overview")
+            chip = _TabChip("Overview", show_bar=False)
+            chip.clicked.connect(lambda: self._select_tab("overview"))
+            self._tab_buttons["overview"] = chip
+            self._tabs.addWidget(chip)
         for v in self._views:
-            self._add_tab(v.provider, v.display_name)
+            rem: Optional[float] = None
+            exp: Optional[float] = None
+            if v.ok and v.primary is not None:
+                rem = v.primary.remaining_percent
+                if v.primary.pace is not None:
+                    exp = v.primary.pace.expected_used_percent
+            chip = _TabChip(
+                v.display_name,
+                remaining=rem,
+                expected_used=exp,
+                show_bar=True,
+            )
+            chip.clicked.connect(lambda p=v.provider: self._select_tab(p))
+            self._tab_buttons[v.provider] = chip
+            self._tabs.addWidget(chip)
         self._tabs.addStretch()
         self._paint_tabs()
-
-    def _add_tab(self, key: str, title: str) -> None:
-        btn = QPushButton(title)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setCheckable(True)
-        btn.clicked.connect(lambda checked=False, k=key: self._select_tab(k))
-        self._tab_buttons[key] = btn
-        self._tabs.addWidget(btn)
 
     def _select_tab(self, key: str) -> None:
         self._active = key
@@ -809,24 +927,8 @@ class UsagePopover(QWidget):
         self._rebuild_body()
 
     def _paint_tabs(self) -> None:
-        for k, btn in self._tab_buttons.items():
-            active = k == self._active
-            btn.setChecked(active)
-            if active:
-                btn.setStyleSheet(
-                    f"QPushButton {{"
-                    f"  background: {C['accent']}; color: #0b0d12; border: none;"
-                    f"  border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600;"
-                    f"}}"
-                )
-            else:
-                btn.setStyleSheet(
-                    f"QPushButton {{"
-                    f"  background: transparent; color: {C['muted']}; border: none;"
-                    f"  border-radius: 8px; padding: 6px 12px; font-size: 12px;"
-                    f"}}"
-                    f"QPushButton:hover {{ color: {C['text']}; background: {C['card2']}; }}"
-                )
+        for k, chip in self._tab_buttons.items():
+            chip.set_active(k == self._active)
 
     def _rebuild_body(self) -> None:
         self._clear(self._body_layout)
