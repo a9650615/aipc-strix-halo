@@ -1,8 +1,7 @@
-"""Wayland-safe usage popover — closer to official CodexBar menu.
+"""Wayland-safe usage popover — refined to read closer to official CodexBar.
 
-- Provider tabs (Overview / Codex / Claude / …)
-- Session/Weekly (+ extra windows) with pace tick on bar
-- Cost Today / 30d + mini history chart
+Visual language: soft dark surface, pill tabs, calm meters, menu-style footer.
+Data stays official ``codexbar`` CLI only.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPe
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -29,61 +29,78 @@ from codexbar_gui.icon_updater import paint_dual_window_pixmap
 from codexbar_gui.upstream import (
     ProviderView,
     RateWindowView,
-    enabled_providers_from_config,
     fetch_enabled_providers,
     find_codexbar_binary,
 )
 
 logger = logging.getLogger("codexbar_gui.popover")
 
+# Refined palette (dark, not muddy)
+C = {
+    "bg": "#0f1117",
+    "surface": "#171a22",
+    "card": "#1c2030",
+    "card2": "#222838",
+    "border": "#2a3144",
+    "text": "#e8ecf4",
+    "muted": "#9aa3b5",
+    "dim": "#6b7385",
+    "accent": "#7aa2f7",
+    "accent2": "#9d7cd8",
+    "good": "#9ece6a",
+    "warn": "#e0af68",
+    "bad": "#f7768e",
+    "bar": "#e0af68",
+    "track": "#2a3144",
+}
+
 
 def _rem_color(rem: Optional[float]) -> str:
     if rem is None:
-        return "#6c7086"
+        return C["dim"]
     if rem <= 20:
-        return "#f38ba8"
+        return C["bad"]
     if rem <= 50:
-        return "#fab387"
-    return "#f5a97f"  # warm orange like official Claude bars
+        return C["warn"]
+    return C["bar"]
 
 
 class _PaceBar(QWidget):
-    """Remaining bar with green expected-pace tick (official style)."""
+    """Remaining fill + green expected-pace tick."""
 
     def __init__(
         self,
         remaining: float,
         expected_used: Optional[float] = None,
-        color: str = "#f5a97f",
+        color: str = C["bar"],
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._remaining = max(0.0, min(100.0, remaining))
         self._expected_used = expected_used
         self._color = color
-        self.setFixedHeight(10)
-        self.setMinimumWidth(120)
+        self.setFixedHeight(9)
+        self.setMinimumWidth(140)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         del event
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        track = QRectF(0, 1, w, h - 2)
+        w, h = float(self.width()), float(self.height())
+        track = QRectF(0, 1.5, w, h - 3)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#313244"))
+        p.setBrush(QColor(C["track"]))
         p.drawRoundedRect(track, h / 2, h / 2)
         fill_w = w * (self._remaining / 100.0)
         if fill_w > 0.5:
             p.setBrush(QColor(self._color))
-            p.drawRoundedRect(QRectF(0, 1, fill_w, h - 2), h / 2, h / 2)
-        # Expected-used tick → position as remaining of linear schedule
+            p.drawRoundedRect(QRectF(0, 1.5, fill_w, h - 3), h / 2, h / 2)
         if self._expected_used is not None:
             exp_rem = max(0.0, min(100.0, 100.0 - self._expected_used))
             x = w * (exp_rem / 100.0)
-            p.setPen(QPen(QColor("#a6e3a1"), 2.0))
-            p.drawLine(int(x), 0, int(x), h)
+            p.setPen(QPen(QColor(C["good"]), 2.0))
+            p.drawLine(int(round(x)), 0, int(round(x)), int(h))
         p.end()
 
 
@@ -91,61 +108,62 @@ class _UsageMeter(QWidget):
     def __init__(self, win: RateWindowView, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 6, 0, 6)
-        root.setSpacing(3)
+        root.setContentsMargins(0, 8, 0, 6)
+        root.setSpacing(4)
 
         rem = win.remaining_percent
         color = _rem_color(rem)
 
-        top = QHBoxLayout()
-        name = QLabel(win.label)
-        name.setFont(QFont("Sans", 11, QFont.Weight.DemiBold))
-        name.setStyleSheet("color:#cdd6f4; border:none;")
-        top.addWidget(name)
-        top.addStretch()
-        root.addLayout(top)
+        title = QLabel(win.label)
+        title.setFont(QFont("Sans", 11, QFont.Weight.DemiBold))
+        title.setStyleSheet(f"color:{C['text']}; border:none; background:transparent;")
+        root.addWidget(title)
 
-        bar = _PaceBar(
-            remaining=rem,
-            expected_used=win.pace.expected_used_percent if win.pace else None,
-            color=color,
+        root.addWidget(
+            _PaceBar(
+                remaining=rem,
+                expected_used=win.pace.expected_used_percent if win.pace else None,
+                color=color,
+            )
         )
-        root.addWidget(bar)
 
-        # Official: left = % left + reserve; right = resets + lasts
-        mid = QHBoxLayout()
-        left_col = QVBoxLayout()
-        left_col.setSpacing(0)
-        left = QLabel(f"{int(round(rem))}% left")
-        left.setStyleSheet(f"color:{color}; border:none; font-size:12px; font-weight:600;")
-        left_col.addWidget(left)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        left = QVBoxLayout()
+        left.setSpacing(1)
+        pct = QLabel(f"{int(round(rem))}% left")
+        pct.setStyleSheet(
+            f"color:{color}; border:none; background:transparent; "
+            f"font-size:12px; font-weight:600;"
+        )
+        left.addWidget(pct)
         if win.pace is not None:
             st = win.pace.status
-            pc = (
-                "#a6e3a1"
-                if st == "reserve"
-                else "#fab387"
-                if st == "deficit"
-                else "#94e2d5"
-            )
-            # Short official-style: "52% in reserve"
             if st == "reserve":
                 short = f"{int(round(win.pace.reserve_percent))}% in reserve"
+                pc = C["good"]
             elif st == "deficit":
                 short = f"{int(round(-win.pace.reserve_percent))}% over pace"
+                pc = C["warn"]
             else:
                 short = "On pace"
+                pc = C["muted"]
             pl = QLabel(short)
-            pl.setStyleSheet(f"color:{pc}; border:none; font-size:11px; font-weight:600;")
-            left_col.addWidget(pl)
-        mid.addLayout(left_col, 1)
+            pl.setStyleSheet(
+                f"color:{pc}; border:none; background:transparent; "
+                f"font-size:11px; font-weight:600;"
+            )
+            left.addWidget(pl)
+        row.addLayout(left, 1)
 
-        right_col = QVBoxLayout()
-        right_col.setSpacing(0)
+        right = QVBoxLayout()
+        right.setSpacing(1)
         resets = QLabel(win.resets_in or "")
         resets.setAlignment(Qt.AlignmentFlag.AlignRight)
-        resets.setStyleSheet("color:#a6adc8; border:none; font-size:11px;")
-        right_col.addWidget(resets)
+        resets.setStyleSheet(
+            f"color:{C['muted']}; border:none; background:transparent; font-size:11px;"
+        )
+        right.addWidget(resets)
         if win.pace is not None:
             lasts = (
                 "Lasts until reset"
@@ -154,20 +172,20 @@ class _UsageMeter(QWidget):
             )
             ll = QLabel(lasts)
             ll.setAlignment(Qt.AlignmentFlag.AlignRight)
-            ll.setStyleSheet("color:#6c7086; border:none; font-size:11px;")
-            right_col.addWidget(ll)
-        mid.addLayout(right_col)
-        root.addLayout(mid)
+            ll.setStyleSheet(
+                f"color:{C['dim']}; border:none; background:transparent; font-size:11px;"
+            )
+            right.addWidget(ll)
+        row.addLayout(right)
+        root.addLayout(row)
 
 
 class _CostChart(QWidget):
-    """Mini daily cost bars (official cost history)."""
-
     def __init__(self, cost: CostView, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._cost = cost
-        self.setMinimumHeight(72)
-        self.setMaximumHeight(90)
+        self.setMinimumHeight(78)
+        self.setMaximumHeight(88)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -175,40 +193,52 @@ class _CostChart(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QColor("#181825"))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(C["card2"]))
+        p.drawRoundedRect(QRectF(0, 0, w, h), 10, 10)
         days = self._cost.daily[-30:] if self._cost.daily else []
         if not days:
-            p.setPen(QColor("#6c7086"))
+            p.setPen(QColor(C["dim"]))
             p.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter), "No cost history")
             p.end()
             return
         peak = max((d.total_cost for d in days), default=1.0) or 1.0
         n = len(days)
+        pad = 10.0
         gap = 2.0
-        bar_w = max(2.0, (w - 8 - gap * (n - 1)) / n)
-        x = 4.0
+        usable = w - pad * 2
+        bar_w = max(2.5, (usable - gap * (n - 1)) / max(n, 1))
+        x = pad
+        base_y = h - 18
         for d in days:
-            bh = max(1.0, (h - 12) * (d.total_cost / peak))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor("#f5a97f"))
-            p.drawRoundedRect(QRectF(x, h - 6 - bh, bar_w, bh), 1.5, 1.5)
+            bh = max(2.0, (base_y - 10) * (d.total_cost / peak))
+            p.setBrush(QColor(C["bar"]))
+            p.drawRoundedRect(QRectF(x, base_y - bh, bar_w, bh), 2, 2)
             x += bar_w + gap
-        p.setPen(QColor("#6c7086"))
+        p.setPen(QColor(C["dim"]))
         p.setFont(QFont("Sans", 8))
         p.drawText(
-            4,
-            h - 2,
+            int(pad),
+            int(h - 5),
             f"Est. total ({self._cost.history_days}d): ${self._cost.period_cost:,.2f}",
         )
         p.end()
 
 
-class _SectionTitle(QLabel):
+class _MenuButton(QPushButton):
+    """Flat list-style action row (official footer)."""
+
     def __init__(self, text: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFlat(True)
         self.setStyleSheet(
-            "color:#6c7086; border:none; font-size:10px; font-weight:700; "
-            "letter-spacing:0.06em;"
+            f"QPushButton {{"
+            f"  text-align: left; padding: 9px 12px; border: none; border-radius: 8px;"
+            f"  background: transparent; color: {C['text']}; font-size: 12.5px;"
+            f"}}"
+            f"QPushButton:hover {{ background: {C['card2']}; }}"
+            f"QPushButton:disabled {{ color: {C['dim']}; }}"
         )
 
 
@@ -222,38 +252,45 @@ class _ProviderCard(QFrame):
         super().__init__(parent)
         self.setObjectName("ProviderCard")
         self.setStyleSheet(
-            "#ProviderCard { background:#1e1e2e; border:1px solid #313244; "
-            "border-radius:12px; }"
+            f"#ProviderCard {{"
+            f"  background: {C['card']}; border: 1px solid {C['border']};"
+            f"  border-radius: 14px;"
+            f"}}"
         )
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 12, 14, 12)
-        root.setSpacing(6)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(4)
 
         head = QHBoxLayout()
+        head.setSpacing(10)
         title_col = QVBoxLayout()
         title_col.setSpacing(2)
         name = QLabel(view.display_name)
-        name.setFont(QFont("Sans", 14, QFont.Weight.Bold))
-        name.setStyleSheet("color:#cdd6f4; border:none;")
+        name.setFont(QFont("Sans", 15, QFont.Weight.Bold))
+        name.setStyleSheet(f"color:{C['text']}; border:none; background:transparent;")
         title_col.addWidget(name)
-        sub_bits = [view.updated_label or "", view.source or ""]
-        sub = QLabel(" · ".join(b for b in sub_bits if b))
-        sub.setStyleSheet("color:#6c7086; border:none; font-size:11px;")
+        sub = QLabel(view.updated_label or view.source or "")
+        sub.setStyleSheet(f"color:{C['dim']}; border:none; background:transparent; font-size:11px;")
         title_col.addWidget(sub)
         head.addLayout(title_col, 1)
 
         right = QVBoxLayout()
+        right.setSpacing(3)
+        right.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         if view.plan_label:
             badge = QLabel(view.plan_label)
             badge.setAlignment(Qt.AlignmentFlag.AlignRight)
             badge.setStyleSheet(
-                "color:#cba6f7; border:none; font-size:12px; font-weight:600;"
+                f"color:{C['accent2']}; border:none; background:transparent; "
+                f"font-size:12px; font-weight:600;"
             )
             right.addWidget(badge)
         if view.account:
             acc = QLabel(view.account)
             acc.setAlignment(Qt.AlignmentFlag.AlignRight)
-            acc.setStyleSheet("color:#a6adc8; border:none; font-size:11px;")
+            acc.setStyleSheet(
+                f"color:{C['muted']}; border:none; background:transparent; font-size:11px;"
+            )
             right.addWidget(acc)
         icon = QLabel()
         icon.setPixmap(
@@ -264,49 +301,173 @@ class _ProviderCard(QFrame):
                 secondary_remaining=(
                     view.secondary.remaining_percent if view.secondary else None
                 ),
-                size=36,
+                size=34,
                 credits_remaining=view.credits_remaining,
             )
         )
         right.addWidget(icon, 0, Qt.AlignmentFlag.AlignRight)
         head.addLayout(right)
         root.addLayout(head)
+        root.addSpacing(4)
 
-        if view.error:
-            err = QLabel(view.error)
-            err.setWordWrap(True)
-            err.setStyleSheet("color:#f38ba8; border:none; font-size:12px;")
-            root.addWidget(err)
+        if view.error and not view.ok:
+            box = QFrame()
+            box.setStyleSheet(
+                f"QFrame {{ background:{C['card2']}; border-radius:10px; "
+                f"border:1px solid {C['border']}; }}"
+            )
+            bl = QVBoxLayout(box)
+            bl.setContentsMargins(12, 10, 12, 10)
+            t = QLabel("Couldn’t load usage")
+            t.setStyleSheet(
+                f"color:{C['bad']}; border:none; background:transparent; "
+                f"font-weight:600; font-size:12px;"
+            )
+            bl.addWidget(t)
+            # Friendly short reason
+            msg = view.error
+            if "timeout" in msg.lower():
+                msg = "Timed out talking to the provider CLI. Try Refresh, or set Usage source in Settings."
+            elif "not configured" in msg.lower():
+                msg = "Not configured — open Settings and complete OAuth / API key."
+            d = QLabel(msg)
+            d.setWordWrap(True)
+            d.setStyleSheet(
+                f"color:{C['muted']}; border:none; background:transparent; font-size:11px;"
+            )
+            bl.addWidget(d)
+            root.addWidget(box)
+            # Still show cost if we have it
+            if cost is not None and not cost.error and cost.daily:
+                self._add_cost(root, cost)
             return
 
         for win in view.all_windows():
             root.addWidget(_UsageMeter(win))
 
         if view.credits_remaining is not None:
-            root.addWidget(_SectionTitle("Credits"))
+            root.addSpacing(4)
+            sec = QLabel("CREDITS")
+            sec.setStyleSheet(
+                f"color:{C['dim']}; border:none; background:transparent; "
+                f"font-size:10px; font-weight:700; letter-spacing:0.08em;"
+            )
+            root.addWidget(sec)
             c = QLabel(f"{view.credits_remaining:g} left")
-            c.setStyleSheet("color:#cdd6f4; border:none; font-size:12px;")
+            c.setStyleSheet(
+                f"color:{C['text']}; border:none; background:transparent; font-size:12px;"
+            )
             root.addWidget(c)
 
         if cost is not None and not cost.error:
-            root.addWidget(_SectionTitle("Cost"))
-            today = QLabel(cost.today_line)
-            today.setStyleSheet("color:#cdd6f4; border:none; font-size:12px;")
-            root.addWidget(today)
-            period = QLabel(cost.period_line)
-            period.setStyleSheet("color:#a6adc8; border:none; font-size:11px;")
-            root.addWidget(period)
-            if cost.daily:
-                root.addWidget(_CostChart(cost))
-        elif cost is not None and cost.error:
-            root.addWidget(_SectionTitle("Cost"))
-            e = QLabel(cost.error[:120])
-            e.setStyleSheet("color:#6c7086; border:none; font-size:11px;")
-            root.addWidget(e)
+            self._add_cost(root, cost)
+
+    def _add_cost(self, root: QVBoxLayout, cost: CostView) -> None:
+        root.addSpacing(6)
+        sec = QLabel("COST")
+        sec.setStyleSheet(
+            f"color:{C['dim']}; border:none; background:transparent; "
+            f"font-size:10px; font-weight:700; letter-spacing:0.08em;"
+        )
+        root.addWidget(sec)
+        box = QFrame()
+        box.setStyleSheet(
+            f"QFrame {{ background:{C['card2']}; border-radius:10px; border:none; }}"
+        )
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(12, 10, 12, 10)
+        bl.setSpacing(3)
+        today = QLabel(cost.today_line)
+        today.setStyleSheet(
+            f"color:{C['text']}; border:none; background:transparent; font-size:12px;"
+        )
+        bl.addWidget(today)
+        period = QLabel(cost.period_line)
+        period.setStyleSheet(
+            f"color:{C['muted']}; border:none; background:transparent; font-size:11px;"
+        )
+        bl.addWidget(period)
+        if cost.daily:
+            bl.addSpacing(4)
+            bl.addWidget(_CostChart(cost))
+        root.addWidget(box)
+
+
+class _OverviewRow(QFrame):
+    def __init__(
+        self,
+        view: ProviderView,
+        on_open,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("OverviewRow")
+        self.setStyleSheet(
+            f"#OverviewRow {{"
+            f"  background:{C['card']}; border:1px solid {C['border']};"
+            f"  border-radius:12px;"
+            f"}}"
+            f"#OverviewRow:hover {{ background:{C['card2']}; }}"
+        )
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 10, 10, 10)
+        lay.setSpacing(10)
+
+        icon = QLabel()
+        icon.setPixmap(
+            paint_dual_window_pixmap(
+                primary_remaining=(
+                    view.primary.remaining_percent if view.primary else None
+                ),
+                secondary_remaining=(
+                    view.secondary.remaining_percent if view.secondary else None
+                ),
+                size=28,
+                credits_remaining=view.credits_remaining,
+                error=not view.ok,
+            )
+        )
+        lay.addWidget(icon)
+
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        name = QLabel(view.display_name)
+        name.setStyleSheet(
+            f"color:{C['text']}; border:none; background:transparent; "
+            f"font-size:13px; font-weight:600;"
+        )
+        col.addWidget(name)
+        if view.ok and view.headline_remaining is not None:
+            rem = view.headline_remaining
+            st = QLabel(f"{int(round(rem))}% left")
+            st.setStyleSheet(
+                f"color:{_rem_color(rem)}; border:none; background:transparent; "
+                f"font-size:11px; font-weight:600;"
+            )
+        else:
+            st = QLabel("Unavailable")
+            st.setStyleSheet(
+                f"color:{C['bad']}; border:none; background:transparent; font-size:11px;"
+            )
+            st.setToolTip(view.error or "")
+        col.addWidget(st)
+        lay.addLayout(col, 1)
+
+        open_btn = QPushButton("Open")
+        open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        open_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background:{C['card2']}; color:{C['text']}; border:1px solid {C['border']};"
+            f"  border-radius:8px; padding:6px 12px; font-size:11px;"
+            f"}}"
+            f"QPushButton:hover {{ background:{C['border']}; }}"
+        )
+        open_btn.clicked.connect(on_open)
+        lay.addWidget(open_btn)
 
 
 class _ReloadWorker(QThread):
-    done = Signal(list, dict)  # views, costs_by_provider
+    done = Signal(list, dict)
 
     def __init__(self, host: str, port: int, parent=None) -> None:
         super().__init__(parent)
@@ -315,20 +476,18 @@ class _ReloadWorker(QThread):
 
     def run(self) -> None:
         try:
-            views = fetch_enabled_providers(timeout=35.0)
+            views = fetch_enabled_providers(timeout=45.0)
         except Exception:
             logger.warning("reload failed", exc_info=True)
             views = []
         costs: Dict[str, CostView] = {}
         for v in views:
-            if not v.ok:
-                continue
-            # Cost scan is local logs — Claude has data; codex often empty
+            # Cost is local and useful even when usage timed out (Claude)
             try:
                 c = fetch_cost(provider=v.provider, days=30, timeout=40.0)
             except Exception:
                 c = None
-            if c is not None:
+            if c is not None and (c.daily or c.period_cost or c.today_tokens):
                 costs[v.provider] = c
         self.done.emit(views, costs)
 
@@ -353,80 +512,119 @@ class UsagePopover(QWidget):
         self._web_url = web_url
         self._views: List[ProviderView] = []
         self._costs: Dict[str, CostView] = {}
-        self._active: Optional[str] = None  # provider id or "overview"
+        self._active: Optional[str] = None
         self._worker: Optional[_ReloadWorker] = None
         self._tab_buttons: Dict[str, QPushButton] = {}
 
         self.setStyleSheet(
-            "#CodexBarPopover { background:#11111b; border:1px solid #45475a; "
-            "border-radius:12px; }"
-            "QLabel { color:#cdd6f4; }"
-            "QPushButton { background:#313244; color:#cdd6f4; border:none; "
-            "padding:6px 10px; border-radius:8px; font-size:12px; }"
-            "QPushButton:hover { background:#45475a; }"
-            "QPushButton#tabActive { background:#89b4fa; color:#11111b; font-weight:600; }"
-            "QPushButton#tabIdle { background:#1e1e2e; color:#a6adc8; }"
+            f"#CodexBarPopover {{"
+            f"  background: {C['bg']};"
+            f"  border: 1px solid {C['border']};"
+            f"  border-radius: 16px;"
+            f"}}"
+            f"QLabel {{ color: {C['text']}; background: transparent; }}"
+            f"QScrollBar:vertical {{ width: 8px; background: transparent; }}"
+            f"QScrollBar::handle:vertical {{"
+            f"  background: {C['border']}; border-radius: 4px; min-height: 24px;"
+            f"}}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
         )
+
+        # Soft shadow when compositor allows
+        try:
+            shadow = QGraphicsDropShadowEffect(self)
+            shadow.setBlurRadius(28)
+            shadow.setOffset(0, 10)
+            shadow.setColor(QColor(0, 0, 0, 140))
+            self.setGraphicsEffect(shadow)
+        except Exception:
+            pass
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        self._tabs = QHBoxLayout()
-        self._tabs.setContentsMargins(10, 10, 10, 4)
-        self._tabs.setSpacing(6)
-        tab_host = QWidget()
-        tab_host.setLayout(self._tabs)
-        outer.addWidget(tab_host)
+        # Pill tab track
+        tab_wrap = QFrame()
+        tab_wrap.setObjectName("TabTrack")
+        tab_wrap.setStyleSheet(
+            f"#TabTrack {{"
+            f"  background: {C['surface']};"
+            f"  border-bottom: 1px solid {C['border']};"
+            f"  border-top-left-radius: 16px; border-top-right-radius: 16px;"
+            f"}}"
+        )
+        tab_outer = QVBoxLayout(tab_wrap)
+        tab_outer.setContentsMargins(12, 12, 12, 10)
+        self._tab_track = QFrame()
+        self._tab_track.setObjectName("PillTrack")
+        self._tab_track.setStyleSheet(
+            f"#PillTrack {{"
+            f"  background: {C['card']}; border: 1px solid {C['border']};"
+            f"  border-radius: 11px;"
+            f"}}"
+        )
+        self._tabs = QHBoxLayout(self._tab_track)
+        self._tabs.setContentsMargins(3, 3, 3, 3)
+        self._tabs.setSpacing(2)
+        tab_outer.addWidget(self._tab_track)
+        outer.addWidget(tab_wrap)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._scroll.setStyleSheet(
-            "QScrollArea { background:transparent; border:none; }"
-            "QScrollArea QWidget { background:transparent; }"
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea QWidget { background: transparent; }"
         )
-        self._scroll.viewport().setStyleSheet("background:transparent;")
+        self._scroll.viewport().setStyleSheet("background: transparent;")
         self._body = QWidget()
-        self._body.setStyleSheet("background:transparent;")
+        self._body.setStyleSheet("background: transparent;")
         self._body_layout = QVBoxLayout(self._body)
-        self._body_layout.setContentsMargins(12, 4, 12, 8)
+        self._body_layout.setContentsMargins(14, 12, 14, 8)
         self._body_layout.setSpacing(10)
         self._scroll.setWidget(self._body)
         self._scroll.setMinimumWidth(400)
-        self._scroll.setMaximumHeight(560)
+        self._scroll.setMaximumHeight(540)
         outer.addWidget(self._scroll, 1)
 
-        actions = QVBoxLayout()
-        actions.setContentsMargins(10, 4, 10, 10)
-        sep = QFrame()
-        sep.setFixedHeight(1)
-        sep.setStyleSheet("background:#313244; border:none;")
-        actions.addWidget(sep)
+        # Menu footer
+        foot = QFrame()
+        foot.setObjectName("Footer")
+        foot.setStyleSheet(
+            f"#Footer {{"
+            f"  background: {C['surface']};"
+            f"  border-top: 1px solid {C['border']};"
+            f"  border-bottom-left-radius: 16px; border-bottom-right-radius: 16px;"
+            f"}}"
+        )
+        actions = QVBoxLayout(foot)
+        actions.setContentsMargins(8, 6, 8, 8)
+        actions.setSpacing(1)
         self._status = QLabel("")
-        self._status.setStyleSheet("color:#6c7086; font-size:10px; border:none;")
+        self._status.setStyleSheet(
+            f"color:{C['dim']}; font-size:10px; border:none; padding: 2px 10px 6px;"
+        )
         actions.addWidget(self._status)
 
-        row = QHBoxLayout()
-        refresh = QPushButton("↻  Refresh")
-        refresh.clicked.connect(self.reload)
-        row.addWidget(refresh)
-        self._web_btn = QPushButton("Usage Dashboard")
+        self._btn_refresh = _MenuButton("  ↻    Refresh")
+        self._btn_refresh.clicked.connect(self.reload)
+        actions.addWidget(self._btn_refresh)
+        self._web_btn = _MenuButton("  ⌗    Usage Dashboard")
         self._web_btn.clicked.connect(self._open_web)
-        row.addWidget(self._web_btn)
-        actions.addLayout(row)
-        settings = QPushButton("Settings…")
-        settings.clicked.connect(self._open_settings)
-        actions.addWidget(settings)
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.hide)
-        actions.addWidget(close_btn)
-        outer.addLayout(actions)
+        actions.addWidget(self._web_btn)
+        self._btn_settings = _MenuButton("  ⚙    Settings…")
+        self._btn_settings.clicked.connect(self._open_settings)
+        actions.addWidget(self._btn_settings)
+        self._btn_close = _MenuButton("  ✕    Close")
+        self._btn_close.clicked.connect(self.hide)
+        actions.addWidget(self._btn_close)
+        outer.addWidget(foot)
 
         self._set_web_url(web_url)
-        self.setMinimumWidth(420)
-        self.resize(440, 560)
+        self.setMinimumWidth(400)
+        self.resize(420, 560)
 
     def set_web_url(self, url: Optional[str]) -> None:
         self._set_web_url(url)
@@ -470,9 +668,9 @@ class UsagePopover(QWidget):
 
     def reload(self) -> None:
         if self._worker is not None and self._worker.isRunning():
-            self._status.setText("loading…")
+            self._status.setText("Loading…")
             return
-        self._status.setText("loading providers + cost…")
+        self._status.setText("Loading providers…")
         self._worker = _ReloadWorker(self._host, self._port, parent=self)
         self._worker.done.connect(self._on_reload_done)
         self._worker.start()
@@ -484,7 +682,10 @@ class UsagePopover(QWidget):
             self._active != "overview"
             and self._active not in {v.provider for v in self._views}
         ):
-            self._active = self._views[0].provider if self._views else "overview"
+            # Prefer overview when multi, else first provider
+            self._active = (
+                "overview" if len(self._views) > 1 else (self._views[0].provider if self._views else "overview")
+            )
         self._rebuild_tabs()
         self._rebuild_body()
 
@@ -509,7 +710,8 @@ class UsagePopover(QWidget):
 
     def _add_tab(self, key: str, title: str) -> None:
         btn = QPushButton(title)
-        btn.setObjectName("tabIdle")
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setCheckable(True)
         btn.clicked.connect(lambda checked=False, k=key: self._select_tab(k))
         self._tab_buttons[key] = btn
         self._tabs.addWidget(btn)
@@ -521,51 +723,60 @@ class UsagePopover(QWidget):
 
     def _paint_tabs(self) -> None:
         for k, btn in self._tab_buttons.items():
-            btn.setObjectName("tabActive" if k == self._active else "tabIdle")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+            active = k == self._active
+            btn.setChecked(active)
+            if active:
+                btn.setStyleSheet(
+                    f"QPushButton {{"
+                    f"  background: {C['accent']}; color: #0b0d12; border: none;"
+                    f"  border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600;"
+                    f"}}"
+                )
+            else:
+                btn.setStyleSheet(
+                    f"QPushButton {{"
+                    f"  background: transparent; color: {C['muted']}; border: none;"
+                    f"  border-radius: 8px; padding: 6px 12px; font-size: 12px;"
+                    f"}}"
+                    f"QPushButton:hover {{ color: {C['text']}; background: {C['card2']}; }}"
+                )
 
     def _rebuild_body(self) -> None:
         self._clear(self._body_layout)
         binary = find_codexbar_binary()
         if not self._views:
-            msg = QLabel(
-                "No usage data.\n"
-                + (f"CLI: {binary}" if binary else "Install official codexbar CLI.")
+            empty = QFrame()
+            empty.setStyleSheet(
+                f"QFrame {{ background:{C['card']}; border-radius:12px; "
+                f"border:1px solid {C['border']}; }}"
             )
-            msg.setWordWrap(True)
-            msg.setStyleSheet("color:#f38ba8;")
-            self._body_layout.addWidget(msg)
-            self._status.setText("empty")
+            el = QVBoxLayout(empty)
+            el.setContentsMargins(16, 20, 16, 20)
+            t = QLabel("No usage data")
+            t.setStyleSheet(
+                f"color:{C['text']}; font-weight:600; border:none; background:transparent;"
+            )
+            el.addWidget(t)
+            d = QLabel(
+                f"CLI: {binary}" if binary else "Install official codexbar CLI."
+            )
+            d.setWordWrap(True)
+            d.setStyleSheet(
+                f"color:{C['muted']}; border:none; background:transparent; font-size:11px;"
+            )
+            el.addWidget(d)
+            self._body_layout.addWidget(empty)
+            self._status.setText("Empty")
             return
 
         if self._active == "overview":
             for v in self._views:
-                # Compact overview rows
-                row = QFrame()
-                row.setStyleSheet(
-                    "QFrame { background:#1e1e2e; border:1px solid #313244; "
-                    "border-radius:10px; }"
+                self._body_layout.addWidget(
+                    _OverviewRow(
+                        v,
+                        on_open=lambda p=v.provider: self._select_tab(p),
+                    )
                 )
-                hl = QHBoxLayout(row)
-                hl.setContentsMargins(10, 8, 10, 8)
-                title = QLabel(f"<b>{v.display_name}</b>")
-                hl.addWidget(title)
-                if v.ok and v.headline_remaining is not None:
-                    rem = QLabel(f"{int(round(v.headline_remaining))}% left")
-                    rem.setStyleSheet(f"color:{_rem_color(v.headline_remaining)};")
-                    hl.addWidget(rem)
-                elif v.error:
-                    err = QLabel(v.error[:40])
-                    err.setStyleSheet("color:#f38ba8; font-size:11px;")
-                    hl.addWidget(err)
-                hl.addStretch()
-                open_btn = QPushButton("Open")
-                open_btn.clicked.connect(
-                    lambda checked=False, p=v.provider: self._select_tab(p)
-                )
-                hl.addWidget(open_btn)
-                self._body_layout.addWidget(row)
         else:
             view = next(
                 (v for v in self._views if v.provider == self._active),
@@ -575,13 +786,14 @@ class UsagePopover(QWidget):
             self._body_layout.addWidget(_ProviderCard(view, cost=cost))
 
         self._body_layout.addStretch()
+        ok_n = sum(1 for v in self._views if v.ok)
         self._status.setText(
-            f"{len(self._views)} provider(s) · CLI"
-            + (f" · {self._web_url}" if self._web_url else "")
+            f"{ok_n}/{len(self._views)} providers · official CLI"
+            + (f" · web {self._web_url.replace('http://', '')}" if self._web_url else "")
         )
         self._body.adjustSize()
-        hint_h = min(620, max(360, self._body.sizeHint().height() + 180))
-        self.resize(max(self.width(), 440), hint_h)
+        hint_h = min(640, max(360, self._body.sizeHint().height() + 170))
+        self.resize(max(self.width(), 420), hint_h)
 
     def _open_settings(self) -> None:
         from codexbar_gui.config_dialog import ConfigDialog
