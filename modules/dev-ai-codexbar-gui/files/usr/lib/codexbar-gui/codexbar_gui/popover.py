@@ -1021,23 +1021,22 @@ class UsagePopover(QWidget):
         tray: Optional[QSystemTrayIcon] = None,
         click_pos: Optional[QPoint] = None,
     ) -> None:
-        """Open once under tray; later reloads only grow height (no re-dock / no drift)."""
-        raw = QPoint(click_pos) if click_pos is not None else QCursor.pos()
-        # StatusNotifier clicks often report (0,0) — ignore those
-        pos = None if (raw.x() <= 0 and raw.y() <= 0) else raw
+        """Open docked under the system-tray corner — stable every click.
+
+        Do **not** use QCursor: StatusNotifier activate reports junk coordinates
+        that change between clicks (horizontal "drift"). Only ``tray.geometry()``
+        when valid, else a fixed panel corner (top-right / bottom-right).
+        """
+        del click_pos  # intentionally ignored — unstable on KDE SNI
 
         if len(self._views) > 1:
             self._active = "overview"
 
         w = 420
-        # Use a modest height only to decide below/above once — not final size
         probe_h = 360
-
-        anchor = self._tray_anchor_rect(tray, pos)
-        self._last_anchor = QRect(anchor)
-        x, y = self._compute_pos(anchor, w, probe_h)
-        # Lock top-left for the lifetime of this open session
+        x, y = self._stable_dock_pos(tray, w, probe_h)
         self._pin_top_left = QPoint(x, y)
+        self._last_anchor = QRect(x + w - 28, y - 2, 24, 1)
 
         self.setGeometry(x, y, w, probe_h)
         self.show()
@@ -1049,113 +1048,69 @@ class UsagePopover(QWidget):
         screen = QGuiApplication.primaryScreen()
         if screen is not None:
             logger.info(
-                "popover show pin=%s anchor=%s click=%s full=%s avail=%s",
+                "popover show pin=%s full=%s avail=%s tray_geo=%s",
                 self._pin_top_left,
-                anchor,
-                pos,
                 screen.geometry(),
                 screen.availableGeometry(),
+                tray.geometry() if tray is not None else None,
             )
         self.reload()
 
     @staticmethod
-    def _tray_anchor_rect(
+    def _stable_dock_pos(
         tray: Optional[QSystemTrayIcon],
-        click: Optional[QPoint],
-    ) -> QRect:
-        """Resolve a rect to hang the popover under.
+        w: int,
+        h: int,
+    ) -> tuple[int, int]:
+        """Deterministic top-left for every open — same inputs → same (x, y)."""
+        margin = 8
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return 80, 48
+        full = screen.geometry()
+        avail = screen.availableGeometry()
 
-        On KDE + StatusNotifier, ``tray.geometry()`` is usually empty and
-        ``QCursor.pos()`` at activate is often a *stale* pointer (y not on the
-        panel). Trust click **x** for horizontal, but pin **y** to the panel
-        edge so the window sits under the icon strip — not mid-screen.
-        """
+        # Prefer real tray icon rect when the platform provides it
         if tray is not None:
             try:
                 g = tray.geometry()
                 if (
                     g.isValid()
-                    and g.width() > 2
-                    and g.height() > 2
-                    and g.width() < 400
+                    and 2 < g.width() < 400
+                    and 2 < g.height() < 200
                     and (g.x() > 0 or g.y() > 0)
                 ):
-                    return QRect(g)
+                    # Right-align popover under icon; y just below icon
+                    x = g.right() - w
+                    x = max(avail.left() + margin, min(x, avail.right() - w - margin))
+                    y = g.bottom() + 4
+                    # If icon is on bottom half, open upward
+                    if g.center().y() > full.center().y():
+                        y = g.top() - h - 4
+                    y = max(avail.top() + 2, min(y, avail.bottom() - 120))
+                    return int(x), int(y)
             except Exception:
                 pass
 
-        screen = QGuiApplication.primaryScreen()
-        if screen is None:
-            if click is not None:
-                return QRect(click.x() - 12, click.y() - 12, 24, 24)
-            return QRect(100, 40, 24, 24)
-
-        full = screen.geometry()
-        avail = screen.availableGeometry()
-        # Horizontal: prefer click x (user said left/right is about right)
-        if click is not None and click.x() > 0:
-            cx = click.x()
-        else:
-            cx = avail.right() - 20
-
-        # Vertical: always the panel strip — never stale cursor y (often ~200px mid-screen)
+        # Fixed panel corner (system tray cluster) — never depends on cursor
         panel_top = avail.top() - full.top()
         panel_bot = full.bottom() - avail.bottom()
-        if panel_top >= 8:
-            # Top panel reserves space; hang at first pixel of free area
-            return QRect(cx - 12, avail.top(), 24, 1)
-        if panel_bot >= 8:
-            return QRect(cx - 12, avail.bottom() - 1, 24, 1)
-
-        # No strut (common on Wayland/XWayland): assume Plasma top panel ~40px
-        # and only treat click.y as panel if it is actually near the edge.
-        assumed = 40
-        if click is not None and click.y() > full.bottom() - 80:
-            return QRect(cx - 12, full.bottom() - assumed, 24, 1)
-        return QRect(cx - 12, full.top() + assumed, 24, 1)
-
-    def _compute_pos(self, anchor: QRect, w: int, h: int) -> tuple[int, int]:
-        """One-shot: y flush under top panel (or above bottom); x near tray."""
-        screen = (
-            QGuiApplication.screenAt(QPoint(anchor.center().x(), anchor.center().y()))
-            or QGuiApplication.primaryScreen()
-        )
-        if screen is None:
-            return max(0, anchor.center().x() - w // 2), max(0, anchor.bottom() + 4)
-        avail = screen.availableGeometry()
-        full = screen.geometry()
-        gap = 2
-
-        # Horizontal near tray/icon
-        x = anchor.center().x() - w // 2
-        if anchor.center().x() > avail.left() + avail.width() * 0.55:
-            x = min(anchor.right() + 4, avail.right() - 6) - w
-        x = max(avail.left() + 6, min(x, avail.right() - w - 6))
-
-        panel_top = avail.top() - full.top()
-        panel_bot = full.bottom() - avail.bottom()
+        x = avail.right() - w - margin
 
         if panel_top >= 8:
-            # Flush under top panel
-            y = avail.top() + gap
-            return int(x), int(y)
-        if panel_bot >= 8:
-            y = avail.bottom() - h - gap
-            return int(x), int(max(avail.top() + gap, y))
-
-        # No strut: anchor.top() is already "under assumed panel"
-        y = anchor.top() + gap
-        # Bottom-tray case: anchor near bottom
-        if anchor.top() > full.center().y():
-            y = anchor.top() - h - gap
-            y = max(full.top() + gap, y)
+            y = avail.top() + 2
+        elif panel_bot >= 8:
+            y = avail.bottom() - h - 2
         else:
-            y = min(y, full.bottom() - h - gap)
-            y = max(full.top() + 36, y)  # never cover assumed panel
+            # No strut (XWayland/Plasma often): assume top panel ~40px, tray right
+            y = full.top() + 40 + 2
+
+        x = max(avail.left() + margin, min(x, full.right() - w - margin))
+        y = max(full.top() + 2, min(y, full.bottom() - 120))
         return int(x), int(y)
 
     def _apply_pinned_geometry(self, width: int, height: int) -> None:
-        """Resize in place — never recompute anchor (prevents visual drift)."""
+        """Resize only — never shift X/Y (stops multi-click / reload drift)."""
         pin = self._pin_top_left
         if pin is None:
             self.resize(width, height)
@@ -1163,16 +1118,9 @@ class UsagePopover(QWidget):
         screen = QGuiApplication.primaryScreen()
         if screen is not None:
             avail = screen.availableGeometry()
-            # Clamp height so bottom stays on-screen; keep top pinned
             max_h = max(200, avail.bottom() - pin.y() - 8)
             height = min(height, max_h)
-            # Keep right edge in bounds if width changes
-            x = pin.x()
-            if x + width > avail.right() - 6:
-                x = avail.right() - width - 6
-            x = max(avail.left() + 6, x)
-            pin = QPoint(x, pin.y())
-            self._pin_top_left = pin
+        # Keep exact pin — do not re-clamp X
         self.setGeometry(pin.x(), pin.y(), width, height)
 
     def reload(self) -> None:
