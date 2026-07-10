@@ -12,6 +12,7 @@ from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
+from codexbar_gui.i18n import init_language, t
 from codexbar_gui.icon_updater import (
     DEFAULT_TRAY_SIZE,
     make_simple_pixmap,
@@ -100,6 +101,7 @@ class CodexBarApp:
             self._refresh_interval_ms = max(10, self._menu_bar.refresh_interval) * 1000
 
     def run(self) -> int:
+        lang = init_language()
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setApplicationName("CodexBar")
         self._app.setQuitOnLastWindowClosed(False)
@@ -111,7 +113,7 @@ class CodexBarApp:
         binary = find_codexbar_binary()
         logger.info(
             "CodexBar GUI host=%s:%d web_port=%d refresh=%ds binary=%s wayland=%s platform=%s "
-            "tray_sel=%s show_as=%s icon=%s",
+            "tray_sel=%s show_as=%s icon=%s lang=%s",
             self._host,
             self._port,
             self._web_port,
@@ -122,6 +124,7 @@ class CodexBarApp:
             self._menu_bar.provider_selection,
             self._menu_bar.show_as,
             self._menu_bar.icon_style,
+            lang,
         )
         if not binary:
             QMessageBox.critical(
@@ -172,7 +175,7 @@ class CodexBarApp:
     def _init_tray(self) -> None:
         self._tray = QSystemTrayIcon()
         self._tray.setIcon(QIcon(make_simple_pixmap("C", DEFAULT_TRAY_SIZE, "#89b4fa")))
-        tip = "CodexBar — click for usage"
+        tip = t("tray_tip")
         if self._web_url:
             tip += f"\nWeb: {self._web_url}"
         self._tray.setToolTip(tip)
@@ -258,10 +261,10 @@ class CodexBarApp:
             if self._tray:
                 extra = f"\nWeb: {self._web_url}" if self._web_url else ""
                 if err and not rems:
-                    tip = "CLI timeout/empty — click for details" + extra
+                    tip = t("tray_timeout") + extra
                 else:
-                    head = tray_tooltip_line(pick, self._menu_bar) if pick else tip
-                    tip = f"{head}\n{tip}\n(click tray icon){extra}"
+                    head = tray_tooltip_line(pick, self._menu_bar) if pick else t("tray_tip")
+                    tip = f"{head}\n{t('tray_tip')}\n{t('tray_click')}{extra}"
                 self._tray.setToolTip(tip)
             # Keep popover cache warm so open is instant (no blank Loading flash)
             if self._popover is not None:

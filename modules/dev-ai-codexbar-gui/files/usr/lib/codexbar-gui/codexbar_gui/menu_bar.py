@@ -219,9 +219,19 @@ def tray_tooltip_line(
         return str(name)
     if s.show_as == "used":
         used = 100.0 - float(rem)
-        pct = f"{int(round(used))}% used" if s.show_percent_tooltip else ""
+        if s.show_percent_tooltip:
+            from codexbar_gui.i18n import t
+
+            pct = t("percent_used", n=int(round(used)))
+        else:
+            pct = ""
     else:
-        pct = f"{int(round(float(rem)))}% left" if s.show_percent_tooltip else ""
+        if s.show_percent_tooltip:
+            from codexbar_gui.i18n import t
+
+            pct = t("percent_left", n=int(round(float(rem))))
+        else:
+            pct = ""
     plan = getattr(view, "plan_label", "") or ""
     bits = [str(name)]
     if plan:

@@ -109,7 +109,7 @@ class PaceInfo:
 
 
 def format_pace_lines(pace: Optional[PaceInfo]) -> Optional[dict]:
-    """Official menu-card pace copy (docs/ui.md).
+    """Official menu-card pace copy (docs/ui.md), localized via i18n.
 
     Returns dict with:
       primary   — colored main line (e.g. "52% in reserve")
@@ -117,30 +117,30 @@ def format_pace_lines(pace: Optional[PaceInfo]) -> Optional[dict]:
       right     — "Lasts until reset" / "May run out early" / "Runs out in …"
       tone      — reserve | deficit | on_pace
     """
+    from codexbar_gui.i18n import t
+
     if pace is None or not pace.show:
         return None
     st = pace.status
     n = int(round(abs(pace.reserve_percent)))
     exp = int(round(pace.expected_used_percent))
     if st == "reserve":
-        primary = f"{n}% in reserve"
-        secondary = f"Slower than expected · expected {exp}% used by now"
-        right = "Lasts until reset"
+        primary = t("pace_in_reserve", n=n)
+        secondary = t("pace_slower", exp=exp)
+        right = t("lasts_until_reset")
         tone = "reserve"
     elif st == "deficit":
-        primary = f"{n}% in deficit"
-        secondary = f"Faster than expected · expected {exp}% used by now"
+        primary = t("pace_in_deficit", n=n)
+        secondary = t("pace_faster", exp=exp)
         if pace.runs_out_in:
-            right = f"Runs out in ~{pace.runs_out_in}"
-        elif not pace.will_last_to_reset:
-            right = "May run out early"
+            right = t("runs_out_in", eta=pace.runs_out_in)
         else:
-            right = "May run out early"
+            right = t("may_run_out_early")
         tone = "deficit"
     else:
-        primary = "On pace"
-        secondary = f"Matching expected burn · ~{exp}% of window elapsed"
-        right = "Lasts until reset" if pace.will_last_to_reset else "Watch usage"
+        primary = t("pace_on_pace")
+        secondary = t("pace_matching", exp=exp)
+        right = t("lasts_until_reset") if pace.will_last_to_reset else t("watch_usage")
         tone = "on_pace"
     return {
         "primary": primary,

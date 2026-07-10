@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from codexbar_gui.cost import CostView, fetch_cost
+from codexbar_gui.i18n import t, translate_resets_in, translate_updated_label, translate_window_label
 from codexbar_gui.icon_updater import paint_dual_window_pixmap
 from codexbar_gui.menu_bar import load_menu_bar_settings, order_overview_views
 from codexbar_gui.upstream import (
@@ -342,7 +343,7 @@ def _add_pace_footer(
     row.setSpacing(8)
     left = QVBoxLayout()
     left.setSpacing(1)
-    pct = QLabel(f"{int(round(remaining))}% left")
+    pct = QLabel(t("percent_left", n=int(round(remaining))))
     pct.setStyleSheet(
         f"color:{rem_color}; border:none; background:transparent; "
         f"font-size:12px; font-weight:600;"
@@ -368,7 +369,7 @@ def _add_pace_footer(
 
     right = QVBoxLayout()
     right.setSpacing(1)
-    resets = QLabel(resets_in or "")
+    resets = QLabel(translate_resets_in(resets_in or ""))
     resets.setAlignment(Qt.AlignmentFlag.AlignRight)
     resets.setStyleSheet(
         f"color:{C['muted']}; border:none; background:transparent; font-size:11px;"
@@ -399,7 +400,7 @@ class _UsageMeter(QWidget):
         rem = win.remaining_percent
         color = _rem_color(rem)
 
-        title = QLabel(win.label)
+        title = QLabel(translate_window_label(win.label))
         title.setFont(QFont("Sans", 11, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color:{C['text']}; border:none; background:transparent;")
         root.addWidget(title)
@@ -526,7 +527,7 @@ class _CostSection(QWidget):
         grid.setSpacing(16)
         left = QVBoxLayout()
         left.setSpacing(2)
-        tlab = QLabel("Today")
+        tlab = QLabel(t("today"))
         tlab.setStyleSheet(
             f"color:{C['dim']}; border:none; background:transparent; font-size:10px;"
         )
@@ -537,7 +538,7 @@ class _CostSection(QWidget):
             f"font-size:15px; font-weight:700;"
         )
         left.addWidget(tval)
-        ttok = QLabel(f"{_fmt_tokens_short(cost.today_tokens)} tokens")
+        ttok = QLabel(t("tokens", n=_fmt_tokens_short(cost.today_tokens)))
         ttok.setStyleSheet(
             f"color:{C['muted']}; border:none; background:transparent; font-size:10px;"
         )
@@ -546,7 +547,7 @@ class _CostSection(QWidget):
 
         right = QVBoxLayout()
         right.setSpacing(2)
-        plab = QLabel(f"Last {cost.history_days} days")
+        plab = QLabel(t("last_n_days", n=cost.history_days))
         plab.setStyleSheet(
             f"color:{C['dim']}; border:none; background:transparent; font-size:10px;"
         )
@@ -557,7 +558,7 @@ class _CostSection(QWidget):
             f"font-size:15px; font-weight:700;"
         )
         right.addWidget(pval)
-        ptok = QLabel(f"{_fmt_tokens_short(cost.period_tokens)} tokens")
+        ptok = QLabel(t("tokens", n=_fmt_tokens_short(cost.period_tokens)))
         ptok.setStyleSheet(
             f"color:{C['muted']}; border:none; background:transparent; font-size:10px;"
         )
@@ -621,7 +622,9 @@ class _ProviderCard(QFrame):
         name.setFont(QFont("Sans", 15, QFont.Weight.Bold))
         name.setStyleSheet(f"color:{C['text']}; border:none; background:transparent;")
         title_col.addWidget(name)
-        sub = QLabel(view.updated_label or view.source or "")
+        sub = QLabel(
+            translate_updated_label(view.updated_label) if view.updated_label else (view.source or "")
+        )
         sub.setStyleSheet(f"color:{C['dim']}; border:none; background:transparent; font-size:11px;")
         title_col.addWidget(sub)
         head.addLayout(title_col, 1)
@@ -673,18 +676,18 @@ class _ProviderCard(QFrame):
             )
             bl = QVBoxLayout(box)
             bl.setContentsMargins(12, 10, 12, 10)
-            t = QLabel("Couldn’t load usage")
-            t.setStyleSheet(
+            err_title = QLabel(t("couldnt_load"))
+            err_title.setStyleSheet(
                 f"color:{C['bad']}; border:none; background:transparent; "
                 f"font-weight:600; font-size:12px;"
             )
-            bl.addWidget(t)
+            bl.addWidget(err_title)
             # Friendly short reason
             msg = view.error
             if "timeout" in msg.lower():
-                msg = "Timed out talking to the provider CLI. Try Refresh, or set Usage source in Settings."
+                msg = t("err_timeout")
             elif "not configured" in msg.lower():
-                msg = "Not configured — open Settings and complete OAuth / API key."
+                msg = t("err_not_configured")
             d = QLabel(msg)
             d.setWordWrap(True)
             d.setStyleSheet(
@@ -704,13 +707,13 @@ class _ProviderCard(QFrame):
 
         if view.credits_remaining is not None:
             root.addSpacing(4)
-            sec = QLabel("CREDITS")
+            sec = QLabel(t("credits"))
             sec.setStyleSheet(
                 f"color:{C['dim']}; border:none; background:transparent; "
                 f"font-size:10px; font-weight:700; letter-spacing:0.08em;"
             )
             root.addWidget(sec)
-            c = QLabel(f"{view.credits_remaining:g} left")
+            c = QLabel(t("credits_left", n=f"{view.credits_remaining:g}"))
             c.setStyleSheet(
                 f"color:{C['text']}; border:none; background:transparent; font-size:12px;"
             )
@@ -799,7 +802,7 @@ class _OverviewRow(QFrame):
                 elif win.window_minutes == 10080 and "week" not in title.lower():
                     title = "Weekly"
                 meta = QHBoxLayout()
-                lab = QLabel(title)
+                lab = QLabel(translate_window_label(title))
                 lab.setStyleSheet(
                     f"color:{C['muted']}; border:none; background:transparent; "
                     f"font-size:11px; font-weight:600;"
@@ -807,7 +810,7 @@ class _OverviewRow(QFrame):
                 meta.addWidget(lab)
                 meta.addStretch()
                 if win.resets_in:
-                    rs = QLabel(win.resets_in)
+                    rs = QLabel(translate_resets_in(win.resets_in))
                     rs.setStyleSheet(
                         f"color:{C['dim']}; border:none; background:transparent; "
                         f"font-size:10px;"
@@ -834,7 +837,7 @@ class _OverviewRow(QFrame):
                 if win is view.primary and view.secondary is not None:
                     root.addSpacing(8)
         else:
-            err = QLabel(view.error or "Unavailable")
+            err = QLabel(view.error or t("unavailable"))
             err.setWordWrap(True)
             err.setStyleSheet(
                 f"color:{C['bad']}; border:none; background:transparent; font-size:11px;"
@@ -1146,21 +1149,21 @@ class UsagePopover(QWidget):
         actions.addWidget(self._status)
 
         # Plain labels only — unicode icons break under Flatpak fontconfig
-        self._btn_refresh = _MenuButton("Refresh")
+        self._btn_refresh = _MenuButton(t("refresh"))
         self._btn_refresh.clicked.connect(lambda: self.reload(quiet=False))
         actions.addWidget(self._btn_refresh)
-        self._web_btn = _MenuButton("Usage Dashboard")
+        self._web_btn = _MenuButton(t("usage_dashboard"))
         self._web_btn.clicked.connect(self._open_web)
         actions.addWidget(self._web_btn)
-        self._btn_settings = _MenuButton("Settings...")
+        self._btn_settings = _MenuButton(t("settings"))
         self._btn_settings.clicked.connect(self._open_settings)
         actions.addWidget(self._btn_settings)
-        self._btn_close = _MenuButton("Close panel")
-        self._btn_close.setToolTip("Hide this panel; tray keeps running")
+        self._btn_close = _MenuButton(t("close_panel"))
+        self._btn_close.setToolTip(t("close_panel_tip"))
         self._btn_close.clicked.connect(self.hide)
         actions.addWidget(self._btn_close)
-        self._btn_quit = _MenuButton("Quit CodexBar")
-        self._btn_quit.setToolTip("Stop tray icon, web UI, and exit completely")
+        self._btn_quit = _MenuButton(t("quit"))
+        self._btn_quit.setToolTip(t("quit_tip"))
         self._btn_quit.clicked.connect(self._request_quit)
         actions.addWidget(self._btn_quit)
         shell_l.addWidget(self._foot, 0)
@@ -1201,7 +1204,7 @@ class UsagePopover(QWidget):
         self._web_url = url
         if hasattr(self, "_web_btn"):
             self._web_btn.setEnabled(bool(url))
-            self._web_btn.setToolTip(url or "Web UI not running")
+            self._web_btn.setToolTip(url or t("web_not_running"))
 
     def _open_web(self) -> None:
         if not self._web_url:
@@ -1287,15 +1290,12 @@ class UsagePopover(QWidget):
                 self._ui_stale = False
                 self.reload(quiet=True)
             else:
-                self._status.setText("Loading providers...")
+                self._status.setText(t("loading_providers"))
                 self.reload(quiet=False)
         else:
             # Reuse last painted frame — only background refresh (no blank flash)
-            base = self._status.text().split(" · refreshing")[0].strip()
-            if not base or base.startswith("Loading"):
-                ok_n = sum(1 for v in self._views if v.ok)
-                base = f"{ok_n}/{len(self._views)} providers" if self._views else "Ready"
-            self._status.setText(f"{base} · refreshing...")
+            base = self._status_base()
+            self._status.setText(t("status_refreshing", base=base))
             self.reload(quiet=True)
 
         self.show()
@@ -1383,22 +1383,43 @@ class UsagePopover(QWidget):
         self.setGeometry(pin.x(), pin.y(), width, height)
         self.move(pin)
 
+    def _status_base(self) -> str:
+        """Stable status line without the transient 'refreshing' suffix."""
+        if self._views:
+            ok_n = sum(1 for v in self._views if v.ok)
+            return t("providers_count", ok=ok_n, n=len(self._views))
+        return t("ready")
+
+    def retranslate_chrome(self) -> None:
+        """Refresh footer chrome after language change (panel may stay open)."""
+        if hasattr(self, "_btn_refresh"):
+            self._btn_refresh.setText(t("refresh"))
+            self._web_btn.setText(t("usage_dashboard"))
+            self._btn_settings.setText(t("settings"))
+            self._btn_close.setText(t("close_panel"))
+            self._btn_close.setToolTip(t("close_panel_tip"))
+            self._btn_quit.setText(t("quit"))
+            self._btn_quit.setToolTip(t("quit_tip"))
+            self._set_web_url(self._web_url)
+        if self._views and self.isVisible():
+            self._rebuild_tabs()
+            self._rebuild_body()
+        elif hasattr(self, "_status"):
+            self._status.setText(self._status_base())
+
     def reload(self, quiet: bool = False) -> None:
         if self._worker is not None and self._worker.isRunning():
             if not quiet:
-                self._status.setText("Loading...")
+                self._status.setText(t("loading"))
             return
         if not quiet:
-            self._status.setText("Loading providers...")
+            self._status.setText(t("loading_providers"))
             # Only blank-disable footer when we have nothing to show yet
             if not self._views:
                 self._set_footer_enabled(False)
         else:
             # Keep cards visible; light status hint only
-            base = self._status.text().split(" · refreshing")[0].strip()
-            if not base or base.startswith("Loading"):
-                base = f"{sum(1 for v in self._views if v.ok)}/{len(self._views)} providers"
-            self._status.setText(f"{base} · refreshing...")
+            self._status.setText(t("status_refreshing", base=self._status_base()))
         self._worker = _ReloadWorker(self._host, self._port, parent=self)
         try:
             self._worker.done.disconnect(self._on_reload_done)
@@ -1455,7 +1476,7 @@ class UsagePopover(QWidget):
         self._clear(self._tabs)
         self._tab_buttons.clear()
         if len(self._views) > 1:
-            chip = _TabChip("Overview", accent=C["accent"], show_bar=False)
+            chip = _TabChip(t("overview"), accent=C["accent"], show_bar=False)
             chip.clicked.connect(lambda: self._select_tab("overview"))
             self._tab_buttons["overview"] = chip
             self._tabs.addWidget(chip)
@@ -1510,13 +1531,13 @@ class UsagePopover(QWidget):
             )
             el = QVBoxLayout(empty)
             el.setContentsMargins(16, 20, 16, 20)
-            t = QLabel("No usage data")
-            t.setStyleSheet(
+            empty_title = QLabel(t("no_usage"))
+            empty_title.setStyleSheet(
                 f"color:{C['text']}; font-weight:600; border:none; background:transparent;"
             )
-            el.addWidget(t)
+            el.addWidget(empty_title)
             d = QLabel(
-                f"CLI: {binary}" if binary else "Install official codexbar CLI."
+                t("cli_path", path=binary) if binary else t("install_cli")
             )
             d.setWordWrap(True)
             d.setStyleSheet(
@@ -1524,7 +1545,7 @@ class UsagePopover(QWidget):
             )
             el.addWidget(d)
             self._body_layout.addWidget(empty)
-            self._status.setText("Empty")
+            self._status.setText(t("empty"))
             self._fit_height()
             return
 
@@ -1549,10 +1570,10 @@ class UsagePopover(QWidget):
         # No addStretch() — with setWidgetResizable it paints a tall black void.
 
         ok_n = sum(1 for v in self._views if v.ok)
-        self._status.setText(
-            f"{ok_n}/{len(self._views)} providers · official CLI"
-            + (f" · web {self._web_url.replace('http://', '')}" if self._web_url else "")
-        )
+        status = t("providers_cli", ok=ok_n, n=len(self._views))
+        if self._web_url:
+            status += f" · web {self._web_url.replace('http://', '')}"
+        self._status.setText(status)
         self._fit_height()
 
     def _fit_height(self) -> None:
@@ -1615,6 +1636,8 @@ class UsagePopover(QWidget):
             dlg.exec()
         finally:
             self._settings_open = False
+        # Language / display prefs may have changed
+        self.retranslate_chrome()
         self.show()
         self.raise_()
         self.activateWindow()

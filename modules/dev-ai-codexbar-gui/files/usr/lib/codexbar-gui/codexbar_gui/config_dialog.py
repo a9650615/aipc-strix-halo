@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from codexbar_gui.i18n import current_language, set_language, t
 from codexbar_gui.menu_bar import (
     ICON_STYLE,
     PROVIDER_SELECTION,
@@ -213,7 +214,7 @@ class ProviderConfigWidget(QWidget):
             "web: browser/dashboard cookies (Grok SuperGrok)\n"
             "api: API key"
         )
-        form.addRow("Usage source", self._source)
+        form.addRow(t("usage_source"), self._source)
 
         self._cookie_source = QComboBox()
         for s in COOKIE_SOURCES:
@@ -224,7 +225,7 @@ class ProviderConfigWidget(QWidget):
             or "auto"
         ).lower()
         self._cookie_source.setCurrentIndex(max(0, self._cookie_source.findData(cs)))
-        form.addRow("Cookie source", self._cookie_source)
+        form.addRow(t("cookie_source"), self._cookie_source)
 
         self._api_key = QLineEdit()
         self._api_key.setEchoMode(QLineEdit.EchoMode.Password)
@@ -239,20 +240,20 @@ class ProviderConfigWidget(QWidget):
         if key:
             self._api_key.setText(str(key))
             self._api_key.setPlaceholderText("•••• saved (leave blank to keep)")
-        form.addRow("API key", self._api_key)
+        form.addRow(t("api_key"), self._api_key)
 
         self._cookie_header = QLineEdit()
         self._cookie_header.setPlaceholderText("Cookie: header when cookie source = manual")
         ch = provider.get("cookie_header") or provider.get("cookieHeader") or ""
         if ch:
             self._cookie_header.setText(str(ch))
-        form.addRow("Cookie header", self._cookie_header)
+        form.addRow(t("cookie_header"), self._cookie_header)
 
         root.addLayout(form)
 
         actions = QHBoxLayout()
         if self._id in _OAUTH_PROVIDERS:
-            self._login_btn = QPushButton("Login (OAuth)…")
+            self._login_btn = QPushButton(t("login_oauth"))
             self._login_btn.setToolTip(
                 "Codex: runs `codex login`\n"
                 "Claude: runs `claude auth login --claudeai`\n"
@@ -278,7 +279,7 @@ class ProviderConfigWidget(QWidget):
         else:
             self._login_btn = None
 
-        refresh_status = QPushButton("Refresh status")
+        refresh_status = QPushButton(t("refresh_status"))
         refresh_status.clicked.connect(self.refresh_auth_status)
         actions.addWidget(refresh_status)
         actions.addStretch()
@@ -338,8 +339,8 @@ class ProviderConfigWidget(QWidget):
             return
         if self._login_btn:
             self._login_btn.setEnabled(False)
-            self._login_btn.setText("Logging in…")
-        self._status.setText("OAuth login running (browser may open)…")
+            self._login_btn.setText(t("logging_in"))
+        self._status.setText(t("oauth_running"))
         self._login_worker = _LoginWorker(self._id, parent=self)
         self._login_worker.finished_ok.connect(self._on_login_done)
         self._login_worker.start()
@@ -347,7 +348,7 @@ class ProviderConfigWidget(QWidget):
     def _on_login_done(self, provider: str, result: object) -> None:
         if self._login_btn:
             self._login_btn.setEnabled(True)
-            self._login_btn.setText("Login (OAuth)…")
+            self._login_btn.setText(t("login_oauth"))
         ok = getattr(result, "ok", False)
         outcome = getattr(result, "outcome", "failed")
         detail = getattr(result, "detail", "") or ""
@@ -420,21 +421,16 @@ class ConfigDialog(QDialog):
         return _CONFIG_FILE
 
     def _init_ui(self) -> None:
-        self.setWindowTitle("CodexBar Settings")
+        self.setWindowTitle(t("settings_title"))
         self.setMinimumSize(720, 560)
         self.resize(760, 640)
 
         layout = QVBoxLayout(self)
-        title = QLabel("Settings · Display + Providers")
+        title = QLabel(t("settings_heading"))
         title.setFont(QFont("Sans", 13, QFont.Weight.Bold))
         layout.addWidget(title)
 
-        hint = QLabel(
-            "Same file as official CodexBar: "
-            f"<code>{self._config_path()}</code>. "
-            "Display section mirrors macOS Display prefs (merged tray on Linux). "
-            "OAuth only for Codex / Claude / Gemini; Grok = web/API; GLM = <b>zai</b>."
-        )
+        hint = QLabel(t("settings_hint", path=f"<code>{self._config_path()}</code>"))
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#a6adc8; font-size:11px;")
         layout.addWidget(hint)
@@ -457,13 +453,10 @@ class ConfigDialog(QDialog):
         dl = QVBoxLayout(disp)
         dl.setContentsMargins(12, 10, 12, 10)
         dl.setSpacing(6)
-        dh = QLabel("Menu bar · Display")
+        dh = QLabel(t("menu_bar_display"))
         dh.setFont(QFont("Sans", 11, QFont.Weight.DemiBold))
         dl.addWidget(dh)
-        dnote = QLabel(
-            "Linux uses one merged tray icon (official Merge Icons). "
-            "Choose which provider drives the bars, remaining vs used fill, and Overview order."
-        )
+        dnote = QLabel(t("menu_bar_note"))
         dnote.setWordWrap(True)
         dnote.setStyleSheet("color:#6c7086; font-size:10px;")
         dl.addWidget(dnote)
@@ -471,14 +464,21 @@ class ConfigDialog(QDialog):
         form = QFormLayout()
         form.setSpacing(6)
 
+        self._lang = QComboBox()
+        self._lang.addItem(t("lang_auto"), "auto")
+        self._lang.addItem(t("lang_en"), "en")
+        self._lang.addItem(t("lang_zh_tw"), "zh_TW")
+        self._lang.addItem(t("lang_zh_cn"), "zh_CN")
+        form.addRow(t("language"), self._lang)
+
         self._sel = QComboBox()
-        self._sel.addItem("Highest usage (lowest % left)", "highest_usage")
-        self._sel.addItem("First enabled (config order)", "first_enabled")
-        self._sel.addItem("Pinned provider", "pinned")
+        self._sel.addItem(t("sel_highest"), "highest_usage")
+        self._sel.addItem(t("sel_first"), "first_enabled")
+        self._sel.addItem(t("sel_pinned"), "pinned")
         self._sel.setToolTip(
             "Official “highest-usage auto-selection” vs fixed provider for the tray icon."
         )
-        form.addRow("Tray provider", self._sel)
+        form.addRow(t("tray_provider"), self._sel)
 
         self._pin = QComboBox()
         for pid in (
@@ -494,50 +494,48 @@ class ConfigDialog(QDialog):
         ):
             self._pin.addItem(pid, pid)
         self._pin.setEditable(True)
-        form.addRow("Pinned id", self._pin)
+        form.addRow(t("pinned_id"), self._pin)
 
         self._show_as = QComboBox()
-        self._show_as.addItem("Show remaining % (default)", "remaining")
-        self._show_as.addItem("Show used %", "used")
+        self._show_as.addItem(t("show_remaining"), "remaining")
+        self._show_as.addItem(t("show_used"), "used")
         self._show_as.setToolTip(
             "Official: fill = remaining by default; “Show usage as used” flips the bar."
         )
-        form.addRow("Bar fill", self._show_as)
+        form.addRow(t("bar_fill"), self._show_as)
 
         self._icon_style = QComboBox()
-        self._icon_style.addItem("Dual bars (session + weekly)", "dual_bars")
-        self._icon_style.addItem("Primary bar only", "primary_only")
-        self._icon_style.addItem("Single brand bar", "brand_percent")
-        form.addRow("Icon style", self._icon_style)
+        self._icon_style.addItem(t("icon_dual"), "dual_bars")
+        self._icon_style.addItem(t("icon_primary"), "primary_only")
+        self._icon_style.addItem(t("icon_brand"), "brand_percent")
+        form.addRow(t("icon_style"), self._icon_style)
 
         self._overview = QLineEdit()
-        self._overview.setPlaceholderText(
-            "Overview order, e.g. codex,claude,zai  (empty = all enabled)"
-        )
+        self._overview.setPlaceholderText(t("overview_placeholder"))
         self._overview.setToolTip(
             "Official “Overview tab providers” — comma-separated ids; listed first in Overview."
         )
-        form.addRow("Overview providers", self._overview)
+        form.addRow(t("overview_providers"), self._overview)
 
-        self._tip_pct = QCheckBox("Show percent in tray tooltip")
+        self._tip_pct = QCheckBox(t("show_percent_tooltip"))
         self._tip_pct.setChecked(True)
         form.addRow("", self._tip_pct)
 
         self._interval = QSpinBox()
         self._interval.setRange(10, 3600)
         self._interval.setValue(60)
-        self._interval.setSuffix(" s")
+        self._interval.setSuffix(t("seconds_suffix"))
         self._interval.setToolTip("Refresh cadence (official presets: 1m / 2m / 5m / 15m)")
-        form.addRow("Refresh interval", self._interval)
+        form.addRow(t("refresh_interval"), self._interval)
 
         dl.addLayout(form)
         layout.addWidget(disp)
 
         filt = QHBoxLayout()
-        plab = QLabel("Providers")
+        plab = QLabel(t("providers"))
         plab.setFont(QFont("Sans", 11, QFont.Weight.DemiBold))
         filt.addWidget(plab)
-        self._show_all = QCheckBox("Show all providers (full catalog)")
+        self._show_all = QCheckBox(t("show_all_providers"))
         self._show_all.setToolTip(
             "When off: featured list (Codex, Claude, Grok, Z.ai/GLM, …). "
             "When on: every id from config.json (~50+)."
@@ -559,7 +557,7 @@ class ConfigDialog(QDialog):
 
         row = QHBoxLayout()
         row.addStretch()
-        reload_btn = QPushButton("Reload from disk")
+        reload_btn = QPushButton(t("reload_disk"))
         reload_btn.clicked.connect(self._load_config)
         row.addWidget(reload_btn)
         layout.addLayout(row)
@@ -567,15 +565,15 @@ class ConfigDialog(QDialog):
         btns = QHBoxLayout()
         btns.addStretch()
         # Prefer official CLI enable when available
-        cli_btn = QPushButton("Open config dir")
+        cli_btn = QPushButton(t("open_config_dir"))
         cli_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(_CONFIG_DIR)))
         )
         btns.addWidget(cli_btn)
-        save = QPushButton("Save")
+        save = QPushButton(t("save"))
         save.clicked.connect(self._save_config)
         btns.addWidget(save)
-        cancel = QPushButton("Cancel")
+        cancel = QPushButton(t("cancel"))
         cancel.clicked.connect(self.reject)
         btns.addWidget(cancel)
         layout.addLayout(btns)
@@ -639,8 +637,7 @@ class ConfigDialog(QDialog):
         self._list_layout.addItem(stretch)
         if not show_all:
             note = QLabel(
-                f"Showing featured + enabled ({len(ordered)}). "
-                f"Full catalog on disk: {len(by_id)} — tick “Show all providers”."
+                t("showing_featured", n=len(ordered), total=len(by_id))
             )
             note.setStyleSheet("color:#6c7086; font-size:10px;")
             note.setWordWrap(True)
@@ -662,6 +659,14 @@ class ConfigDialog(QDialog):
         self._overview.setText(",".join(mb.overview_providers))
         self._tip_pct.setChecked(mb.show_percent_tooltip)
         self._interval.setValue(int(mb.refresh_interval or 60))
+
+        gui = self._config.get("gui") if isinstance(self._config.get("gui"), dict) else {}
+        lang_raw = str(gui.get("language") or "auto")
+        lang_idx = self._lang.findData(lang_raw)
+        if lang_idx < 0:
+            # stored effective code → select that; bare empty → auto
+            lang_idx = self._lang.findData(current_language())
+        self._lang.setCurrentIndex(max(0, lang_idx))
 
     def _save_config(self) -> None:
         path = self._config_path()
@@ -719,28 +724,33 @@ class ConfigDialog(QDialog):
             show_percent_tooltip=self._tip_pct.isChecked(),
             refresh_interval=int(self._interval.value()),
         )
-        out["gui"] = merge_menu_bar_into_gui(
+        gui = merge_menu_bar_into_gui(
             out.get("gui") if isinstance(out.get("gui"), dict) else {},
             mb,
         )
+        lang_code = str(self._lang.currentData() or "auto")
+        gui["language"] = lang_code
+        out["gui"] = gui
 
         try:
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             path.write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
             path.chmod(0o600)
+            # Apply language immediately for tray/popover chrome
+            set_language(None if lang_code == "auto" else lang_code)
             # Validate with official CLI when present
             self._cli_validate()
             QMessageBox.information(
                 self,
-                "Settings",
+                t("settings_saved"),
                 f"Saved to {path}\n\n"
-                "Menu bar display + providers updated.\n"
-                "Tray icon refreshes on the next poll (or click Refresh).",
+                f"{t('saved_settings')}\n"
+                f"{t('lang_applied')}",
             )
-            logger.info("config saved %s", path)
+            logger.info("config saved %s lang=%s", path, lang_code)
             self.accept()
         except OSError as exc:
-            QMessageBox.critical(self, "Error", f"Failed to save: {exc}")
+            QMessageBox.critical(self, t("error"), t("failed_save", err=exc))
 
     def _cli_set_enabled(self, provider: str, enabled: bool) -> None:
         binary = shutil.which("codexbar") or find_binary("codexbar")
