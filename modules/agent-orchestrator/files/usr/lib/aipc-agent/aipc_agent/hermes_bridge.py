@@ -136,34 +136,73 @@ def _is_unusable_answer(text: str) -> bool:
 def _build_query(text: str, session_id: str, *, browser: bool = False) -> str:
     parts = [
         "You are helping via the aipc voice assistant. "
+        "Discover facts yourself with tools — do not invent titles or URLs. "
         "Do the task with tools if needed, then stop. "
         "FINAL OUTPUT RULES (critical): "
-        "print ONLY the spoken answer — 1 to 3 short sentences in the user's language; "
+        "print ONLY the spoken answer — 2 to 4 short sentences in the user's language; "
         "NO tool logs, NO thinking, NO markdown tables, NO 'Response truncated' errors. "
+        "For lookup requests: ALWAYS include (1) the work title found via tools, "
+        "(2) key cast/details when available, (3) at least one concrete URL from tools. "
+        "Prefer specific facts over generic 'how to search' advice. "
         "If tools fail, say one short failure sentence.",
         "",
         f"User request:\n{text.strip()}",
     ]
-    if browser:
-        try:
-            from aipc_agent.browser_sandbox import prompt_hint
-
-            parts.insert(1, prompt_hint() + "\n")
-        except Exception:
-            parts.insert(
-                1,
-                "Browser tools available: use web_search / browser_navigate when "
-                "live pages are required; keep the final spoken answer short.\n",
-            )
-    # Local skill tree (on-box folders only) — process injects, never from git
+    # Local skills first (paths she already learned on this machine)
+    has_skill = False
     try:
         from aipc_agent.skill_learn import skills_for_query
 
         skill_blob = skills_for_query(text, limit=2)
         if skill_blob:
-            parts.insert(1, skill_blob + "\n")
+            has_skill = True
+            parts.insert(
+                1,
+                skill_blob
+                + "\nFollow these local procedures to find the answer with tools; "
+                "do not rely on prior memorized answers alone.\n",
+            )
     except Exception:
         pass
+    if browser:
+        try:
+            from aipc_agent.browser_sandbox import prompt_hint
+
+            parts.insert(
+                1,
+                prompt_hint()
+                + "\nYou MUST use web_search and/or browser_navigate to obtain "
+                "title and URL before answering. The sandbox is for discovering "
+                "the lookup path, not for guessing.\n",
+            )
+        except Exception:
+            parts.insert(
+                1,
+                "Browser tools available: you MUST use web_search / browser_navigate "
+                "to discover title and URL; do not invent them.\n",
+            )
+    # Optional web_hint: only when no local skill yet (cold start assist).
+    # Disabled by default for Hermes when browser is on — she should learn paths.
+    # Set AIPC_WEB_HINT_HERMES=1 to re-enable inject for debugging.
+    try:
+        from aipc_agent import web_hint
+
+        hermes_hint = os.environ.get("AIPC_WEB_HINT_HERMES", "0") not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+        if hermes_hint and (web_hint.lookup_wants_web(text) or browser) and not has_skill:
+            hints = web_hint.hints_for(text, limit=5)
+            if hints:
+                parts.insert(1, hints + "\n")
+                print(
+                    f"aipc-agent hermes: web_hint cold-start chars={len(hints)}",
+                    flush=True,
+                )
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent hermes: web_hint skip: {exc}", flush=True)
     if HERMES_USE_MEM0:
         try:
             facts = memory.recall(
@@ -171,6 +210,24 @@ def _build_query(text: str, session_id: str, *, browser: bool = False) -> str:
             )
         except Exception:
             facts = ""
+        # Drop failure/poison memories that teach "don't bother searching"
+        if facts:
+            poison = (
+                "blocked",
+                "cannot be retrieved",
+                "无法",
+                "無法",
+                "连不上",
+                "truncated",
+                "Google 搜尋被擋",
+            )
+            kept = []
+            for line in facts.splitlines():
+                low = line.lower()
+                if any(p.lower() in low or p in line for p in poison):
+                    continue
+                kept.append(line)
+            facts = "\n".join(kept).strip()
         if facts:
             parts.insert(
                 1,

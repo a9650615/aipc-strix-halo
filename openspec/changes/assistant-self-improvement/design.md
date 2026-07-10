@@ -100,7 +100,10 @@ modular skill tree in **local folders**.
 | How | Hermes `-t browser` + `browser_sandbox.hermes_env` (agent-browser / Chromium) |
 | Profile | `/var/lib/aipc-agent/browser-sandbox` only — isolated cookies/storage |
 | Not | User desktop browser profile; not git; not always-on |
-| After | Successful crawl → skill_learn may write procedure into local skill tree |
+| After | Successful crawl → skill_learn writes a **PATH** skill (steps/sites/query patterns), not only the one-shot answer |
+| Learning goal | Next similar request: inject local skill so the agent **follows the path** with tools; developer knowledge is not the answer source |
+
+Optional `web_hint` (DDG scrape) is **cold-start assist only** when no local skill matches and `AIPC_WEB_HINT_HERMES=1`; default off for Hermes so discovery is tool-driven.
 
 ### Session model
 

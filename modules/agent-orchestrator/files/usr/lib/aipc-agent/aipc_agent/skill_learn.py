@@ -26,18 +26,20 @@ MIN_REPLY = int(os.environ.get("AIPC_SKILL_LEARN_MIN_REPLY", "40"))
 
 _EXTRACT_SYSTEM = (
     "You extract reusable on-device assistant skills from a successful turn. "
-    "The skill will be stored as a local folder on this PC (not in any git repo). "
+    "The skill is stored as a local folder on this PC (NOT in any git repo). "
+    "Focus on the PATH (how to find info next time), not memorizing one answer. "
     "Return ONLY JSON, no markdown fences:\n"
     '{"learn":true|false,'
     '"title":"short skill title",'
     '"tags":["tag1","tag2"],'
     '"triggers":["phrases that should recall this skill"],'
-    '"body":"markdown procedure: how to find/do this next time (steps, sites, queries)"}'
-    "\nSet learn=false for chit-chat, pure greetings, one-off opinions, or failures. "
-    "Set learn=true when the turn shows a reusable info-lookup or tool procedure "
-    "(e.g. how to resolve a catalog/product/media code, how to search a site class). "
-    "body must be concrete steps (search queries, site types, what to extract). "
-    "Do not moralize. Keep body under 800 Chinese/English characters."
+    '"body":"markdown PROCEDURE: ordered steps, which tools/sites/query patterns, '
+    'what fields to extract (title, cast, URL). Do NOT only paste the one-shot answer."}'
+    "\nSet learn=false for chit-chat, greetings, pure opinions, or failures. "
+    "Set learn=true when the turn shows a reusable lookup/tool procedure "
+    "(catalog codes, web research, site navigation). "
+    "body must be steps a future agent can follow without already knowing the answer. "
+    "Do not moralize. Keep body under 900 Chinese/English characters."
 )
 
 

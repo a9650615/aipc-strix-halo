@@ -132,9 +132,11 @@ def hermes_toolsets_extra(text: str, *, long_task: bool = False) -> list[str]:
 
 def prompt_hint() -> str:
     return (
-        "Browser sandbox is enabled for this run (isolated profile under "
-        f"{SANDBOX_ROOT}). Use browser_navigate / browser_snapshot / web_search "
-        "when a live page is required to learn or answer. "
-        "After useful discoveries, your short final answer should state facts "
-        "clearly so on-box skill learning can capture the procedure."
+        "Browser sandbox is enabled (isolated profile under "
+        f"{SANDBOX_ROOT}). Discover the lookup path yourself: "
+        "web_search the query/code, open promising result pages with "
+        "browser_navigate + browser_snapshot, extract title/cast/URL. "
+        "Your short final answer must use what tools found (title + URL). "
+        "On-box skill learning will later capture the procedure so next time "
+        "you follow that path faster — not a one-shot memorized answer."
     )
