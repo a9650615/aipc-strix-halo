@@ -116,14 +116,43 @@ def _build_env(home: str, user: str) -> dict[str, str]:
     return env
 
 
+def _is_unusable_answer(text: str) -> bool:
+    t = (text or "").strip()
+    if len(t) < 4:
+        return True
+    low = t.lower()
+    bad = (
+        "response truncated",
+        "output length limit",
+        "no reply",
+        "empty content",
+        "after retries",
+        "fallback providers",
+        "任务跑完了，但没有可读",
+    )
+    return any(b in low or b in t for b in bad)
+
+
 def _build_query(text: str, session_id: str) -> str:
     parts = [
         "You are helping via the aipc voice assistant. "
-        "Do the task. Reply with a short final answer suitable for speech "
-        "(1–3 sentences) after any tool work. No markdown walls.",
+        "Do the task with tools if needed, then stop. "
+        "FINAL OUTPUT RULES (critical): "
+        "print ONLY the spoken answer — 1 to 3 short sentences in the user's language; "
+        "NO tool logs, NO thinking, NO markdown tables, NO 'Response truncated' errors. "
+        "If tools fail, say one short failure sentence.",
         "",
         f"User request:\n{text.strip()}",
     ]
+    # Local skill tree (on-box folders only) — process injects, never from git
+    try:
+        from aipc_agent.skill_learn import skills_for_query
+
+        skill_blob = skills_for_query(text, limit=2)
+        if skill_blob:
+            parts.insert(1, skill_blob + "\n")
+    except Exception:
+        pass
     if HERMES_USE_MEM0:
         try:
             facts = memory.recall(
@@ -246,7 +275,8 @@ def run(
         if long_task:
             max_turns = HERMES_LONG_MAX_TURNS
         elif voice:
-            max_turns = HERMES_VOICE_MAX_TURNS
+            # Short voice lookups thrash if turns are huge; keep tools bounded.
+            max_turns = min(HERMES_VOICE_MAX_TURNS, int(os.environ.get("AIPC_HERMES_VOICE_MAX_TURNS", "16")))
         else:
             max_turns = HERMES_MAX_TURNS
 
@@ -442,6 +472,19 @@ def run(
     answer = _extract_answer(proc.stdout or "")
     if not answer:
         answer = "任务跑完了，但没有可读的文字回复。"
+    if _is_unusable_answer(answer):
+        print(
+            f"aipc-agent hermes: unusable {elapsed:.1f}s sid={sid!r} "
+            f"preview={answer[:80]!r}",
+            flush=True,
+        )
+        return {
+            "status": "error",
+            "text": "这次没查到可用结果，请换个说法或稍后再试。",
+            "detail": f"unusable_answer:{answer[:120]}",
+            "ephemeral": HERMES_EPHEMERAL,
+            "session_id": sid or "",
+        }
     print(
         f"aipc-agent hermes: ok {elapsed:.1f}s ephemeral={HERMES_EPHEMERAL} "
         f"sid={sid!r} chars={len(answer)}",

@@ -413,6 +413,14 @@ def _finish(state: DailyAssistantState) -> dict:
         state["text"], text, sid, agent=memory.AGENT_DAILY, kind="daily"
     )
     try:
+        from aipc_agent.skill_learn import maybe_learn_async
+
+        maybe_learn_async(
+            state["text"], text, session_id=sid, kind="daily", agent="daily"
+        )
+    except Exception:
+        pass
+    try:
         from aipc_agent import agent_context
 
         agent_context.append_turn(sid, memory.AGENT_DAILY, "user", state["text"])

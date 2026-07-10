@@ -31,9 +31,11 @@
 
 - [ ] 2.1 Add `aipc-self-improve.timer` + oneshot (idle/night) reading episodes
 - [ ] 2.2 Critique prompt → JSON lessons; write mem0 + `/var/lib/aipc-agent/learning/fewshots.json`
-- [ ] 2.2b Document + implement skill discovery roots (local only:
-      `~/.hermes/skills`, `/var/lib/aipc-agent/skills`); process writes
-      **never** into aipc `modules/**`; gap → install/propose under local root
+- [x] 2.2b Document + implement skill discovery roots (local only:
+      `~/.hermes/skills/aipc-learned`, `/var/lib/aipc-agent/skills`); process
+      writes **never** into aipc `modules/**`; success turn → model-judged
+      extract → local SKILL.md; Hermes injects matched skills on next query
+      (quality gate rejects truncated/error replies). Case supervised 2026-07-10.
 - [ ] 2.3 Intent classifier injects few-shots into system prompt (cap N, LRU)
 - [ ] 2.4 STT repair map auto-apply only for high-confidence pairs (reversible file)
 - [ ] 2.5 Safety ledger for rejected auto-applies

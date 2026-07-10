@@ -550,6 +550,15 @@ def _respond(state: SupervisorState) -> SupervisorState:
     agent_context.append_turn(sid, memory.AGENT_CHAT, "assistant", text)
     # Continuous internalization → mem0 facts (async, never blocks TTS)
     memory.internalize(user_text, text, sid, agent=memory.AGENT_CHAT, kind="respond")
+    # Lookup-style successful answers may become local skills (model-judged)
+    try:
+        from aipc_agent.skill_learn import maybe_learn_async
+
+        maybe_learn_async(
+            user_text, text, session_id=sid, kind="respond", agent="chat"
+        )
+    except Exception:
+        pass
     return {"text": text, "session_id": sid, "end_session": False}
 
 
@@ -652,10 +661,28 @@ def _hermes_node(state: SupervisorState) -> SupervisorState:
         pass
     result = _run()
     text = str(result.get("text") or "").strip() or "Hermes 没有返回内容。"
-    if not HERMES_SKIP_REMEMBER and result.get("status") == "ok":
+    ok = result.get("status") == "ok" and bool(text)
+    if ok:
+        try:
+            from aipc_agent.hermes_bridge import _is_unusable_answer
+
+            if _is_unusable_answer(text):
+                ok = False
+        except Exception:
+            pass
+    if not HERMES_SKIP_REMEMBER and ok:
         memory.internalize(
             text_in, text[:800], sid, agent=memory.AGENT_HERMES, kind="hermes"
         )
+        # Grow local skill tree (on-box folders) when a reusable procedure worked
+        try:
+            from aipc_agent.skill_learn import maybe_learn_async
+
+            maybe_learn_async(
+                text_in, text, session_id=sid, kind="hermes", agent="hermes"
+            )
+        except Exception:
+            pass
     try:
         from aipc_agent import agent_context
 
