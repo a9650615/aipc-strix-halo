@@ -65,17 +65,18 @@ def test_popover_constructs_with_web_url() -> None:
     assert pop._body_layout.count() >= 1
 
 
-def test_paint_remaining_digits_non_null() -> None:
+def test_paint_dual_bar_non_null() -> None:
+    """Tray is dual remaining capsules (IconRenderer), not digit tile."""
     from PySide6.QtWidgets import QApplication
 
-    from codexbar_gui.icon_updater import paint_usage_pixmap
+    from codexbar_gui.icon_updater import paint_dual_window_pixmap, paint_usage_pixmap
 
     _ = QApplication.instance() or QApplication([])
-    pm = paint_usage_pixmap(remaining=68.0, size=32)
+    pm = paint_dual_window_pixmap(
+        primary_remaining=99.0, secondary_remaining=23.0, size=24
+    )
     assert not pm.isNull()
-    assert pm.width() >= 32
-    assert pm.height() >= 32
-    # Must actually paint pixels (not fully transparent empty icon)
+    assert pm.width() >= 24
     img = pm.toImage()
     opaque = 0
     for y in range(0, img.height(), 2):
@@ -83,6 +84,10 @@ def test_paint_remaining_digits_non_null() -> None:
             if img.pixelColor(x, y).alpha() > 0:
                 opaque += 1
     assert opaque > 20
+    # Entry point prefers dual bars
+    assert not paint_usage_pixmap(
+        primary_remaining=50.0, secondary_remaining=80.0, size=24
+    ).isNull()
 
 
 def test_webapp_html_and_api_handlers() -> None:

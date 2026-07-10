@@ -199,7 +199,8 @@ class _ProviderCard(QFrame):
                 secondary_remaining=(
                     view.secondary.remaining_percent if view.secondary else None
                 ),
-                size=40,
+                size=36,
+                credits_remaining=view.credits_remaining,
             )
         )
         right.addWidget(icon, 0, Qt.AlignmentFlag.AlignRight)

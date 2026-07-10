@@ -83,6 +83,7 @@ class CodexBarApp:
         self._current_remaining: Optional[float] = None
         self._session_remaining: Optional[float] = None
         self._weekly_remaining: Optional[float] = None
+        self._credits_remaining: Optional[float] = None
         self._web_url: Optional[str] = None
         self._fetch: Optional[_FetchWorker] = None
 
@@ -202,9 +203,10 @@ class CodexBarApp:
                 if v.ok and v.headline_remaining is not None
             ]
             self._current_remaining = min(rems) if rems else None
-            # Dual-bar tray from first ok provider (official: session + weekly)
+            # Dual-bar tray (IconRenderer: top session, bottom weekly)
             self._session_remaining = None
             self._weekly_remaining = None
+            self._credits_remaining = None
             for v in typed:
                 if not v.ok:
                     continue
@@ -212,6 +214,7 @@ class CodexBarApp:
                     self._session_remaining = v.primary.remaining_percent
                 if v.secondary is not None:
                     self._weekly_remaining = v.secondary.remaining_percent
+                self._credits_remaining = v.credits_remaining
                 break
             err = not typed or all(not v.ok for v in typed)
             self._set_icon(remaining=self._current_remaining, error=err)
@@ -242,20 +245,15 @@ class CodexBarApp:
         rem = remaining if remaining is not None else self._current_remaining
         if rem is None and percent is not None:
             rem = 100.0 - percent
-        if (
-            not error
-            and self._session_remaining is not None
-            and self._weekly_remaining is not None
-        ):
-            icon_pm = paint_dual_window_pixmap(
-                primary_remaining=self._session_remaining,
-                secondary_remaining=self._weekly_remaining,
-                size=DEFAULT_TRAY_SIZE,
-            )
-        else:
-            icon_pm = paint_usage_pixmap(
-                remaining=rem, error=error, size=DEFAULT_TRAY_SIZE
-            )
+        # Always use official dual-capsule meter (not digits).
+        icon_pm = paint_usage_pixmap(
+            remaining=rem,
+            error=error,
+            size=DEFAULT_TRAY_SIZE,
+            primary_remaining=self._session_remaining,
+            secondary_remaining=self._weekly_remaining,
+            credits_remaining=self._credits_remaining,
+        )
         self._tray.setIcon(QIcon(icon_pm))
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:

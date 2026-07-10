@@ -26,15 +26,25 @@ def test_imports() -> None:
 def test_color_and_paint() -> None:
     from PySide6.QtWidgets import QApplication
 
-    from codexbar_gui.icon_updater import get_color_for_percent, paint_usage_pixmap
+    from codexbar_gui.icon_updater import (
+        get_color_for_percent,
+        paint_dual_window_pixmap,
+        paint_usage_pixmap,
+    )
 
     _ = QApplication.instance() or QApplication([])
     assert get_color_for_percent(10) == "#27ae60"
     assert not paint_usage_pixmap(percent=32).isNull()
-    # Remaining path is the tray headline contract
-    rem = paint_usage_pixmap(remaining=68.0, size=32)
+    # Dual-bar official geometry (session + weekly remaining)
+    dual = paint_dual_window_pixmap(
+        primary_remaining=99.0, secondary_remaining=100.0, size=24
+    )
+    assert not dual.isNull()
+    assert dual.width() >= 24
+    rem = paint_usage_pixmap(
+        primary_remaining=68.0, secondary_remaining=40.0, size=24
+    )
     assert not rem.isNull()
-    assert rem.width() >= 32
 
 
 def test_summary_from_views_official() -> None:
