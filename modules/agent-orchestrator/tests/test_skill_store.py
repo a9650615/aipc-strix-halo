@@ -66,3 +66,26 @@ class TestSkillStore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSkillLearnQualityGates(unittest.TestCase):
+    def test_reject_truncated_not_learned(self) -> None:
+        from aipc_agent.skill_learn import _worth_candidate
+        from aipc_agent.hermes_bridge import _is_unusable_answer
+
+        bad = "Response truncated due to output length limit"
+        self.assertTrue(_is_unusable_answer(bad))
+        self.assertFalse(
+            _worth_candidate("查番号 FNS-232", bad, kind="hermes")
+        )
+
+    def test_accept_usable_lookup_reply(self) -> None:
+        from aipc_agent.skill_learn import _worth_candidate
+
+        good = (
+            "FNS-232 是一部日本成人影片，发行商代码 FNS，"
+            "具体标题需到资料库确认详情。"
+        )
+        self.assertTrue(
+            _worth_candidate("查番号 FNS-232 是什么", good, kind="hermes")
+        )
