@@ -14,7 +14,6 @@ from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPe
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -117,10 +116,8 @@ _PROVIDER_ACCENT = {
 }
 
 
-class _TabChip(QFrame):
-    """Clean official-style tab: filled pill when active, accent underline when idle."""
-
-    clicked = Signal()
+class _TabChip(QPushButton):
+    """Uniform tab pill — fixed height, equal stretch, real button hit-target."""
 
     def __init__(
         self,
@@ -129,62 +126,33 @@ class _TabChip(QFrame):
         accent: Optional[str] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
-        super().__init__(parent)
-        self.setObjectName("TabChip")
-        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        super().__init__(title, parent)
         self._accent = accent or C["accent"]
-        root = QVBoxLayout(self)
-        root.setContentsMargins(14, 8, 14, 8)
-        root.setSpacing(4)
-
-        self._title = QLabel(title)
-        self._title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self._title.setStyleSheet(
-            "border:none; background:transparent; font-size:12.5px; font-weight:600;"
-        )
-        root.addWidget(self._title)
-
-        self._underline = QFrame()
-        self._underline.setFixedHeight(2)
-        self._underline.setStyleSheet("border:none; border-radius:1px;")
-        root.addWidget(self._underline)
-
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(36)
+        self.setMinimumWidth(78)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.set_active(False)
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
-
     def set_active(self, active: bool) -> None:
+        self.setChecked(active)
         if active:
             self.setStyleSheet(
-                f"#TabChip {{"
-                f"  background:{C['accent']}; border:none; border-radius:10px;"
+                f"QPushButton {{"
+                f"  background:{C['accent']}; color:#0b0d12; border:none;"
+                f"  border-radius:9px; padding:0 12px; font-size:12.5px; font-weight:700;"
                 f"}}"
-            )
-            self._title.setStyleSheet(
-                "color:#0b0d12; border:none; background:transparent; "
-                "font-size:12.5px; font-weight:700;"
-            )
-            self._underline.setStyleSheet(
-                "background:transparent; border:none; border-radius:1px;"
             )
         else:
+            # Bottom border = accent underline (uniform box for every tab)
             self.setStyleSheet(
-                f"#TabChip {{"
-                f"  background:transparent; border:none; border-radius:10px;"
+                f"QPushButton {{"
+                f"  background:transparent; color:{C['muted']};"
+                f"  border:none; border-bottom:2px solid {self._accent};"
+                f"  border-radius:9px; padding:0 12px; font-size:12.5px; font-weight:600;"
                 f"}}"
-                f"#TabChip:hover {{ background:{C['card2']}; }}"
-            )
-            self._title.setStyleSheet(
-                f"color:{C['muted']}; border:none; background:transparent; "
-                f"font-size:12.5px; font-weight:600;"
-            )
-            self._underline.setStyleSheet(
-                f"background:{self._accent}; border:none; border-radius:1px;"
+                f"QPushButton:hover {{ background:{C['card2']}; color:{C['text']}; }}"
             )
 
 
@@ -731,6 +699,8 @@ class UsagePopover(QWidget):
         )
         self.setObjectName("CodexBarPopover")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Shadow effects break mouse hit-testing on Wayland — do not use.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self._host = host
         self._port = port
         self._web_url = web_url
@@ -739,6 +709,8 @@ class UsagePopover(QWidget):
         self._active: Optional[str] = None
         self._worker: Optional[_ReloadWorker] = None
         self._tab_buttons: Dict[str, _TabChip] = {}
+        self._settings_open = False
+        self._hide_armed = False
 
         # Single continuous surface — avoids black voids between scroll/chrome
         self.setStyleSheet(
@@ -758,20 +730,12 @@ class UsagePopover(QWidget):
             f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{"
             f"  background: {C['surface']};"
             f"}}"
+            f"QPushButton {{ outline: none; }}"
         )
         self.setAutoFillBackground(True)
         pal = self.palette()
         pal.setColor(self.backgroundRole(), QColor(C["surface"]))
         self.setPalette(pal)
-
-        try:
-            shadow = QGraphicsDropShadowEffect(self)
-            shadow.setBlurRadius(28)
-            shadow.setOffset(0, 10)
-            shadow.setColor(QColor(0, 0, 0, 140))
-            self.setGraphicsEffect(shadow)
-        except Exception:
-            pass
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -798,8 +762,10 @@ class UsagePopover(QWidget):
             f"}}"
         )
         self._tabs = QHBoxLayout(self._tab_track)
-        self._tabs.setContentsMargins(3, 3, 3, 3)
-        self._tabs.setSpacing(2)
+        self._tabs.setContentsMargins(4, 4, 4, 4)
+        self._tabs.setSpacing(4)
+        # Equal-width slots so Overview / Codex / Claude / Zai match height+width
+        self._tabs.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         tab_outer.addWidget(self._tab_track)
         outer.addWidget(self._tab_wrap, 0)
 
@@ -948,24 +914,28 @@ class UsagePopover(QWidget):
         self._tab_buttons.clear()
         if len(self._views) > 1:
             chip = _TabChip("Overview", accent=C["accent"])
-            chip.clicked.connect(lambda: self._select_tab("overview"))
+            chip.clicked.connect(lambda _checked=False: self._select_tab("overview"))
             self._tab_buttons["overview"] = chip
-            self._tabs.addWidget(chip)
+            self._tabs.addWidget(chip, 1)
         for v in self._views:
             chip = _TabChip(
                 v.display_name,
                 accent=_PROVIDER_ACCENT.get(v.provider.lower(), C["accent"]),
             )
-            chip.clicked.connect(lambda p=v.provider: self._select_tab(p))
+            chip.clicked.connect(
+                lambda _checked=False, p=v.provider: self._select_tab(p)
+            )
             self._tab_buttons[v.provider] = chip
-            self._tabs.addWidget(chip)
-        self._tabs.addStretch()
+            self._tabs.addWidget(chip, 1)
+        # No trailing stretch — equal stretch factors keep uniform tab widths
         self._paint_tabs()
 
     def _select_tab(self, key: str) -> None:
         self._active = key
         self._paint_tabs()
         self._rebuild_body()
+        # Keep focus so focusOut does not dismiss mid-click on Wayland
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
 
     def _paint_tabs(self) -> None:
         for k, chip in self._tab_buttons.items():
@@ -1074,17 +1044,45 @@ class UsagePopover(QWidget):
     def _open_settings(self) -> None:
         from codexbar_gui.config_dialog import ConfigDialog
 
-        dlg = ConfigDialog(self._host, self._port, parent=self)
-        dlg.exec()
+        self._settings_open = True
+        try:
+            # Parent=None so modal dialog is not a child that traps popover focus chaos
+            dlg = ConfigDialog(self._host, self._port, parent=None)
+            dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+            dlg.exec()
+        finally:
+            self._settings_open = False
+        self.show()
+        self.raise_()
+        self.activateWindow()
         self.reload()
 
     def focusOutEvent(self, event) -> None:  # noqa: N802
-        QTimer.singleShot(150, self._maybe_hide)
+        # Debounced outside-click dismiss — never hide while interacting with self/dialogs
+        if not self._hide_armed:
+            self._hide_armed = True
+            QTimer.singleShot(220, self._maybe_hide)
         super().focusOutEvent(event)
 
     def _maybe_hide(self) -> None:
-        if not self.isActiveWindow():
-            self.hide()
+        self._hide_armed = False
+        if not self.isVisible() or self._settings_open:
+            return
+        app = QApplication.instance()
+        if app is None:
+            return
+        if app.activeModalWidget() is not None:
+            return
+        active = app.activeWindow()
+        if active is self:
+            return
+        # Click landed on our widget tree (tabs/buttons often steal focus first)
+        w = app.widgetAt(QCursor.pos())
+        if w is not None and (w is self or self.isAncestorOf(w)):
+            return
+        if self.underMouse():
+            return
+        self.hide()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
