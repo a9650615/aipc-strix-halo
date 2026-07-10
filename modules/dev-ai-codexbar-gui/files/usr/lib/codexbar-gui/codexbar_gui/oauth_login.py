@@ -130,6 +130,30 @@ def auth_status_for(provider: str) -> AuthStatus:
         return AuthStatus("gemini", "none", "No Gemini session found", None)
     if pid == "copilot":
         return AuthStatus("copilot", "oauth", "Device-flow / gh auth (see CLI)", None)
+    if pid == "grok":
+        # SuperGrok is browser cookies (web); API key is separate product surface
+        if os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"):
+            return AuthStatus(
+                "grok",
+                "api_key",
+                "XAI_API_KEY in env (API spend) · SuperGrok quota still needs source=web",
+                None,
+            )
+        return AuthStatus(
+            "grok",
+            "web",
+            "No OAuth — use source=web (SuperGrok cookies) or paste XAI_API_KEY",
+            None,
+        )
+    if pid in {"zai", "glm", "zhipu"}:
+        if os.environ.get("Z_AI_API_KEY") or os.environ.get("ZAI_API_KEY"):
+            return AuthStatus("zai", "api_key", "Z_AI_API_KEY in env", None)
+        return AuthStatus(
+            "zai",
+            "api_key",
+            "API key only (z.ai / BigModel GLM) — no OAuth runner",
+            None,
+        )
     return AuthStatus(provider, "unknown", "API key or browser session (provider-specific)", None)
 
 

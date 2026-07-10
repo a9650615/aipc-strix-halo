@@ -57,20 +57,77 @@ _CONFIG_DIR = Path.home() / ".config" / "codexbar"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
 _LEGACY_CONFIG = Path.home() / ".codexbar" / "config.json"
 
-# Providers that get OAuth login buttons (official runners exist)
+# Providers that get real OAuth CLI runners (browser login).
+# Grok / zai / most others are API key or browser-cookie (web) — not OAuth.
 _OAUTH_PROVIDERS = {"codex", "claude", "gemini"}
 
-# Short list shown by default; full list still preserved on save
+# Friendly labels (official id may differ from product name)
+_DISPLAY_NAMES = {
+    "codex": "Codex",
+    "claude": "Claude",
+    "openai": "OpenAI Admin",
+    "gemini": "Gemini",
+    "cursor": "Cursor",
+    "copilot": "GitHub Copilot",
+    "openrouter": "OpenRouter",
+    "grok": "Grok (xAI)",
+    "zai": "Z.ai / GLM (BigModel)",
+    "minimax": "MiniMax",
+    "kimi": "Kimi",
+    "kimik2": "Kimi K2",
+    "deepseek": "DeepSeek",
+    "litellm": "LiteLLM",
+    "mistral": "Mistral",
+    "perplexity": "Perplexity",
+    "windsurf": "Windsurf",
+    "zed": "Zed",
+    "moonshot": "Moonshot",
+    "doubao": "Doubao",
+    "qoder": "Qoder",
+    "stepfun": "StepFun",
+}
+
+# How each provider actually authenticates (shown in UI so OAuth isn't expected)
+_AUTH_HINTS = {
+    "codex": "OAuth via `codex login` → ~/.codex/auth.json",
+    "claude": "OAuth via `claude auth login` or API key",
+    "gemini": "OAuth via `gemini auth login` or API key",
+    "openai": "Admin API key only (no ChatGPT OAuth here)",
+    "grok": "No OAuth. SuperGrok quota uses web cookies (source=web) or XAI_API_KEY (source=api)",
+    "zai": "Zhipu / z.ai coding plan — API key (Z_AI_API_KEY). No browser OAuth in CodexBar",
+    "openrouter": "API key (OPENROUTER_API_KEY)",
+    "deepseek": "API key",
+    "minimax": "API key",
+    "kimi": "API key / cookies (provider-specific)",
+    "copilot": "gh auth / device flow",
+    "cursor": "Browser cookies or API key",
+    "litellm": "Proxy URL + master key",
+}
+
+# Featured list in Settings (full catalog = 50+; toggle "Show all")
 _PRIMARY_PROVIDERS = (
     "codex",
     "claude",
     "openai",
     "gemini",
+    "grok",
+    "zai",  # GLM / BigModel coding plan
     "cursor",
     "copilot",
     "openrouter",
-    "grok",
+    "deepseek",
+    "minimax",
+    "kimi",
+    "litellm",
+    "mistral",
+    "perplexity",
+    "windsurf",
+    "zed",
 )
+
+
+def _display_name(pid: str) -> str:
+    return _DISPLAY_NAMES.get(pid, pid.replace("_", " ").replace("-", " ").title())
 
 
 class _LoginWorker(QThread):
@@ -105,16 +162,27 @@ class ProviderConfigWidget(QWidget):
         root.setSpacing(6)
 
         head = QHBoxLayout()
-        self._enabled = QCheckBox(self._id.replace("_", " ").title())
+        self._enabled = QCheckBox(_display_name(self._id))
         self._enabled.setChecked(bool(provider.get("enabled", False)))
         self._enabled.setFont(QFont("Sans", 11, QFont.Weight.DemiBold))
+        self._enabled.setToolTip(f"Official id: {self._id}")
         head.addWidget(self._enabled)
+        id_lab = QLabel(f"`{self._id}`")
+        id_lab.setStyleSheet("color:#6c7086; font-size:10px;")
+        head.addWidget(id_lab)
         head.addStretch()
         self._status = QLabel("")
         self._status.setWordWrap(True)
         self._status.setStyleSheet("color:#a6adc8; font-size:11px;")
         head.addWidget(self._status, 1)
         root.addLayout(head)
+
+        hint = _AUTH_HINTS.get(self._id)
+        if hint:
+            hl = QLabel(hint)
+            hl.setWordWrap(True)
+            hl.setStyleSheet("color:#6c7086; font-size:10px; padding-left:2px;")
+            root.addWidget(hl)
 
         form = QFormLayout()
         form.setSpacing(6)
@@ -124,13 +192,16 @@ class ProviderConfigWidget(QWidget):
         for s in USAGE_SOURCES:
             self._source.addItem(s, s)
         cur_src = str(provider.get("source") or "auto").lower()
+        # Grok SuperGrok quota is web-cookies; prefer web if still on bare auto+disabled
+        if self._id == "grok" and cur_src == "auto" and not provider.get("enabled"):
+            cur_src = "web"
         idx = max(0, self._source.findData(cur_src))
         self._source.setCurrentIndex(idx)
         self._source.setToolTip(
             "auto: pick best available\n"
-            "oauth: OAuth API (e.g. ~/.codex/auth.json)\n"
+            "oauth: OAuth API (Codex/Claude only)\n"
             "cli: provider CLI RPC\n"
-            "web: browser/dashboard scrape\n"
+            "web: browser/dashboard cookies (Grok SuperGrok)\n"
             "api: API key"
         )
         form.addRow("Usage source", self._source)
@@ -148,7 +219,13 @@ class ProviderConfigWidget(QWidget):
 
         self._api_key = QLineEdit()
         self._api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._api_key.setPlaceholderText("API key (optional for OAuth providers)")
+        ph = {
+            "grok": "xAI API key (XAI_API_KEY) — optional if SuperGrok web works",
+            "zai": "Z_AI_API_KEY / BigModel key",
+            "openrouter": "OPENROUTER_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+        }.get(self._id, "API key (when source=api)")
+        self._api_key.setPlaceholderText(ph)
         key = provider.get("api_key") or provider.get("apiKey") or ""
         if key:
             self._api_key.setText(str(key))
@@ -174,6 +251,21 @@ class ProviderConfigWidget(QWidget):
             )
             self._login_btn.clicked.connect(self._start_login)
             actions.addWidget(self._login_btn)
+        elif self._id == "grok":
+            help_btn = QPushButton("Grok connect help…")
+            help_btn.clicked.connect(self._grok_help)
+            actions.addWidget(help_btn)
+            web_btn = QPushButton("Open x.ai")
+            web_btn.clicked.connect(
+                lambda: QDesktopServices.openUrl(QUrl("https://console.x.ai/"))
+            )
+            actions.addWidget(web_btn)
+            self._login_btn = None
+        elif self._id == "zai":
+            help_btn = QPushButton("GLM / Z.ai help…")
+            help_btn.clicked.connect(self._zai_help)
+            actions.addWidget(help_btn)
+            self._login_btn = None
         else:
             self._login_btn = None
 
@@ -190,17 +282,42 @@ class ProviderConfigWidget(QWidget):
         )
         self.refresh_auth_status()
 
+    def _grok_help(self) -> None:
+        QMessageBox.information(
+            self,
+            "Grok (xAI) — no OAuth login",
+            "CodexBar does <b>not</b> support browser OAuth for Grok "
+            "(unlike Codex / Claude).<br><br>"
+            "<b>Option A — SuperGrok quota (recommended)</b><br>"
+            "1. Log into x.ai / grok.com in a normal browser<br>"
+            "2. Set Usage source = <code>web</code> (or auto)<br>"
+            "3. Enable Grok and Save — CLI uses <code>grok-web</code> cookies<br><br>"
+            "<b>Option B — API spend</b><br>"
+            "Paste <code>XAI_API_KEY</code> below, source = <code>api</code>.<br><br>"
+            "CLI check: <code>codexbar usage --provider grok --pretty</code>",
+        )
+
+    def _zai_help(self) -> None:
+        QMessageBox.information(
+            self,
+            "Z.ai / GLM (BigModel)",
+            "In official CodexBar the provider id is <b>zai</b> "
+            "(z.ai coding plan / Zhipu BigModel) — there is no separate "
+            "<code>glm</code> id.<br><br>"
+            "Auth is <b>API key only</b> (no OAuth button):<br>"
+            "<code>printf '%s' \"$Z_AI_API_KEY\" | codexbar config set-api-key "
+            "--provider zai --stdin</code><br><br>"
+            "Team usage may need org/project ids "
+            "(see <code>codexbar config set-api-key --help</code>).",
+        )
+
     def refresh_auth_status(self) -> None:
         st = auth_status_for(self._id)
-        extra = ""
-        if self._id == "codex":
-            # quick login status if binary present
-            if find_binary("codex"):
-                extra = ""
         color = {
             "oauth": "#a6e3a1",
             "api_key": "#89b4fa",
             "cookies": "#f9e2af",
+            "web": "#f9e2af",
             "none": "#f38ba8",
             "unknown": "#a6adc8",
         }.get(st.method, "#a6adc8")
@@ -299,15 +416,16 @@ class ConfigDialog(QDialog):
         self.resize(760, 640)
 
         layout = QVBoxLayout(self)
-        title = QLabel("Providers · OAuth & usage source")
+        title = QLabel("Providers · connect methods")
         title.setFont(QFont("Sans", 13, QFont.Weight.Bold))
         layout.addWidget(title)
 
         hint = QLabel(
-            "Config file is the same as official CodexBar / "
+            "Same file as official CodexBar: "
             f"<code>{self._config_path()}</code>. "
-            "OAuth uses provider CLIs (codex login, claude auth login) — "
-            "not the aipc Python port."
+            "OAuth Login only exists for Codex / Claude / Gemini. "
+            "Grok = web cookies or API key; GLM = provider id <b>zai</b> (API key). "
+            "Official CLI has 50+ providers — use “Show all” below."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#a6adc8; font-size:11px;")
@@ -320,6 +438,17 @@ class ConfigDialog(QDialog):
         )
         meta.setStyleSheet("color:#6c7086; font-size:10px;")
         layout.addWidget(meta)
+
+        filt = QHBoxLayout()
+        self._show_all = QCheckBox("Show all providers (full catalog)")
+        self._show_all.setToolTip(
+            "When off: featured list (Codex, Claude, Grok, Z.ai/GLM, …). "
+            "When on: every id from config.json (~50+)."
+        )
+        self._show_all.toggled.connect(lambda _=False: self._load_config())
+        filt.addWidget(self._show_all)
+        filt.addStretch()
+        layout.addLayout(filt)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -384,37 +513,48 @@ class ConfigDialog(QDialog):
         providers = list(data.get("providers") or [])
         by_id = {str(p.get("id")): p for p in providers if isinstance(p, dict)}
 
-        # Ensure primary providers exist
+        # Ensure featured providers exist in map
         for pid in _PRIMARY_PROVIDERS:
             if pid not in by_id:
                 by_id[pid] = {
                     "id": pid,
                     "enabled": pid in {"codex", "claude"},
-                    "source": "auto",
+                    "source": "web" if pid == "grok" else "auto",
                     "cookie_source": "auto",
                     "api_key": None,
                     "cookie_header": None,
                 }
 
-        # Show primary first, then any other enabled from file
+        show_all = bool(getattr(self, "_show_all", None) and self._show_all.isChecked())
         ordered: List[dict] = []
         seen = set()
         for pid in _PRIMARY_PROVIDERS:
-            ordered.append(by_id[pid])
-            seen.add(pid)
-        for pid, prov in by_id.items():
-            if pid not in seen and prov.get("enabled"):
+            if pid in by_id:
+                ordered.append(by_id[pid])
+                seen.add(pid)
+        # Always surface already-enabled providers outside featured list
+        for pid, prov in sorted(by_id.items(), key=lambda kv: kv[0]):
+            if pid in seen:
+                continue
+            if show_all or prov.get("enabled"):
                 ordered.append(prov)
                 seen.add(pid)
 
         self._list_layout.addStretch()
-        # insert before stretch
         stretch = self._list_layout.takeAt(self._list_layout.count() - 1)
         for prov in ordered:
             w = ProviderConfigWidget(prov)
             self._widgets.append(w)
             self._list_layout.addWidget(w)
         self._list_layout.addItem(stretch)
+        if not show_all:
+            note = QLabel(
+                f"Showing featured + enabled ({len(ordered)}). "
+                f"Full catalog on disk: {len(by_id)} — tick “Show all providers”."
+            )
+            note.setStyleSheet("color:#6c7086; font-size:10px;")
+            note.setWordWrap(True)
+            self._list_layout.insertWidget(self._list_layout.count() - 1, note)
 
         # interval from gui extras if any
         gui = data.get("gui") if isinstance(data.get("gui"), dict) else {}
