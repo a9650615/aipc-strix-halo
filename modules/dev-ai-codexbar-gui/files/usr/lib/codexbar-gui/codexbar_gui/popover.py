@@ -526,16 +526,22 @@ class _CostSection(QWidget):
 
 
 class _MenuButton(QPushButton):
-    """Flat list-style action row (official footer)."""
+    """Flat list-style action row (official footer).
+
+    Labels must stay ASCII / basic Latin — symbol fonts are often missing in
+    Flatpak/KDE trays and render as mojibake tofu.
+    """
 
     def __init__(self, text: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(text, parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFlat(True)
+        self.setFont(QFont("Sans Serif", 11))
         self.setStyleSheet(
             f"QPushButton {{"
-            f"  text-align: left; padding: 9px 12px; border: none; border-radius: 8px;"
-            f"  background: transparent; color: {C['text']}; font-size: 12.5px;"
+            f"  text-align: left; padding: 9px 14px; border: none; border-radius: 8px;"
+            f"  background: transparent; color: {C['text']}; font-size: 13px;"
+            f"  font-family: 'Noto Sans', 'DejaVu Sans', 'Sans Serif', sans-serif;"
             f"}}"
             f"QPushButton:hover {{ background: {C['card2']}; }}"
             f"QPushButton:disabled {{ color: {C['dim']}; }}"
@@ -976,24 +982,26 @@ class UsagePopover(QWidget):
         actions.setSpacing(1)
         self._status = QLabel("")
         self._status.setStyleSheet(
-            f"color:{C['dim']}; font-size:10px; border:none; padding: 2px 10px 6px;"
+            f"color:{C['dim']}; font-size:11px; border:none; padding: 4px 14px 6px;"
+            f" font-family: 'Noto Sans', 'DejaVu Sans', sans-serif;"
         )
         actions.addWidget(self._status)
 
-        self._btn_refresh = _MenuButton("  ↻    Refresh")
-        self._btn_refresh.clicked.connect(self.reload)
+        # Plain labels only — unicode icons break under Flatpak fontconfig
+        self._btn_refresh = _MenuButton("Refresh")
+        self._btn_refresh.clicked.connect(lambda: self.reload(quiet=False))
         actions.addWidget(self._btn_refresh)
-        self._web_btn = _MenuButton("  ⌗    Usage Dashboard")
+        self._web_btn = _MenuButton("Usage Dashboard")
         self._web_btn.clicked.connect(self._open_web)
         actions.addWidget(self._web_btn)
-        self._btn_settings = _MenuButton("  ⚙    Settings…")
+        self._btn_settings = _MenuButton("Settings...")
         self._btn_settings.clicked.connect(self._open_settings)
         actions.addWidget(self._btn_settings)
-        self._btn_close = _MenuButton("  ✕    Close panel")
+        self._btn_close = _MenuButton("Close panel")
         self._btn_close.setToolTip("Hide this panel; tray keeps running")
         self._btn_close.clicked.connect(self.hide)
         actions.addWidget(self._btn_close)
-        self._btn_quit = _MenuButton("  ⏻    Quit CodexBar")
+        self._btn_quit = _MenuButton("Quit CodexBar")
         self._btn_quit.setToolTip("Stop tray icon, web UI, and exit completely")
         self._btn_quit.clicked.connect(self._request_quit)
         actions.addWidget(self._btn_quit)
@@ -1137,14 +1145,31 @@ class UsagePopover(QWidget):
         # Keep exact pin — do not re-clamp X
         self.setGeometry(pin.x(), pin.y(), width, height)
 
-    def reload(self) -> None:
+    def reload(self, quiet: bool = False) -> None:
         if self._worker is not None and self._worker.isRunning():
-            self._status.setText("Loading…")
+            if not quiet:
+                self._status.setText("Loading...")
             return
-        self._status.setText("Loading providers…")
+        if not quiet:
+            self._status.setText("Loading providers...")
+            # Disable actions while first load so footer does not look "half live"
+            self._set_footer_enabled(False)
         self._worker = _ReloadWorker(self._host, self._port, parent=self)
         self._worker.done.connect(self._on_reload_done)
         self._worker.start()
+
+    def _set_footer_enabled(self, enabled: bool) -> None:
+        # Quit always stays clickable so the user can leave during a hung load
+        for btn in (
+            getattr(self, "_btn_refresh", None),
+            getattr(self, "_web_btn", None),
+            getattr(self, "_btn_settings", None),
+            getattr(self, "_btn_close", None),
+        ):
+            if btn is not None:
+                btn.setEnabled(enabled)
+        if getattr(self, "_btn_quit", None) is not None:
+            self._btn_quit.setEnabled(True)
 
     def _on_reload_done(self, views: list, costs: dict) -> None:
         self._views = list(views)
@@ -1157,6 +1182,7 @@ class UsagePopover(QWidget):
             self._active = (
                 "overview" if len(self._views) > 1 else (self._views[0].provider if self._views else "overview")
             )
+        self._set_footer_enabled(True)
         self._rebuild_tabs()
         self._rebuild_body()
 
