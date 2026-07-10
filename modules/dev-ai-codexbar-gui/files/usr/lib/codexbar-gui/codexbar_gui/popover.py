@@ -396,6 +396,8 @@ class _ProviderCard(QFrame):
 
 
 class _OverviewRow(QFrame):
+    """One provider on Overview: name + full-width Session (5h) bar for scan."""
+
     def __init__(
         self,
         view: ProviderView,
@@ -411,62 +413,123 @@ class _OverviewRow(QFrame):
             f"}}"
             f"#OverviewRow:hover {{ background:{C['card2']}; }}"
         )
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 10, 10, 10)
-        lay.setSpacing(10)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(6)
 
-        icon = QLabel()
-        icon.setPixmap(
-            paint_dual_window_pixmap(
-                primary_remaining=(
-                    view.primary.remaining_percent if view.primary else None
-                ),
-                secondary_remaining=(
-                    view.secondary.remaining_percent if view.secondary else None
-                ),
-                size=26,
-                credits_remaining=view.credits_remaining,
-                error=not view.ok,
-                show_percent=False,
-            )
-        )
-        lay.addWidget(icon)
-
-        col = QVBoxLayout()
-        col.setSpacing(1)
+        head = QHBoxLayout()
+        head.setSpacing(8)
         name = QLabel(view.display_name)
         name.setStyleSheet(
             f"color:{C['text']}; border:none; background:transparent; "
             f"font-size:13px; font-weight:600;"
         )
-        col.addWidget(name)
-        if view.ok and view.headline_remaining is not None:
-            rem = view.headline_remaining
-            st = QLabel(f"{int(round(rem))}% left")
-            st.setStyleSheet(
-                f"color:{_rem_color(rem)}; border:none; background:transparent; "
+        head.addWidget(name)
+        if view.plan_label:
+            plan = QLabel(view.plan_label)
+            plan.setStyleSheet(
+                f"color:{C['accent2']}; border:none; background:transparent; "
                 f"font-size:11px; font-weight:600;"
             )
-        else:
-            st = QLabel("Unavailable")
-            st.setStyleSheet(
-                f"color:{C['bad']}; border:none; background:transparent; font-size:11px;"
-            )
-            st.setToolTip(view.error or "")
-        col.addWidget(st)
-        lay.addLayout(col, 1)
-
+            head.addWidget(plan)
+        head.addStretch()
         open_btn = QPushButton("Open")
         open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         open_btn.setStyleSheet(
             f"QPushButton {{"
             f"  background:{C['card2']}; color:{C['text']}; border:1px solid {C['border']};"
-            f"  border-radius:8px; padding:6px 12px; font-size:11px;"
+            f"  border-radius:8px; padding:5px 10px; font-size:11px;"
             f"}}"
             f"QPushButton:hover {{ background:{C['border']}; }}"
         )
         open_btn.clicked.connect(on_open)
-        lay.addWidget(open_btn)
+        head.addWidget(open_btn)
+        root.addLayout(head)
+
+        if not view.ok or view.primary is None:
+            err = QLabel(view.error or "Unavailable")
+            err.setWordWrap(True)
+            err.setStyleSheet(
+                f"color:{C['bad']}; border:none; background:transparent; font-size:11px;"
+            )
+            root.addWidget(err)
+            return
+
+        # Session (5h) — main scan bar
+        sess = view.primary
+        rem = sess.remaining_percent
+        color = _rem_color(rem)
+        meta = QHBoxLayout()
+        lab = QLabel("Session (5h)")
+        lab.setStyleSheet(
+            f"color:{C['muted']}; border:none; background:transparent; font-size:11px;"
+        )
+        meta.addWidget(lab)
+        pct = QLabel(f"{int(round(rem))}% left")
+        pct.setStyleSheet(
+            f"color:{color}; border:none; background:transparent; "
+            f"font-size:11px; font-weight:600;"
+        )
+        meta.addWidget(pct)
+        meta.addStretch()
+        if sess.resets_in:
+            rs = QLabel(sess.resets_in)
+            rs.setStyleSheet(
+                f"color:{C['dim']}; border:none; background:transparent; font-size:10px;"
+            )
+            meta.addWidget(rs)
+        root.addLayout(meta)
+        root.addWidget(
+            _PaceBar(
+                remaining=rem,
+                expected_used=sess.pace.expected_used_percent if sess.pace else None,
+                color=color,
+            )
+        )
+        if sess.pace is not None:
+            st = sess.pace.status
+            if st == "reserve":
+                pace_txt = f"{int(round(sess.pace.reserve_percent))}% in reserve"
+                pc = C["good"]
+            elif st == "deficit":
+                pace_txt = f"{int(round(-sess.pace.reserve_percent))}% over pace"
+                pc = C["warn"]
+            else:
+                pace_txt = "On pace"
+                pc = C["muted"]
+            pl = QLabel(pace_txt)
+            pl.setStyleSheet(
+                f"color:{pc}; border:none; background:transparent; "
+                f"font-size:10px; font-weight:600;"
+            )
+            root.addWidget(pl)
+
+        # Weekly as a thin secondary scan line (optional context)
+        if view.secondary is not None:
+            wk = view.secondary
+            wrem = wk.remaining_percent
+            wcolor = _rem_color(wrem)
+            wmeta = QHBoxLayout()
+            wlab = QLabel("Weekly")
+            wlab.setStyleSheet(
+                f"color:{C['dim']}; border:none; background:transparent; font-size:10px;"
+            )
+            wmeta.addWidget(wlab)
+            wpct = QLabel(f"{int(round(wrem))}% left")
+            wpct.setStyleSheet(
+                f"color:{wcolor}; border:none; background:transparent; "
+                f"font-size:10px; font-weight:600;"
+            )
+            wmeta.addWidget(wpct)
+            wmeta.addStretch()
+            root.addLayout(wmeta)
+            thin = _PaceBar(
+                remaining=wrem,
+                expected_used=wk.pace.expected_used_percent if wk.pace else None,
+                color=wcolor,
+            )
+            thin.setFixedHeight(6)
+            root.addWidget(thin)
 
 
 class _ReloadWorker(QThread):
