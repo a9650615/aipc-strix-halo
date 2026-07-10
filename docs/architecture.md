@@ -213,7 +213,8 @@ mic → SenseVoice :9001 → local intent (e.g. open portal) OR /chat :4100
 | `system-aipc-portal` | Localhost management homepage (`aipc portal`) — **manage** |
 
 Control plane: `aipc voice status|loop|start`, `aipc portal open`,  
-`aipc models use agent|122b|free` (heavy LLMs only).  
+`aipc models use agent|122b|free|voice` (heavy LLMs only; `voice` frees
+APU/UMA for Cosy ROCm TTS vs Vulkan agent thrash).  
 
 Canonical write-up: **`docs/voice-pipeline.md`** (closed-loop diagram, baseline table, voice→dashboard phrases).
 

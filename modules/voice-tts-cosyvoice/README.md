@@ -29,7 +29,8 @@ POST http://127.0.0.1:9880/tts
 
 `prompt_wav` is optional (defaults to the clone path). Optional
 `prompt_text` is the transcript of the prompt wav (CosyVoice zero-shot
-input); defaults via `AIPC_CLONE_PROMPT_TEXT`.
+input). When omitted, the service reads a same-name `.txt` file next to the
+WAV, then falls back to `AIPC_CLONE_PROMPT_TEXT`.
 
 When checkout or model weights are missing: `/healthz` → `degraded`,
 `/tts` → **503** with a clear message. The unit does not crash-loop.
@@ -78,3 +79,7 @@ stays up before the venv exists.
 - Target: AMD Strix Halo (gfx1151). Default device is **cpu** until a
   hardware-verified ROCm path is proven; flip
   `AIPC_COSYVOICE_DEVICE` only after that proof.
+- **No NPU TTS path** on Linux (see `docs/voice-pipeline.md` stage table).
+  Optional host drop-in `AIPC_COSYVOICE_DEVICE=cuda` (ROCm iGPU) contends
+  with Lemonade Vulkan agent models — free them with
+  `aipc models use voice` before heavy Cosy sessions.

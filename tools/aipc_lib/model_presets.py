@@ -6,13 +6,17 @@ docs/voice-pipeline.md and docs/architecture.md Phase 3.
 
   - resident-small  (Lemonade FLM / NPU — default /chat brain)
   - SenseVoice      (STT — outside this module, never unload here)
-  - Kokoro          (TTS — outside this module)
+  - Kokoro / CosyVoice (TTS — outside this module; Cosy may hold ROCm iGPU)
   - mem0            (memory — outside this module)
   - portal          (manage UI — outside this module)
 
 Role layer (heavy, exclusive with each other; optional on top of the loop):
   - agent: Lemonade Vulkan agent LLMs (qwythos / coder-agentic / ornith / …)
   - 122b:  Ollama qwen35-122b-q3 (~81GB) — cannot co-reside with agent Vulkan
+
+Voice-priority coexistence:
+  - voice (and free): unload Vulkan giants + Ollama so Cosy ROCm TTS / UMA
+    stop thrashing with agent LLMs; NPU resident-small + STT/TTS units stay.
 
 `aipc models use` only plans LLM unload/warm. The closed loop (STT/TTS/
 mem0/portal + NPU resident-small) stays up regardless of preset.
@@ -40,7 +44,15 @@ PRESETS: dict[str, str] = {
         "Unload heavy role LLMs (Ollama giants + Lemonade Vulkan). "
         "Keeps NPU resident-small; baseline voice/mem0 services untouched."
     ),
+    "voice": (
+        "Voice-priority: same unloads as free (Vulkan agent + Ollama giants) "
+        "so Cosy ROCm/iGPU TTS and UMA are not thrashing with heavy LLMs. "
+        "Keeps NPU resident-small; never stops STT/TTS/mem0 services."
+    ),
 }
+
+# free and voice share the same unload set (heavy role LLMs only).
+VOICE_SAFE_PRESETS = frozenset({"free", "voice"})
 
 # Aliases treated as "giant" Ollama models for agent/free switches.
 GIANT_OLLAMA_ALIASES = frozenset({"qwen35-122b-q3"})
@@ -147,13 +159,31 @@ def plan_switch(
         notes.append("Prefer LiteLLM alias qwen35-122b-q3.")
         notes.append("NPU resident-small is left alone if loaded.")
 
-    elif preset == "free":
+    elif preset in VOICE_SAFE_PRESETS:
         for e in by_alias.values():
             if e.backend == "ollama":
                 maybe_unload(e)
             elif e.backend == "lemonade" and not _is_lemonade_keep(e):
                 maybe_unload(e)
         notes.append("Heavy local models unloaded; NPU resident-small kept.")
+        notes.append(
+            "Does not stop STT/TTS/mem0/portal units — only LLM role weights."
+        )
+        if preset == "voice":
+            notes.append(
+                "Voice-priority: frees APU/UMA from Lemonade Vulkan + Ollama "
+                "giants so Cosy ROCm TTS (when DEVICE=cuda) can run without "
+                "thrashing agent LLMs. Prefer before long Cosy clone sessions."
+            )
+            notes.append(
+                "Closed-loop /chat stays on NPU resident-small; re-enter "
+                "agent role with: aipc models use agent"
+            )
+        else:
+            notes.append(
+                "Alias of voice-priority unload set; use `voice` when "
+                "coordinating Cosy ROCm TTS vs agent Vulkan."
+            )
 
     # Deduplicate unloads by (backend, model_id)
     seen: set[tuple[str, str]] = set()

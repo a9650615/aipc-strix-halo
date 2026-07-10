@@ -743,17 +743,20 @@ def models_use(
     dry_run: bool,
     no_warm: bool,
 ) -> None:
-    """Switch mutually exclusive local-model presets (agent vs 122B).
+    """Switch mutually exclusive local-model presets (agent vs 122B vs voice).
 
     122B (~81GB) and Lemonade Vulkan agent models must not co-reside on
-    128GB UMA. This unloads the wrong side, optionally warms the right
-    side, then prints which LiteLLM alias to use.
+    128GB UMA. `voice` (and `free`) unload those heavies so Cosy ROCm TTS
+    and the NPU closed loop are not thrashing with agent weights. Never
+    stops STT/TTS/mem0 services.
     """
     if list_presets or preset is None:
         for name, desc in sorted(model_presets_mod.PRESETS.items()):
             click.echo(f"{name}: {desc}")
         if preset is None and not list_presets:
-            click.echo("Usage: aipc models use <agent|122b|free>", err=True)
+            click.echo(
+                "Usage: aipc models use <agent|122b|free|voice>", err=True
+            )
             sys.exit(0 if list_presets else 1)
         if list_presets:
             return
@@ -1407,10 +1410,57 @@ def voice_overlay_status() -> None:
     raise SystemExit(code)
 
 
+@voice_overlay_cmd.command("ping")
+def voice_overlay_ping() -> None:
+    """Ping overlay widget control socket (API for other AIPC HUDs)."""
+    ok, resp = voice_ux_mod.overlay_api_ping()
+    click.echo(json.dumps(resp, ensure_ascii=False))
+    raise SystemExit(0 if ok else 1)
+
+
+@voice_overlay_cmd.command("api")
+@click.argument("cmd")
+@click.argument("args", nargs=-1)
+@click.option("--source", default="cli", help="Widget / caller id")
+@click.option("--priority", default=50, type=int, help="Preempt lower-priority holders")
+@click.option("--detail", default="", help="Detail text for set")
+def voice_overlay_api(cmd: str, args: tuple[str, ...], source: str, priority: int, detail: str) -> None:
+    """Call overlay control API (show/hide/raise/set/get/clear/ping).
+
+    Examples:
+      aipc voice overlay api ping
+      aipc voice overlay api set thinking --detail "agent working" --source hermes
+      aipc voice overlay api hide
+    """
+    from aipc_lib import overlay_api
+
+    fields: dict = {}
+    c = cmd.lower()
+    if c == "set":
+        state = args[0] if args else "thinking"
+        fields = {
+            "state": state,
+            "detail": detail or (" ".join(args[1:]) if len(args) > 1 else ""),
+            "source": source,
+            "priority": priority,
+        }
+    elif c == "clear":
+        fields = {"source": source}
+        if args:
+            fields["source"] = args[0]
+    try:
+        resp = overlay_api.rpc(c, **fields)
+    except OSError as exc:
+        click.echo(str(exc), err=True)
+        raise SystemExit(1)
+    click.echo(json.dumps(resp, ensure_ascii=False))
+    raise SystemExit(0 if resp.get("ok") else 1)
+
+
 @main.group("portal", invoke_without_command=True)
 @click.pass_context
 def portal_cmd(ctx: click.Context) -> None:
-    """Localhost AIPC entry portal (service cards + health).
+    """Localhost AIPC manage portal (closed-loop status + actions).
 
     Prefer the installed aipc-portal.service when present; use
     `aipc portal serve` on live hosts before the next bootc switch.

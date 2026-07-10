@@ -20,7 +20,7 @@ complete without leaving the loop:
 
   observe / manage:  aipc portal  http://127.0.0.1:7080/
                      aipc voice status|loop|start
-                     aipc models use agent|122b|free   (heavy LLMs only)
+                     aipc models use agent|122b|free|voice   (heavy LLMs only)
 ```
 
 | Piece | Role in the loop |
@@ -51,7 +51,8 @@ layer) — never as a substitute for baseline `/chat`.
   `sudo systemctl stop ollama.service && sudo systemctl disable ollama.service`  
   (see `/etc/aipc/models/122b.disabled` and `modules/llm-ollama/README.md`).  
   Re-enable: `sudo systemctl enable --now ollama.service && aipc models use 122b`.  
-  Prefer `aipc models use free` so only NPU `resident-small` stays warm.
+  Prefer `aipc models use voice` (or `free`) so only NPU `resident-small`
+  stays warm and Cosy ROCm/iGPU TTS is not thrashing with agent Vulkan.
 
 ### How to trigger a turn
 
@@ -225,9 +226,22 @@ is hardware-proven and explicitly adopted:
 | **Kokoro** | Neural TTS (`aipc-kokoro`, :8880) until CosyVoice clone is ready |
 | **mem0** | Local memory (`aipc-mem0`) |
 
-`aipc models use agent|122b|free` only switches **heavy role LLMs**. It must
-not stop SenseVoice / Kokoro / mem0. 122B vs agent Vulkan is exclusive at
-the **role** layer only; baseline coexists with either.
+`aipc models use agent|122b|free|voice` only switches **heavy role LLMs**.
+It must not stop SenseVoice / Kokoro / Cosy / mem0. 122B vs agent Vulkan is
+exclusive at the **role** layer only; baseline coexists with either.
+
+**Voice ↔ LLM thrash (UMA / iGPU):** CosyVoice on this host may run
+`AIPC_COSYVOICE_DEVICE=cuda` (ROCm drop-in) while Lemonade agent models use
+Vulkan on the same APU. Before long Cosy clone sessions or when TTS hangs /
+OOMs under Hermes, run:
+
+```bash
+aipc models use voice --dry-run   # plan only
+aipc models use voice             # unload Vulkan + Ollama giants; keep NPU
+```
+
+`voice` and `free` share the same unload set; `voice` notes Cosy coexistence.
+Re-enter tools role with `aipc models use agent`.
 
 ## Role layer (optional; on top of baseline)
 
@@ -245,8 +259,8 @@ above. Consumers go through LiteLLM aliases (CLAUDE.md §7).
 
 Hard constraints from system architecture:
 
-1. **Baseline stays up** when agent/122b/free switches — NPU `resident-small`
-   + STT/TTS/mem0/portal are never torn down by presets.
+1. **Baseline stays up** when agent/122b/free/voice switches — NPU
+   `resident-small` + STT/TTS/mem0/portal are never torn down by presets.
 2. **Voice `/chat` default remains `resident-small`** — Qwythos is not the
    closed-loop think piece.
 3. **Hermes (and similar agent CLIs) → `qwythos-9b` via LiteLLM** when the
@@ -286,7 +300,7 @@ aipc portal open           # open http://127.0.0.1:7080/ (auto-start if needed)
 aipc portal serve          # foreground server if aipc-portal.service not installed yet
 
 aipc doctor                # module verify.sh + voice static checks
-aipc models use agent|122b|free   # heavy LLMs only; never tears baseline
+aipc models use agent|122b|free|voice   # heavy LLMs only; never tears baseline
 aipc mem0 migrate-from-saas       # optional SaaS import
 aipc config --mem0-local          # point Claude plugin at local mem0
 ```
@@ -310,30 +324,36 @@ best-efforts `runuser` + `DISPLAY=:0`.
 
 ## Where each stage runs (Strix Halo / Linux)
 
-| Stage | Desired | Reality on this host (2026-07-10) |
-|---|---|---|
-| Wake (always-on) | **NPU** ~100 mW | Energy VAD on CPU today; openWakeWord→NPU is future |
-| STT (SenseVoice) | NPU or iGPU | **CPU** (ROCm `cuda:0` segfaults SenseVoice — known ceiling) |
-| LLM (chat) | NPU small + iGPU large | Lemonade **FLM on NPU** (`gemma4-it-e4b-FLM`) + Vulkan iGPU for big models |
-| **TTS (CosyVoice clone)** | ideally NPU | **CPU** on :9880 — no Linux NPU TTS path yet |
-| **TTS (Kokoro fallback)** | ideally NPU | **CPU container** on :8880 — same NPU gap |
+| Stage | Desired | Reality on this host (2026-07-11) | NPU feasibility |
+|---|---|---|---|
+| Wake (always-on) | **NPU** ~100 mW | **CPU** energy VAD in `aipc-voice-wake` today | Deferred: openWakeWord/ONNX→NPU when models + EP land |
+| STT (SenseVoice) | NPU or iGPU | **CPU** (`:9001`) — ROCm `cuda:0` segfaults SenseVoice (known ceiling) | Deferred for SenseVoice-on-ROCm; FLM Whisper ASR is a future swap candidate, not shipped |
+| LLM (closed-loop chat) | NPU small | **NPU now** — Lemonade FLM `gemma4-it-e4b-FLM` / LiteLLM `resident-small` | **In use** — keep loaded under every preset including `voice`/`free` |
+| LLM (agent role) | iGPU large | **Vulkan iGPU** — `coder-agentic` / `qwythos-9b` / peers via Lemonade | Not NPU; unload with `aipc models use voice` when Cosy needs APU |
+| **TTS (CosyVoice clone)** | ideally NPU | **CPU default** in module unit; **live drop-in may set `DEVICE=cuda` (ROCm iGPU)** on `:9880` | **No** Linux NPU Cosy backend — do not claim NPU TTS. ROCm path contends with Vulkan agents → coordinate via `voice` preset |
+| **TTS (Kokoro fallback)** | ideally NPU | **CPU container** on `:8880` | **No** — Lemonade `kokoro` recipe is CPU-only; not FLM |
 
-### Why TTS is not on the NPU (yet)
+### Why Cosy/Kokoro are not on the NPU (yet)
 
 1. **Lemonade `kokoro-v1`** is recipe `kokoro` → **CPU** (official matrix:
    “Text-to-speech | kokoro | cpu”). It is **not** FLM/NPU. Loading it also
    needs the `kokoros` binary from GitHub releases; download can 504.
 2. **FLM (XDNA2 NPU on Linux)** serves LLM / ASR / embed / rerank — list has
-   `whisper-v3:turbo` and chat models, **no TTS tag**.
+   `whisper-v3:turbo` and chat models, **no TTS tag**. There is no proven
+   CosyVoice or Kokoro NPU path on Linux x86 for this product.
 3. **AMD Vitis AI ONNX EP** for custom ONNX TTS on Ryzen AI is **Windows-first**;
    Linux x86 NPU offload is incomplete (community: missing `voe` / EP).
-4. **CosyVoice 2** runs as a native Python service on **CPU** for the same
-   reason — there is no shipped NPU backend for clone TTS on Linux yet.
+4. **CosyVoice 3** (Fun-CosyVoice3 on this host) has no shipped NPU backend.
+   Module default remains `AIPC_COSYVOICE_DEVICE=cpu`. Optional ROCm
+   (`DEVICE=cuda` + FP16) is a **host drop-in** for latency — it shares the
+   APU with Lemonade Vulkan, so operators free the agent side with
+   `aipc models use voice` rather than inventing dual full-throughput.
 
-So the correct placement today is: **keep NPU free for always-on / small LLM /
-future STT**, and run **CosyVoice (preferred zh clone) + Kokoro (fallback / en)
-on CPU**. Neither TTS path uses the NPU. When AMD/Lemonade ship NPU TTS on
-Linux, swap the backend URL only — client stays speech-shaped.
+So the correct placement today is: **keep NPU for always-on small LLM
+(`resident-small`) and future STT**, run **Kokoro on CPU**, run **Cosy on
+CPU or optional ROCm iGPU** (never NPU), and use **`aipc models use voice`**
+to avoid Cosy↔Vulkan thrash. When AMD/Lemonade ship NPU TTS on Linux, swap
+the backend URL only — client stays speech-shaped.
 
 ## Stage 3: Wake + mute + hotkey
 
