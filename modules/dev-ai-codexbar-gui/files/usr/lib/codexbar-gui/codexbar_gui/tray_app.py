@@ -306,11 +306,15 @@ class CodexBarApp:
             QSystemTrayIcon.ActivationReason.MiddleClick,
             QSystemTrayIcon.ActivationReason.Context,
         ):
-            # Capture pointer immediately — Wayland popup positioner needs the
-            # same event turn as the tray click (geometry() is empty on KDE).
             from PySide6.QtGui import QCursor
 
             click = QCursor.pos()
+            logger.info(
+                "tray activated reason=%s click=%s platform=%s",
+                reason,
+                click,
+                self._app.platformName() if self._app else "?",
+            )
             if self._popover is not None and self._popover.isVisible():
                 self._popover.hide()
                 return
