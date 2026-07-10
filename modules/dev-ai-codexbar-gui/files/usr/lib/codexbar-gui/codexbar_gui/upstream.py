@@ -93,12 +93,61 @@ class PaceInfo:
     will_last_to_reset: bool
     summary: str
     source: str = "computed"  # or "cli"
+    stage: str = ""  # official: farBehind / slightlyBehind / onPace / ahead / …
+    runs_out_in: str = ""  # e.g. "6h 20m" when deficit
 
     @property
     def status(self) -> str:
         if abs(self.reserve_percent) < 2.0:
             return "on_pace"
         return "reserve" if self.reserve_percent > 0 else "deficit"
+
+    @property
+    def show(self) -> bool:
+        """Official: hide pace until ~3% of the window has elapsed."""
+        return self.expected_used_percent >= 3.0
+
+
+def format_pace_lines(pace: Optional[PaceInfo]) -> Optional[dict]:
+    """Official menu-card pace copy (docs/ui.md).
+
+    Returns dict with:
+      primary   — colored main line (e.g. "52% in reserve")
+      secondary — muted explanation ("Slower than expected")
+      right     — "Lasts until reset" / "May run out early" / "Runs out in …"
+      tone      — reserve | deficit | on_pace
+    """
+    if pace is None or not pace.show:
+        return None
+    st = pace.status
+    n = int(round(abs(pace.reserve_percent)))
+    exp = int(round(pace.expected_used_percent))
+    if st == "reserve":
+        primary = f"{n}% in reserve"
+        secondary = f"Slower than expected · expected {exp}% used by now"
+        right = "Lasts until reset"
+        tone = "reserve"
+    elif st == "deficit":
+        primary = f"{n}% in deficit"
+        secondary = f"Faster than expected · expected {exp}% used by now"
+        if pace.runs_out_in:
+            right = f"Runs out in ~{pace.runs_out_in}"
+        elif not pace.will_last_to_reset:
+            right = "May run out early"
+        else:
+            right = "May run out early"
+        tone = "deficit"
+    else:
+        primary = "On pace"
+        secondary = f"Matching expected burn · ~{exp}% of window elapsed"
+        right = "Lasts until reset" if pace.will_last_to_reset else "Watch usage"
+        tone = "on_pace"
+    return {
+        "primary": primary,
+        "secondary": secondary,
+        "right": right,
+        "tone": tone,
+    }
 
 
 def compute_pace(
@@ -129,10 +178,13 @@ def compute_pace(
     reserve = expected_used - actual  # + = under budget
     will_last = actual <= expected_used + 0.5  # tiny slack
 
+    runs_out = ""
     if reserve >= 2.0:
         summary = f"{int(round(reserve))}% in reserve · Lasts until reset"
+        stage = "behind"
     elif reserve <= -2.0:
         over = -reserve
+        stage = "ahead"
         # Rough time-to-exhaustion at current average burn rate
         if actual > 0.5 and elapsed_frac > 0.01:
             burn_per_sec = actual / (elapsed_frac * window_secs)
@@ -141,16 +193,17 @@ def compute_pace(
                 h = int(secs_to_empty // 3600)
                 m = int((secs_to_empty % 3600) // 60)
                 if h > 0:
-                    eta = f"{h}h {m}m" if m else f"{h}h"
+                    runs_out = f"{h}h {m}m" if m else f"{h}h"
                 else:
-                    eta = f"{m}m"
-                summary = f"{int(round(over))}% over pace · May run out in ~{eta}"
+                    runs_out = f"{m}m"
+                summary = f"{int(round(over))}% in deficit · Runs out in ~{runs_out}"
             else:
-                summary = f"{int(round(over))}% over pace · Faster than expected"
+                summary = f"{int(round(over))}% in deficit · Faster than expected"
         else:
-            summary = f"{int(round(over))}% over pace · Faster than expected"
+            summary = f"{int(round(over))}% in deficit · Faster than expected"
     else:
         summary = "On pace · Lasts until reset"
+        stage = "onPace"
 
     return PaceInfo(
         reserve_percent=reserve,
@@ -158,6 +211,8 @@ def compute_pace(
         will_last_to_reset=will_last,
         summary=summary,
         source="computed",
+        stage=stage,
+        runs_out_in=runs_out,
     )
 
 
@@ -167,14 +222,15 @@ def _pace_from_cli(pace_blob: Optional[dict]) -> Optional[PaceInfo]:
     summary = pace_blob.get("summary")
     if not summary:
         return None
+    summary_s = str(summary)
     try:
         delta = float(pace_blob.get("deltaPercent"))
     except (TypeError, ValueError):
         # e.g. "67% in reserve" without delta
         delta = 0.0
-        low = str(summary).lower()
+        low = summary_s.lower()
         if "reserve" in low:
-            m = re.search(r"(-?\d+(?:\.\d+)?)\s*%", str(summary))
+            m = re.search(r"(-?\d+(?:\.\d+)?)\s*%", summary_s)
             if m:
                 # "67% in reserve" → +67 reserve; official delta was often negative
                 delta = abs(float(m.group(1)))
@@ -182,28 +238,47 @@ def _pace_from_cli(pace_blob: Optional[dict]) -> Optional[PaceInfo]:
             delta = -abs(delta) if delta else -1.0
     will = pace_blob.get("willLastToReset")
     if will is None:
-        will = delta >= 0
+        will = "lasts until reset" in summary_s.lower() or delta <= 0
     try:
         expected = float(pace_blob.get("expectedUsedPercent", 0.0))
     except (TypeError, ValueError):
         expected = 0.0
-    # Official deltaPercent often means "ahead of schedule" as negative
-    # (e.g. -67 → 67% in reserve). Prefer summary keywords.
-    low = str(summary).lower()
-    if "reserve" in low and delta < 0:
-        reserve = -delta
-    elif "reserve" in low:
-        reserve = abs(delta)
-    elif delta != 0:
-        reserve = -delta  # negative delta → reserve in some builds
+    # Parse "Expected 99% used" from pipe-summary when field missing
+    if expected <= 0:
+        m = re.search(r"expected\s+(\d+(?:\.\d+)?)\s*%\s*used", summary_s, re.I)
+        if m:
+            expected = float(m.group(1))
+    # Official: deltaPercent -52 + "52% in reserve" / stage farBehind → reserve +52
+    low = summary_s.lower()
+    stage = str(pace_blob.get("stage") or "")
+    stage_l = stage.lower()
+    if "reserve" in low or "behind" in stage_l:
+        reserve = abs(delta) if delta != 0 else 0.0
+        if reserve == 0.0:
+            m = re.search(r"(\d+(?:\.\d+)?)\s*%\s*in\s*reserve", low)
+            if m:
+                reserve = float(m.group(1))
+    elif "deficit" in low or "over pace" in low or "faster" in low or "ahead" in stage_l:
+        reserve = -abs(delta) if delta != 0 else -1.0
+        if delta == 0:
+            m = re.search(r"(\d+(?:\.\d+)?)\s*%\s*in\s*deficit", low)
+            if m:
+                reserve = -float(m.group(1))
     else:
-        reserve = 0.0
+        # Default official sign: negative delta → reserve
+        reserve = -delta
+    runs_out = ""
+    m = re.search(r"run(?:s)? out in\s*~?\s*([^|]+)", summary_s, re.I)
+    if m:
+        runs_out = m.group(1).strip()
     return PaceInfo(
         reserve_percent=reserve,
         expected_used_percent=expected,
         will_last_to_reset=bool(will),
-        summary=str(summary),
+        summary=summary_s,
         source="cli",
+        stage=stage,
+        runs_out_in=runs_out,
     )
 
 

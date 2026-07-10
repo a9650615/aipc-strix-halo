@@ -152,7 +152,8 @@ def test_compute_pace_deficit_when_over_burn() -> None:
     assert pace is not None
     assert pace.reserve_percent < -10
     assert pace.status == "deficit"
-    assert "over pace" in pace.summary.lower() or "faster" in pace.summary.lower()
+    low = pace.summary.lower()
+    assert "deficit" in low or "over pace" in low or "faster" in low or "run" in low
 
 
 def test_parse_attaches_pace_to_windows() -> None:

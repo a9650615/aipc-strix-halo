@@ -40,10 +40,12 @@ from codexbar_gui.cost import CostView, fetch_cost
 from codexbar_gui.icon_updater import paint_dual_window_pixmap
 from codexbar_gui.menu_bar import load_menu_bar_settings, order_overview_views
 from codexbar_gui.upstream import (
+    PaceInfo,
     ProviderView,
     RateWindowView,
     fetch_enabled_providers,
     find_codexbar_binary,
+    format_pace_lines,
 )
 
 logger = logging.getLogger("codexbar_gui.popover")
@@ -319,6 +321,74 @@ class _TabChip(QFrame):
                 )
 
 
+def _pace_tone_color(tone: str) -> str:
+    if tone == "reserve":
+        return C["good"]
+    if tone == "deficit":
+        return C["warn"]
+    return C["muted"]
+
+
+def _add_pace_footer(
+    root: QVBoxLayout,
+    *,
+    remaining: float,
+    rem_color: str,
+    resets_in: str,
+    pace: Optional[PaceInfo],
+) -> None:
+    """Official card footer: % left + pace vs expected | resets + lasts-until."""
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    left = QVBoxLayout()
+    left.setSpacing(1)
+    pct = QLabel(f"{int(round(remaining))}% left")
+    pct.setStyleSheet(
+        f"color:{rem_color}; border:none; background:transparent; "
+        f"font-size:12px; font-weight:600;"
+    )
+    left.addWidget(pct)
+
+    lines = format_pace_lines(pace)
+    if lines is not None:
+        pc = _pace_tone_color(lines["tone"])
+        pl = QLabel(lines["primary"])
+        pl.setStyleSheet(
+            f"color:{pc}; border:none; background:transparent; "
+            f"font-size:11px; font-weight:600;"
+        )
+        left.addWidget(pl)
+        sec = QLabel(lines["secondary"])
+        sec.setWordWrap(True)
+        sec.setStyleSheet(
+            f"color:{C['dim']}; border:none; background:transparent; font-size:10px;"
+        )
+        left.addWidget(sec)
+    row.addLayout(left, 1)
+
+    right = QVBoxLayout()
+    right.setSpacing(1)
+    resets = QLabel(resets_in or "")
+    resets.setAlignment(Qt.AlignmentFlag.AlignRight)
+    resets.setStyleSheet(
+        f"color:{C['muted']}; border:none; background:transparent; font-size:11px;"
+    )
+    right.addWidget(resets)
+    if lines is not None:
+        ll = QLabel(lines["right"])
+        ll.setAlignment(Qt.AlignmentFlag.AlignRight)
+        rc = C["good"] if lines["tone"] == "reserve" else (
+            C["warn"] if lines["tone"] == "deficit" else C["dim"]
+        )
+        ll.setStyleSheet(
+            f"color:{rc}; border:none; background:transparent; "
+            f"font-size:11px; font-weight:600;"
+        )
+        right.addWidget(ll)
+    row.addLayout(right)
+    root.addLayout(row)
+
+
 class _UsageMeter(QWidget):
     def __init__(self, win: RateWindowView, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -342,57 +412,13 @@ class _UsageMeter(QWidget):
                 height=12,
             )
         )
-
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        left = QVBoxLayout()
-        left.setSpacing(1)
-        pct = QLabel(f"{int(round(rem))}% left")
-        pct.setStyleSheet(
-            f"color:{color}; border:none; background:transparent; "
-            f"font-size:12px; font-weight:600;"
+        _add_pace_footer(
+            root,
+            remaining=rem,
+            rem_color=color,
+            resets_in=win.resets_in or "",
+            pace=win.pace,
         )
-        left.addWidget(pct)
-        if win.pace is not None:
-            st = win.pace.status
-            if st == "reserve":
-                short = f"{int(round(win.pace.reserve_percent))}% in reserve"
-                pc = C["good"]
-            elif st == "deficit":
-                short = f"{int(round(-win.pace.reserve_percent))}% over pace"
-                pc = C["warn"]
-            else:
-                short = "On pace"
-                pc = C["muted"]
-            pl = QLabel(short)
-            pl.setStyleSheet(
-                f"color:{pc}; border:none; background:transparent; "
-                f"font-size:11px; font-weight:600;"
-            )
-            left.addWidget(pl)
-        row.addLayout(left, 1)
-
-        right = QVBoxLayout()
-        right.setSpacing(1)
-        resets = QLabel(win.resets_in or "")
-        resets.setAlignment(Qt.AlignmentFlag.AlignRight)
-        resets.setStyleSheet(
-            f"color:{C['muted']}; border:none; background:transparent; font-size:11px;"
-        )
-        right.addWidget(resets)
-        if win.pace is not None:
-            if win.pace.status == "deficit":
-                lasts = "May run out early"
-            else:
-                lasts = "Lasts until reset"
-            ll = QLabel(lasts)
-            ll.setAlignment(Qt.AlignmentFlag.AlignRight)
-            ll.setStyleSheet(
-                f"color:{C['dim']}; border:none; background:transparent; font-size:11px;"
-            )
-            right.addWidget(ll)
-        row.addLayout(right)
-        root.addLayout(row)
 
 
 def _fmt_tokens_short(n: int) -> str:
@@ -787,32 +813,14 @@ class _OverviewRow(QFrame):
                     height=14,
                 )
             )
-            foot = QHBoxLayout()
-            pct = QLabel(f"{int(round(rem))}% left")
-            pct.setStyleSheet(
-                f"color:{color}; border:none; background:transparent; "
-                f"font-size:12px; font-weight:600;"
+            # Official: % left + reserve/deficit vs expected | resets + lasts-until
+            _add_pace_footer(
+                root,
+                remaining=rem,
+                rem_color=color,
+                resets_in=sess.resets_in or "",
+                pace=sess.pace,
             )
-            foot.addWidget(pct)
-            if sess.pace is not None:
-                st = sess.pace.status
-                if st == "reserve":
-                    pace_txt = f"{int(round(sess.pace.reserve_percent))}% in reserve"
-                    pc = C["good"]
-                elif st == "deficit":
-                    pace_txt = f"{int(round(-sess.pace.reserve_percent))}% over pace"
-                    pc = C["warn"]
-                else:
-                    pace_txt = "On pace"
-                    pc = C["muted"]
-                pl = QLabel(pace_txt)
-                pl.setStyleSheet(
-                    f"color:{pc}; border:none; background:transparent; "
-                    f"font-size:11px; font-weight:600;"
-                )
-                foot.addWidget(pl)
-            foot.addStretch()
-            root.addLayout(foot)
         else:
             err = QLabel(view.error or "Unavailable")
             err.setWordWrap(True)
