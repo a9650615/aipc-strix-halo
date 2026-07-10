@@ -34,7 +34,7 @@ CLONE_WAV = os.environ.get(
 )
 PROMPT_TEXT_DEFAULT = os.environ.get(
     "AIPC_CLONE_PROMPT_TEXT",
-    "希望你以后能够做的比我还好呦。",
+    "希望你以后能够做的比我还好呦。 <|endofprompt|>",
 )
 COSYVOICE_ROOT = os.environ.get(
     "AIPC_COSYVOICE_ROOT",
@@ -61,18 +61,31 @@ def _model_present() -> bool:
     p = Path(MODEL_DIR)
     if not p.is_dir():
         return False
-    # CosyVoice3 needs the core LLM, flow, tokenizer and speaker files.
-    required_all = (
-        "llm.pt",
-        "flow.pt",
-        "hift.pt",
-        "speech_tokenizer_v3.onnx",
-        "campplus.onnx",
-        "cosyvoice3.yaml",
-        "configuration.json",
-        "CosyVoice-BlankEN/model.safetensors",
+    def present(name: str) -> bool:
+        return (p / name).is_file() and (p / name).stat().st_size > 0
+
+    # CosyVoice3 ships either llm.pt or llm.rl.pt depending on the variant.
+    return all(
+        [
+            present("flow.pt"),
+            present("hift.pt"),
+            present("speech_tokenizer_v3.onnx"),
+            present("campplus.onnx"),
+            present("cosyvoice3.yaml"),
+            present("configuration.json"),
+            present("CosyVoice-BlankEN/model.safetensors"),
+            present("llm.pt") or present("llm.rl.pt"),
+        ]
     )
-    return all((p / name).is_file() and (p / name).stat().st_size > 0 for name in required_all)
+
+
+def _ensure_llm_alias() -> None:
+    p = Path(MODEL_DIR)
+    llm_pt = p / "llm.pt"
+    llm_rl = p / "llm.rl.pt"
+    if llm_pt.exists() or not llm_rl.is_file():
+        return
+    llm_pt.symlink_to("llm.rl.pt")
 
 
 def _checkout_present() -> bool:
@@ -102,6 +115,7 @@ def _load_model():
                 f"CosyVoice checkout missing at {CHECKOUT}; "
                 "install runtime under /var/lib/aipc-voice/cosyvoice/"
             )
+        _ensure_llm_alias()
         if not _model_present():
             raise RuntimeError(
                 f"CosyVoice3 model missing at {MODEL_DIR}; "
@@ -149,6 +163,8 @@ def synthesize_wav(
         raise FileNotFoundError(f"prompt_wav not found: {wav_path}")
     model = _load_model()
     ptext = prompt_text if prompt_text is not None else PROMPT_TEXT_DEFAULT
+    if "<|endofprompt|>" not in ptext:
+        ptext = f"{ptext.rstrip()} <|endofprompt|>"
 
     import torch  # type: ignore
     import torchaudio  # type: ignore

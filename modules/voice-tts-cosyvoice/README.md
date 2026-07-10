@@ -46,7 +46,7 @@ service is a Python venv + native unit, matching `voice-stt-sensevoice`.
 | When | What |
 |---|---|
 | **Image build** (`post-install.sh`) | `mkdir -p` persona / model / install dirs; `systemctl enable aipc-voice-tts-cosyvoice.service`. **No** model download, **no** `systemctl --now`, **no** curl. |
-| **Runtime** (manual or first-boot oneshot — not shipped yet) | `git clone` CosyVoice into `/var/lib/aipc-voice/cosyvoice/CosyVoice`, create `venv`, `pip install` deps, pull `Fun-CosyVoice3-0.5B-2512` into the model dir. Then start/restart the unit. |
+| **Runtime** (manual or first-boot oneshot — not shipped yet) | `git clone` CosyVoice into `/var/lib/aipc-voice/cosyvoice/CosyVoice`, create `venv`, `pip install setuptools` plus the CosyVoice deps, pull `Fun-CosyVoice3-0.5B-2512` into the model dir. Then start/restart the unit. |
 
 Host Python 3.11 is available on this machine for live experiments
 (`~/.local/bin/python3.11`); the image path prefers the runtime venv
