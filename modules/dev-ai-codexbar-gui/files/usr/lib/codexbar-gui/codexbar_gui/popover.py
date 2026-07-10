@@ -515,21 +515,30 @@ class UsagePopover(QWidget):
         self._worker: Optional[_ReloadWorker] = None
         self._tab_buttons: Dict[str, QPushButton] = {}
 
+        # Single continuous surface — avoids black voids between scroll/chrome
         self.setStyleSheet(
             f"#CodexBarPopover {{"
-            f"  background: {C['bg']};"
+            f"  background: {C['surface']};"
             f"  border: 1px solid {C['border']};"
             f"  border-radius: 16px;"
             f"}}"
             f"QLabel {{ color: {C['text']}; background: transparent; }}"
-            f"QScrollBar:vertical {{ width: 8px; background: transparent; }}"
+            f"QScrollArea {{ background: {C['surface']}; border: none; }}"
+            f"QScrollArea > QWidget > QWidget {{ background: {C['surface']}; }}"
+            f"QScrollBar:vertical {{ width: 8px; background: {C['surface']}; margin: 2px; }}"
             f"QScrollBar::handle:vertical {{"
             f"  background: {C['border']}; border-radius: 4px; min-height: 24px;"
             f"}}"
             f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
+            f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{"
+            f"  background: {C['surface']};"
+            f"}}"
         )
+        self.setAutoFillBackground(True)
+        pal = self.palette()
+        pal.setColor(self.backgroundRole(), QColor(C["surface"]))
+        self.setPalette(pal)
 
-        # Soft shadow when compositor allows
         try:
             shadow = QGraphicsDropShadowEffect(self)
             shadow.setBlurRadius(28)
@@ -544,17 +553,17 @@ class UsagePopover(QWidget):
         outer.setSpacing(0)
 
         # Pill tab track
-        tab_wrap = QFrame()
-        tab_wrap.setObjectName("TabTrack")
-        tab_wrap.setStyleSheet(
+        self._tab_wrap = QFrame()
+        self._tab_wrap.setObjectName("TabTrack")
+        self._tab_wrap.setStyleSheet(
             f"#TabTrack {{"
             f"  background: {C['surface']};"
-            f"  border-bottom: 1px solid {C['border']};"
+            f"  border: none;"
             f"  border-top-left-radius: 16px; border-top-right-radius: 16px;"
             f"}}"
         )
-        tab_outer = QVBoxLayout(tab_wrap)
-        tab_outer.setContentsMargins(12, 12, 12, 10)
+        tab_outer = QVBoxLayout(self._tab_wrap)
+        tab_outer.setContentsMargins(12, 12, 12, 8)
         self._tab_track = QFrame()
         self._tab_track.setObjectName("PillTrack")
         self._tab_track.setStyleSheet(
@@ -567,38 +576,46 @@ class UsagePopover(QWidget):
         self._tabs.setContentsMargins(3, 3, 3, 3)
         self._tabs.setSpacing(2)
         tab_outer.addWidget(self._tab_track)
-        outer.addWidget(tab_wrap)
+        outer.addWidget(self._tab_wrap, 0)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }"
-            "QScrollArea QWidget { background: transparent; }"
-        )
-        self._scroll.viewport().setStyleSheet("background: transparent;")
+        self._scroll.setAutoFillBackground(True)
+        self._scroll.viewport().setAutoFillBackground(True)
+        sp = self._scroll.palette()
+        sp.setColor(self._scroll.backgroundRole(), QColor(C["surface"]))
+        self._scroll.setPalette(sp)
+        self._scroll.viewport().setPalette(sp)
+        self._scroll.viewport().setStyleSheet(f"background: {C['surface']};")
         self._body = QWidget()
-        self._body.setStyleSheet("background: transparent;")
+        self._body.setAutoFillBackground(True)
+        self._body.setStyleSheet(f"background: {C['surface']};")
+        bp = self._body.palette()
+        bp.setColor(self._body.backgroundRole(), QColor(C["surface"]))
+        self._body.setPalette(bp)
         self._body_layout = QVBoxLayout(self._body)
-        self._body_layout.setContentsMargins(14, 12, 14, 8)
+        self._body_layout.setContentsMargins(14, 8, 14, 12)
         self._body_layout.setSpacing(10)
+        self._body_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._scroll.setWidget(self._body)
         self._scroll.setMinimumWidth(400)
-        self._scroll.setMaximumHeight(540)
+        # stretch=0 so scroll does not eat infinite empty black space
         outer.addWidget(self._scroll, 1)
 
         # Menu footer
-        foot = QFrame()
-        foot.setObjectName("Footer")
-        foot.setStyleSheet(
+        self._foot = QFrame()
+        self._foot.setObjectName("Footer")
+        self._foot.setStyleSheet(
             f"#Footer {{"
-            f"  background: {C['surface']};"
+            f"  background: {C['card']};"
             f"  border-top: 1px solid {C['border']};"
             f"  border-bottom-left-radius: 16px; border-bottom-right-radius: 16px;"
             f"}}"
         )
-        actions = QVBoxLayout(foot)
+        actions = QVBoxLayout(self._foot)
         actions.setContentsMargins(8, 6, 8, 8)
         actions.setSpacing(1)
         self._status = QLabel("")
@@ -619,11 +636,12 @@ class UsagePopover(QWidget):
         self._btn_close = _MenuButton("  ✕    Close")
         self._btn_close.clicked.connect(self.hide)
         actions.addWidget(self._btn_close)
-        outer.addWidget(foot)
+        outer.addWidget(self._foot, 0)
 
         self._set_web_url(web_url)
         self.setMinimumWidth(400)
-        self.resize(420, 560)
+        self.setMinimumHeight(280)
+        self.resize(420, 520)
 
     def set_web_url(self, url: Optional[str]) -> None:
         self._set_web_url(url)
@@ -766,6 +784,7 @@ class UsagePopover(QWidget):
             el.addWidget(d)
             self._body_layout.addWidget(empty)
             self._status.setText("Empty")
+            self._fit_height()
             return
 
         if self._active == "overview":
@@ -784,15 +803,59 @@ class UsagePopover(QWidget):
             cost = self._costs.get(view.provider)
             self._body_layout.addWidget(_ProviderCard(view, cost=cost))
 
-        self._body_layout.addStretch()
+        # No addStretch() — with setWidgetResizable it paints a tall black void.
+
         ok_n = sum(1 for v in self._views if v.ok)
         self._status.setText(
             f"{ok_n}/{len(self._views)} providers · official CLI"
             + (f" · web {self._web_url.replace('http://', '')}" if self._web_url else "")
         )
+        self._fit_height()
+
+    def _fit_height(self) -> None:
+        """Size window to content; scroll only when taller than screen budget."""
+        QApplication.processEvents()
         self._body.adjustSize()
-        hint_h = min(640, max(360, self._body.sizeHint().height() + 170))
-        self.resize(max(self.width(), 420), hint_h)
+        content_h = max(
+            self._body.sizeHint().height(),
+            self._body_layout.sizeHint().height(),
+            80,
+        )
+        # Chrome: tabs + footer measured when available
+        tab_h = self._tab_wrap.sizeHint().height() if hasattr(self, "_tab_wrap") else 56
+        foot_h = self._foot.sizeHint().height() if hasattr(self, "_foot") else 150
+        if tab_h < 40:
+            tab_h = 56
+        if foot_h < 80:
+            foot_h = 150
+
+        screen = QGuiApplication.primaryScreen()
+        avail = screen.availableGeometry().height() if screen else 900
+        # Leave room for panel margins on Plasma
+        max_total = max(360, int(avail * 0.88))
+        chrome = tab_h + foot_h + 8
+        max_scroll = max(160, max_total - chrome)
+
+        # Prefer full content height when it fits; otherwise scroll.
+        scroll_h = min(content_h + 8, max_scroll)
+        # Ensure enough room for card + cost chart
+        scroll_h = max(scroll_h, min(content_h + 8, max_scroll))
+        if content_h > max_scroll:
+            scroll_h = max_scroll
+        else:
+            # Tight fit — no empty void below last card
+            scroll_h = content_h + 12
+
+        self._scroll.setMinimumHeight(min(scroll_h, max_scroll))
+        self._scroll.setMaximumHeight(max_scroll)
+        self._scroll.setFixedHeight(min(scroll_h, max_scroll))
+
+        total = chrome + min(scroll_h, max_scroll)
+        total = max(280, min(total, max_total))
+        width = max(self.width(), 420)
+        self.resize(width, total)
+        self._body.updateGeometry()
+        self.updateGeometry()
 
     def _open_settings(self) -> None:
         from codexbar_gui.config_dialog import ConfigDialog
