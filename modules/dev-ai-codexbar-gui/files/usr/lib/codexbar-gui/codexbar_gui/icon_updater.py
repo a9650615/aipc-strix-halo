@@ -163,6 +163,43 @@ def svg_to_qicon_pixmap(svg_string: str) -> QPixmap:
     return paint_usage_pixmap(remaining=None)
 
 
+def paint_dual_window_pixmap(
+    primary_remaining: Optional[float] = None,
+    secondary_remaining: Optional[float] = None,
+    size: int = 40,
+) -> QPixmap:
+    """Official-style dual meter: thick session bar + hairline weekly bar."""
+    dpr = _device_pixel_ratio()
+    phys = max(size, int(round(size * dpr)))
+    pixmap = QPixmap(phys, phys)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    pixmap.setDevicePixelRatio(dpr)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    if dpr != 1.0:
+        painter.scale(phys / size, phys / size)
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#1e1e2e"))
+    painter.drawRoundedRect(1, 1, size - 2, size - 2, 6, 6)
+
+    def _bar(y: float, h: float, remaining: Optional[float]) -> None:
+        painter.setBrush(QColor("#313244"))
+        painter.drawRoundedRect(QRectF(4, y, size - 8, h), 2, 2)
+        if remaining is None:
+            return
+        rem = _clamp(remaining)
+        w = (size - 8) * (rem / 100.0)
+        painter.setBrush(QColor(get_color_for_remaining(rem)))
+        painter.drawRoundedRect(QRectF(4, y, w, h), 2, 2)
+
+    # Top: session (thick). Bottom: weekly (hairline).
+    _bar(size * 0.28, size * 0.22, primary_remaining)
+    _bar(size * 0.58, size * 0.10, secondary_remaining)
+    painter.end()
+    return pixmap
+
+
 def make_simple_pixmap(
     text: str, size: int = DEFAULT_TRAY_SIZE, color: str = "#89b4fa"
 ) -> QPixmap:

@@ -19,6 +19,7 @@ import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -30,6 +31,54 @@ DEFAULT_PORT = 8080
 CLI_TIMEOUT = float(os.environ.get("CODEXBAR_CLI_TIMEOUT", "35"))
 
 
+def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+    if not ts or not isinstance(ts, str):
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def format_resets_in(resets_at: Optional[str]) -> str:
+    """Official-style countdown: ``Resets in 2h 24m`` / ``Resets in 7d``."""
+    dt = _parse_iso(resets_at)
+    if dt is None:
+        return ""
+    now = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = int((dt - now).total_seconds())
+    if secs <= 0:
+        return "Reset due"
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins = rem // 60
+    if days > 0:
+        return f"Resets in {days}d {hours}h" if hours else f"Resets in {days}d"
+    if hours > 0:
+        return f"Resets in {hours}h {mins}m" if mins else f"Resets in {hours}h"
+    return f"Resets in {mins}m"
+
+
+def format_updated_ago(updated_at: Optional[str]) -> str:
+    """``Updated just now`` / ``Updated 3m ago`` (official freshness line)."""
+    dt = _parse_iso(updated_at)
+    if dt is None:
+        return ""
+    now = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = max(0, int((now - dt).total_seconds()))
+    if secs < 45:
+        return "Updated just now"
+    if secs < 3600:
+        return f"Updated {secs // 60}m ago"
+    if secs < 86400:
+        return f"Updated {secs // 3600}h ago"
+    return f"Updated {secs // 86400}d ago"
+
+
 @dataclass
 class RateWindowView:
     label: str
@@ -38,6 +87,12 @@ class RateWindowView:
     reset_description: str = ""
     window_minutes: Optional[int] = None
     resets_at: Optional[str] = None
+
+    @property
+    def resets_in(self) -> str:
+        return format_resets_in(self.resets_at) or (
+            f"Resets {self.reset_description}" if self.reset_description else ""
+        )
 
 
 @dataclass
@@ -53,11 +108,24 @@ class ProviderView:
     tertiary: Optional[RateWindowView] = None
     pace_summary: Optional[str] = None
     credits_remaining: Optional[float] = None
+    reset_credits_available: Optional[int] = None
+    data_confidence: Optional[str] = None
+    updated_at: Optional[str] = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
     def display_name(self) -> str:
         return self.provider.replace("_", " ").title()
+
+    @property
+    def plan_label(self) -> str:
+        if not self.plan:
+            return ""
+        return self.plan.replace("_", " ").title()
+
+    @property
+    def updated_label(self) -> str:
+        return format_updated_ago(self.updated_at)
 
     @property
     def headline_remaining(self) -> Optional[float]:
@@ -151,6 +219,11 @@ def parse_upstream_item(item: dict[str, Any]) -> ProviderView:
     pace_primary = pace.get("primary") if isinstance(pace.get("primary"), dict) else {}
     credits = item.get("credits") if isinstance(item.get("credits"), dict) else {}
     identity = usage.get("identity") if isinstance(usage.get("identity"), dict) else {}
+    reset_creds = (
+        usage.get("codexResetCredits")
+        if isinstance(usage.get("codexResetCredits"), dict)
+        else {}
+    )
 
     account = (
         item.get("account")
@@ -163,6 +236,20 @@ def parse_upstream_item(item: dict[str, Any]) -> ProviderView:
         creds_f = float(creds) if creds is not None else None
     except (TypeError, ValueError):
         creds_f = None
+    try:
+        reset_n = (
+            int(reset_creds["availableCount"])
+            if reset_creds.get("availableCount") is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        reset_n = None
+
+    updated = (
+        usage.get("updatedAt")
+        or credits.get("updatedAt")
+        or item.get("updatedAt")
+    )
 
     return ProviderView(
         provider=provider,
@@ -178,6 +265,9 @@ def parse_upstream_item(item: dict[str, Any]) -> ProviderView:
             str(pace_primary.get("summary")) if pace_primary.get("summary") else None
         ),
         credits_remaining=creds_f,
+        reset_credits_available=reset_n,
+        data_confidence=str(usage.get("dataConfidence") or "") or None,
+        updated_at=str(updated) if updated else None,
         raw=item,
     )
 

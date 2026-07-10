@@ -21,8 +21,8 @@ def test_primary_usage_ui_not_qmenu_popup() -> None:
     assert ".popup(" not in tray
     # Popover documents / avoids grabbing popup; class is QWidget Tool window.
     assert "class UsagePopover(QWidget)" in pop
-    assert "QMenu.popup" in pop  # docstring warning only
     assert "class UsagePopover(QMenu)" not in pop
+    assert "grabbing popup" in pop or "Wayland" in pop
 
 
 def test_popover_constructs_with_web_url() -> None:
@@ -30,11 +30,39 @@ def test_popover_constructs_with_web_url() -> None:
     from PySide6.QtWidgets import QApplication
 
     from codexbar_gui.popover import UsagePopover
+    from codexbar_gui.upstream import parse_upstream_list
 
     _ = QApplication.instance() or QApplication([])
     pop = UsagePopover(web_url="http://127.0.0.1:8787/")
     assert pop._web_url == "http://127.0.0.1:8787/"
     assert pop._web_btn.isEnabled()
+    views = parse_upstream_list(
+        [
+            {
+                "provider": "codex",
+                "source": "oauth",
+                "version": "0.142.5",
+                "credits": {"remaining": 0},
+                "usage": {
+                    "accountEmail": "a@b.c",
+                    "loginMethod": "plus",
+                    "primary": {
+                        "usedPercent": 1,
+                        "windowMinutes": 300,
+                        "resetsAt": "2099-01-01T00:00:00Z",
+                    },
+                    "secondary": {
+                        "usedPercent": 0,
+                        "windowMinutes": 10080,
+                        "resetsAt": "2099-07-01T00:00:00Z",
+                    },
+                },
+            }
+        ]
+    )
+    pop._views = views
+    pop._rebuild()
+    assert pop._body_layout.count() >= 1
 
 
 def test_paint_remaining_digits_non_null() -> None:
@@ -84,7 +112,7 @@ def test_webapp_html_and_api_handlers() -> None:
         assert "CodexBar" in body
         assert "not found" not in body.lower() or "JSON-only" in body
         assert "<html" in body.lower()
-        assert "headline" in body
+        assert "Usage" in body or "Session" in body or "Refresh" in body
         conn.close()
 
         conn = HTTPConnection("127.0.0.1", port, timeout=5)

@@ -1,8 +1,7 @@
 """Local web dashboard for CodexBar (official CLI is still the data plane).
 
-Official ``codexbar serve`` only exposes JSON endpoints (``/`` is 404).
-This tiny stdlib HTTP server serves a readable HTML UI that loads
-``/api/usage`` from the same process, which shells out to ``codexbar usage``.
+Layout mirrors official CodexBar provider panel: Session/Weekly with
+``% left`` + ``Resets in …``, pace, credits, account/plan.
 """
 
 from __future__ import annotations
@@ -12,9 +11,9 @@ import logging
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
-from codexbar_gui.upstream import fetch_from_cli, find_codexbar_binary, parse_upstream_list
+from codexbar_gui.upstream import fetch_from_cli, find_codexbar_binary
 
 logger = logging.getLogger("codexbar_gui.webapp")
 
@@ -29,77 +28,104 @@ _HTML = r"""<!DOCTYPE html>
 <title>CodexBar</title>
 <style>
   :root {
-    --bg: #11111b; --card: #1e1e2e; --border: #313244; --text: #cdd6f4;
-    --muted: #a6adc8; --green: #a6e3a1; --yellow: #f9e2af; --red: #f38ba8;
-    --teal: #94e2d5; --blue: #89b4fa;
+    --bg: #0b0b12; --card: #1e1e2e; --border: #313244; --text: #cdd6f4;
+    --muted: #a6adc8; --dim: #6c7086; --green: #a6e3a1; --yellow: #fab387;
+    --red: #f38ba8; --teal: #94e2d5; --cyan: #89dceb; --purple: #cba6f7;
+    --blue: #89b4fa;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; font-family: ui-sans-serif, system-ui, sans-serif;
-    background: var(--bg); color: var(--text); padding: 1.25rem;
+    margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    background: radial-gradient(1200px 600px at 10% -10%, #1e1e2e 0%, var(--bg) 55%);
+    color: var(--text); min-height: 100vh; padding: 1.5rem;
   }
   header {
-    display: flex; flex-wrap: wrap; gap: .75rem; align-items: center;
-    margin-bottom: 1.25rem;
+    display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: center;
+    margin-bottom: 1rem;
   }
-  header h1 { font-size: 1.35rem; margin: 0; letter-spacing: .02em; }
-  header .meta { color: var(--muted); font-size: .85rem; }
+  header h1 { font-size: 1.25rem; margin: 0; font-weight: 700; letter-spacing: .01em; }
+  .meta { color: var(--muted); font-size: .85rem; }
+  .dim { color: var(--dim); font-size: .8rem; }
   button {
     background: #313244; color: var(--text); border: 0; border-radius: 8px;
-    padding: .45rem .9rem; cursor: pointer; font-size: .9rem;
+    padding: .5rem 1rem; cursor: pointer; font-size: .9rem;
   }
   button:hover { background: #45475a; }
+  .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .tab {
+    background: #313244; color: var(--text); border-radius: 999px;
+    padding: .35rem .9rem; font-size: .85rem; font-weight: 600;
+  }
+  .tab.active { background: #45475a; box-shadow: inset 0 0 0 1px #585b70; }
   .grid {
-    display: grid; gap: 1rem;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    display: grid; gap: 1.1rem;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   }
   .card {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 1rem 1.1rem;
+    background: linear-gradient(180deg, #222233 0%, var(--card) 40%);
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 1.1rem 1.2rem; box-shadow: 0 12px 40px rgba(0,0,0,.35);
   }
-  .card h2 {
-    margin: 0 0 .75rem; font-size: 1.05rem;
-    display: flex; justify-content: space-between; align-items: baseline; gap: .5rem;
+  .head {
+    display: flex; justify-content: space-between; gap: 1rem;
+    align-items: flex-start; margin-bottom: .85rem;
   }
-  .card h2 .src { color: var(--muted); font-size: .75rem; font-weight: 500; }
-  .err { color: var(--red); font-size: .9rem; line-height: 1.35; }
-  .win { margin: .55rem 0; }
-  .win .row { display: flex; justify-content: space-between; font-size: .85rem; margin-bottom: .25rem; }
-  .win .lab { color: var(--muted); }
-  .win .pct { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .head h2 { margin: 0; font-size: 1.2rem; }
+  .head .sub { color: var(--dim); font-size: .78rem; margin-top: .2rem; }
+  .right { text-align: right; }
+  .account { color: var(--muted); font-size: .82rem; }
+  .badge {
+    display: inline-block; margin-top: .25rem; background: #313244;
+    color: var(--purple); border-radius: 6px; padding: .15rem .55rem;
+    font-size: .75rem; font-weight: 600;
+  }
+  .sec {
+    color: var(--dim); font-size: .68rem; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase; margin: .85rem 0 .4rem;
+  }
+  .win { margin: .55rem 0 .75rem; }
+  .win .row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: .5rem; margin-bottom: .3rem; font-size: .9rem;
+  }
+  .win .lab { font-weight: 600; min-width: 4.5rem; }
+  .win .pct { color: var(--cyan); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .win .pct.mid { color: var(--yellow); }
+  .win .pct.low { color: var(--red); }
+  .win .resets { color: var(--muted); font-size: .8rem; }
   .bar {
-    height: 10px; background: #313244; border-radius: 999px; overflow: hidden;
+    height: 8px; background: #313244; border-radius: 999px; overflow: hidden;
   }
   .bar > i {
     display: block; height: 100%; border-radius: 999px;
-    background: var(--green); width: 0%; transition: width .35s ease;
+    background: var(--cyan); width: 0%; transition: width .35s ease;
   }
   .bar.mid > i { background: var(--yellow); }
   .bar.low > i { background: var(--red); }
-  .pace { color: var(--teal); font-size: .8rem; margin-top: .65rem; line-height: 1.35; }
-  .foot { color: var(--muted); font-size: .78rem; margin-top: .65rem; }
+  .used { color: var(--dim); font-size: .75rem; margin-top: .25rem; }
+  .pace { color: var(--teal); font-size: .85rem; margin: .35rem 0 .5rem; line-height: 1.4; }
+  .credits { display: flex; justify-content: space-between; gap: .75rem; font-size: .9rem; }
+  .credits .muted { color: var(--muted); font-size: .8rem; }
+  .err { color: var(--red); font-size: .9rem; line-height: 1.35; }
   .empty { color: var(--muted); padding: 2rem; text-align: center; }
-  .big {
-    font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums;
-    color: var(--blue); margin: 0 .25rem 0 0;
-  }
+  .note { color: var(--dim); font-size: .78rem; margin: 0 0 1rem; max-width: 52rem; line-height: 1.4; }
 </style>
 </head>
 <body>
 <header>
   <h1>CodexBar</h1>
-  <span class="big" id="headline">—</span>
-  <span class="meta">% left (worst)</span>
   <span class="meta" id="meta">loading…</span>
-  <button type="button" id="refresh">Refresh</button>
+  <button type="button" id="refresh">Refresh Now</button>
 </header>
-<p class="meta" style="margin:-.5rem 0 1rem">
-  This is the HTML UI on <strong>:8787</strong>. Official <code>codexbar serve</code>
-  on :8080 is JSON-only (<code>GET /</code> → 404) — that is not a missing UI.
+<p class="note">
+  Usage dashboard on <strong>:8787</strong> (this page). Official
+  <code>codexbar serve</code> on :8080 is JSON-only — not a missing UI.
+  Layout follows official CodexBar provider panel fields from CLI JSON.
 </p>
+<div class="tabs" id="tabs"></div>
 <div id="root" class="grid"></div>
 <script>
-function colorClass(rem) {
+function tone(rem) {
   if (rem == null) return '';
   if (rem <= 20) return 'low';
   if (rem <= 50) return 'mid';
@@ -108,61 +134,72 @@ function colorClass(rem) {
 function winHtml(w) {
   if (!w) return '';
   const rem = w.remaining_percent;
-  const cls = colorClass(rem);
+  const used = w.used_percent;
+  const t = tone(rem);
   const pct = rem == null ? '—' : Math.round(rem) + '% left';
-  const used = rem == null ? 0 : rem;
+  const fill = rem == null ? 0 : rem;
+  const resets = w.resets_in || w.reset_description || '';
   return `<div class="win">
-    <div class="row"><span class="lab">${w.label}</span>
-      <span class="pct">${pct}</span></div>
-    <div class="bar ${cls}"><i style="width:${used}%"></i></div>
-    <div class="row"><span class="lab">${w.reset_description || ''}</span>
-      <span class="lab">${w.window_minutes ? w.window_minutes + 'm window' : ''}</span></div>
+    <div class="row">
+      <span class="lab">${w.label.replace(' (5h)','')}</span>
+      <span class="pct ${t}">${pct}</span>
+      <span class="resets">${resets}</span>
+    </div>
+    <div class="bar ${t}"><i style="width:${fill}%"></i></div>
+    <div class="used">${used == null ? '' : Math.round(used) + '% used'}${w.reset_description && w.resets_in ? ' · ' + w.reset_description : ''}</div>
   </div>`;
 }
 function card(p) {
   if (p.error) {
-    return `<article class="card"><h2>${p.display_name || p.provider}
-      <span class="src">${p.source || ''}</span></h2>
+    return `<article class="card"><div class="head"><div><h2>${p.display_name || p.provider}</h2>
+      <div class="sub">${p.source || ''}</div></div></div>
       <div class="err">${p.error}</div></article>`;
   }
-  const rem = p.headline_remaining;
-  const big = rem == null ? '' : `<span class="big">${Math.round(rem)}%</span><span class="meta">left</span>`;
-  const meta = [p.account, p.plan ? 'plan:' + p.plan : null,
-    p.credits_remaining != null ? 'credits:' + p.credits_remaining : null]
-    .filter(Boolean).join(' · ');
+  const sub = [p.version, p.source, p.updated_label, p.data_confidence].filter(Boolean).join(' · ');
   return `<article class="card">
-    <h2><span>${p.display_name || p.provider} ${big}</span>
-      <span class="src">${p.source || ''}</span></h2>
+    <div class="head">
+      <div>
+        <h2>${p.display_name || p.provider}</h2>
+        <div class="sub">${sub}</div>
+      </div>
+      <div class="right">
+        ${p.account ? `<div class="account">${p.account}</div>` : ''}
+        ${p.plan_label ? `<span class="badge">${p.plan_label}</span>` : ''}
+      </div>
+    </div>
+    <div class="sec">Usage</div>
     ${winHtml(p.primary)}
     ${winHtml(p.secondary)}
     ${winHtml(p.tertiary)}
     ${p.pace_summary ? `<div class="pace">${p.pace_summary}</div>` : ''}
-    ${meta ? `<div class="foot">${meta}</div>` : ''}
+    <div class="sec">Credits</div>
+    <div class="credits">
+      <span>${p.credits_remaining != null ? p.credits_remaining + ' left' : '—'}</span>
+      <span class="muted">${p.reset_credits_available != null
+        ? 'Limit reset credits: ' + p.reset_credits_available + ' available' : ''}</span>
+    </div>
   </article>`;
 }
 async function load() {
   const meta = document.getElementById('meta');
   const root = document.getElementById('root');
-  const headline = document.getElementById('headline');
+  const tabs = document.getElementById('tabs');
   meta.textContent = 'loading…';
   try {
     const r = await fetch('/api/usage', {cache: 'no-store'});
     const data = await r.json();
     if (!data.providers || !data.providers.length) {
       root.innerHTML = `<div class="empty">${data.detail || 'No providers'}</div>`;
-      headline.textContent = '—';
+      tabs.innerHTML = '';
     } else {
+      tabs.innerHTML = data.providers.map((p,i) =>
+        `<span class="tab ${i===0?'active':''}">${p.display_name || p.provider}</span>`).join('');
       root.innerHTML = data.providers.map(card).join('');
-      const rems = data.providers
-        .map(p => p.headline_remaining)
-        .filter(x => x != null && !Number.isNaN(x));
-      headline.textContent = rems.length ? Math.round(Math.min(...rems)) : '—';
     }
     meta.textContent = (data.source || 'cli') + ' · ' + new Date().toLocaleTimeString();
   } catch (e) {
     root.innerHTML = `<div class="empty err">Failed to load: ${e}</div>`;
     meta.textContent = 'error';
-    headline.textContent = '—';
   }
 }
 document.getElementById('refresh').onclick = load;
@@ -172,6 +209,20 @@ setInterval(load, 60000);
 </body>
 </html>
 """
+
+
+def _win_json(win) -> Optional[dict]:
+    if win is None:
+        return None
+    return {
+        "label": win.label,
+        "used_percent": win.used_percent,
+        "remaining_percent": win.remaining_percent,
+        "reset_description": win.reset_description,
+        "window_minutes": win.window_minutes,
+        "resets_at": win.resets_at,
+        "resets_in": win.resets_in,
+    }
 
 
 def _views_to_json() -> dict:
@@ -186,36 +237,18 @@ def _views_to_json() -> dict:
                 "error": v.error,
                 "account": v.account,
                 "plan": v.plan,
+                "plan_label": v.plan_label,
+                "version": v.version,
                 "credits_remaining": v.credits_remaining,
+                "reset_credits_available": v.reset_credits_available,
+                "data_confidence": v.data_confidence,
+                "updated_at": v.updated_at,
+                "updated_label": v.updated_label,
                 "pace_summary": v.pace_summary,
                 "headline_remaining": v.headline_remaining,
-                "primary": None
-                if not v.primary
-                else {
-                    "label": v.primary.label,
-                    "used_percent": v.primary.used_percent,
-                    "remaining_percent": v.primary.remaining_percent,
-                    "reset_description": v.primary.reset_description,
-                    "window_minutes": v.primary.window_minutes,
-                },
-                "secondary": None
-                if not v.secondary
-                else {
-                    "label": v.secondary.label,
-                    "used_percent": v.secondary.used_percent,
-                    "remaining_percent": v.secondary.remaining_percent,
-                    "reset_description": v.secondary.reset_description,
-                    "window_minutes": v.secondary.window_minutes,
-                },
-                "tertiary": None
-                if not v.tertiary
-                else {
-                    "label": v.tertiary.label,
-                    "used_percent": v.tertiary.used_percent,
-                    "remaining_percent": v.tertiary.remaining_percent,
-                    "reset_description": v.tertiary.reset_description,
-                    "window_minutes": v.tertiary.window_minutes,
-                },
+                "primary": _win_json(v.primary),
+                "secondary": _win_json(v.secondary),
+                "tertiary": _win_json(v.tertiary),
             }
         )
     binary = find_codexbar_binary()
@@ -232,7 +265,7 @@ def _views_to_json() -> dict:
 
 
 class _Handler(BaseHTTPRequestHandler):
-    server_version = "codexbar-gui-web/0.3"
+    server_version = "codexbar-gui-web/0.4"
 
     def log_message(self, fmt: str, *args) -> None:
         logger.debug("%s - %s", self.address_string(), fmt % args)
@@ -291,7 +324,6 @@ def start_web(
     try:
         httpd = ThreadingHTTPServer((host, port), _Handler)
     except OSError as exc:
-        # Port busy — try a few alternatives
         for alt in (port + 1, port + 2, 8790, 8791):
             try:
                 httpd = ThreadingHTTPServer((host, alt), _Handler)

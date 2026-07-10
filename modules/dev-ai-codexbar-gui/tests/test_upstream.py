@@ -124,6 +124,45 @@ def test_official_used_percent_0_1_2_not_fraction_scaled() -> None:
         assert v.headline_remaining == rem
 
 
+def test_resets_in_and_plan_label() -> None:
+    from codexbar_gui.upstream import format_resets_in, parse_upstream_item
+
+    assert format_resets_in(None) == ""
+    v = parse_upstream_item(
+        {
+            "provider": "codex",
+            "version": "0.142.5",
+            "source": "oauth",
+            "credits": {"remaining": 0},
+            "usage": {
+                "accountEmail": "a@b.c",
+                "loginMethod": "plus",
+                "dataConfidence": "exact",
+                "updatedAt": "2026-07-10T01:00:00Z",
+                "codexResetCredits": {"availableCount": 0},
+                "primary": {
+                    "usedPercent": 1,
+                    "windowMinutes": 300,
+                    "resetDescription": "2:27 PM",
+                    "resetsAt": "2099-01-01T00:00:00Z",
+                },
+                "secondary": {
+                    "usedPercent": 0,
+                    "windowMinutes": 10080,
+                    "resetsAt": "2099-07-01T00:00:00Z",
+                },
+            },
+        }
+    )
+    assert v.plan_label == "Plus"
+    assert v.account == "a@b.c"
+    assert v.reset_credits_available == 0
+    assert v.credits_remaining == 0.0
+    assert v.primary is not None
+    assert v.primary.resets_in.startswith("Resets in")
+    assert v.primary.remaining_percent == 99.0
+
+
 def test_legacy_fraction_only_open_unit() -> None:
     """0.32 (true fraction) → 32 used / 68 left; 1.0 stays 1% used."""
     frac = parse_upstream_item(
