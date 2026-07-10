@@ -137,6 +137,25 @@ def _draw_capsule(
     painter.setClipping(False)
 
 
+def _fill_value(remaining: Optional[float], show_as: str) -> Optional[float]:
+    """Icon capsule length: remaining (default) or used (official toggle)."""
+    if remaining is None:
+        return None
+    rem = _clamp(float(remaining))
+    if show_as == "used":
+        return 100.0 - rem
+    return rem
+
+
+def _fill_color(remaining: Optional[float], show_as: str, fallback: QColor) -> QColor:
+    if remaining is None:
+        return fallback
+    rem = _clamp(float(remaining))
+    if show_as == "used":
+        return QColor(get_color_for_percent(100.0 - rem))
+    return QColor(get_color_for_remaining(rem))
+
+
 def paint_dual_window_pixmap(
     primary_remaining: Optional[float] = None,
     secondary_remaining: Optional[float] = None,
@@ -146,6 +165,8 @@ def paint_dual_window_pixmap(
     stale: bool = False,
     error: bool = False,
     show_percent: bool = False,  # unused; kept for API compat — never draw digits
+    show_as: str = "remaining",
+    icon_style: str = "dual_bars",
 ) -> QPixmap:
     """Official dual-bar meter only (no side digits, no dark tile)."""
     del show_percent
@@ -154,19 +175,10 @@ def paint_dual_window_pixmap(
     dim = 0.5 if stale else 1.0
 
     # Scale official 36px layout into our size with extra pad for Plasma crop.
-    # Official: barW=30, top y=5 h=12, bot y=23 h=8 (Qt coords from AppKit flip)
-    pad = max(2.0, size * 0.14)
-    # Usable box
-    box = size - 2.0 * pad
-    # Horizontal: almost full width of usable box (official ~30/36)
-    bar_w = box * (30.0 / 36.0) / (30.0 / 36.0) * (box * 0.92)
-    # simplify: bar_w = 0.78 * size centered
     bar_w = size * 0.78
     bar_x = (size - bar_w) / 2.0
 
-    # Vertical: match official ratio of gaps
-    # top h : bot h ≈ 12 : 8, with margins
-    top_h = size * (12.0 / 36.0) * 0.92  # slightly tighter
+    top_h = size * (12.0 / 36.0) * 0.92
     bot_h = size * (8.0 / 36.0) * 0.92
     gap = size * (6.0 / 36.0) * 0.7
     stack = top_h + gap + bot_h
@@ -177,7 +189,7 @@ def paint_dual_window_pixmap(
     if error:
         base = QColor("#f7768e")
 
-    has_weekly = secondary_remaining is not None
+    has_weekly = secondary_remaining is not None and icon_style != "primary_only"
     weekly_ok = has_weekly and (secondary_remaining or 0) > 0
     credits_ratio: Optional[float] = None
     if credits_remaining is not None:
@@ -187,7 +199,7 @@ def paint_dual_window_pixmap(
 
     # Top = session (or credits if weekly exhausted)
     top_rem = primary_remaining
-    top_fill = base if top_rem is None else QColor(get_color_for_remaining(top_rem))
+    top_fill = _fill_color(top_rem, show_as, base)
     if has_weekly and not weekly_ok and credits_ratio and credits_ratio > 0:
         top_rem = credits_ratio
         top_fill = QColor("#7aa2f7")
@@ -195,16 +207,38 @@ def paint_dual_window_pixmap(
         top_rem = None
         top_fill = base
 
+    # Brand+percent mode: solid letter-like glyph via short dual stub + thick top
+    if icon_style == "brand_percent":
+        # Single centered capsule only
+        mid_h = size * 0.28
+        mid_y = (size - mid_h) / 2.0
+        _draw_capsule(
+            painter,
+            x=bar_x,
+            y=mid_y,
+            w=bar_w,
+            h=mid_h,
+            remaining=_fill_value(top_rem, show_as),
+            fill=top_fill,
+            dim=dim,
+        )
+        painter.end()
+        return pixmap
+
     _draw_capsule(
         painter,
         x=bar_x,
-        y=top_y,
+        y=top_y if icon_style != "primary_only" else (size - top_h * 1.2) / 2.0,
         w=bar_w,
-        h=top_h,
-        remaining=top_rem,
+        h=top_h * (1.2 if icon_style == "primary_only" else 1.0),
+        remaining=_fill_value(top_rem, show_as),
         fill=top_fill,
         dim=dim,
     )
+
+    if icon_style == "primary_only":
+        painter.end()
+        return pixmap
 
     # Bottom = weekly
     if weekly_ok:
@@ -214,8 +248,8 @@ def paint_dual_window_pixmap(
             y=bot_y,
             w=bar_w,
             h=bot_h,
-            remaining=secondary_remaining,
-            fill=QColor(get_color_for_remaining(secondary_remaining or 0)),
+            remaining=_fill_value(secondary_remaining, show_as),
+            fill=_fill_color(secondary_remaining, show_as, base),
             dim=dim,
         )
     else:
@@ -226,7 +260,7 @@ def paint_dual_window_pixmap(
             w=bar_w,
             h=bot_h,
             remaining=0.0 if has_weekly else None,
-            fill=QColor(get_color_for_remaining(0.0)) if has_weekly else base,
+            fill=_fill_color(0.0, show_as, base) if has_weekly else base,
             dim=0.45 * dim,
         )
 
@@ -245,8 +279,10 @@ def paint_usage_pixmap(
     credits_remaining: Optional[float] = None,
     stale: bool = False,
     show_percent: bool = False,
+    show_as: str = "remaining",
+    icon_style: str = "dual_bars",
 ) -> QPixmap:
-    """Tray entry point — dual bars only."""
+    """Tray entry point — dual bars (or primary-only / brand)."""
     del show_percent
     if remaining is None and percent is not None:
         remaining = 100.0 - _clamp(percent)
@@ -261,6 +297,8 @@ def paint_usage_pixmap(
             credits_remaining=credits_remaining,
             stale=stale,
             error=error,
+            show_as=show_as,
+            icon_style=icon_style,
         )
 
     if remaining is not None or error:
@@ -271,6 +309,8 @@ def paint_usage_pixmap(
             credits_remaining=credits_remaining,
             stale=stale,
             error=error,
+            show_as=show_as,
+            icon_style=icon_style,
         )
 
     return paint_dual_window_pixmap(
@@ -279,6 +319,8 @@ def paint_usage_pixmap(
         size=size,
         stale=True,
         error=False,
+        show_as=show_as,
+        icon_style=icon_style,
     )
 
 

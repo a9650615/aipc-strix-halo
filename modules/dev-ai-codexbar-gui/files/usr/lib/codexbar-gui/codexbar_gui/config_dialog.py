@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -42,6 +43,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from codexbar_gui.menu_bar import (
+    ICON_STYLE,
+    PROVIDER_SELECTION,
+    SHOW_AS,
+    MenuBarSettings,
+    load_menu_bar_settings,
+    merge_menu_bar_into_gui,
+)
 from codexbar_gui.oauth_login import (
     COOKIE_SOURCES,
     USAGE_SOURCES,
@@ -416,16 +425,15 @@ class ConfigDialog(QDialog):
         self.resize(760, 640)
 
         layout = QVBoxLayout(self)
-        title = QLabel("Providers · connect methods")
+        title = QLabel("Settings · Display + Providers")
         title.setFont(QFont("Sans", 13, QFont.Weight.Bold))
         layout.addWidget(title)
 
         hint = QLabel(
             "Same file as official CodexBar: "
             f"<code>{self._config_path()}</code>. "
-            "OAuth Login only exists for Codex / Claude / Gemini. "
-            "Grok = web cookies or API key; GLM = provider id <b>zai</b> (API key). "
-            "Official CLI has 50+ providers — use “Show all” below."
+            "Display section mirrors macOS Display prefs (merged tray on Linux). "
+            "OAuth only for Codex / Claude / Gemini; Grok = web/API; GLM = <b>zai</b>."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#a6adc8; font-size:11px;")
@@ -439,7 +447,96 @@ class ConfigDialog(QDialog):
         meta.setStyleSheet("color:#6c7086; font-size:10px;")
         layout.addWidget(meta)
 
+        # ── Display / menu bar (official Display prefs) ──
+        disp = QFrame()
+        disp.setObjectName("DisplayCard")
+        disp.setStyleSheet(
+            "#DisplayCard { background:#1e1e2e; border:1px solid #313244; "
+            "border-radius:10px; }"
+        )
+        dl = QVBoxLayout(disp)
+        dl.setContentsMargins(12, 10, 12, 10)
+        dl.setSpacing(6)
+        dh = QLabel("Menu bar · Display")
+        dh.setFont(QFont("Sans", 11, QFont.Weight.DemiBold))
+        dl.addWidget(dh)
+        dnote = QLabel(
+            "Linux uses one merged tray icon (official Merge Icons). "
+            "Choose which provider drives the bars, remaining vs used fill, and Overview order."
+        )
+        dnote.setWordWrap(True)
+        dnote.setStyleSheet("color:#6c7086; font-size:10px;")
+        dl.addWidget(dnote)
+
+        form = QFormLayout()
+        form.setSpacing(6)
+
+        self._sel = QComboBox()
+        self._sel.addItem("Highest usage (lowest % left)", "highest_usage")
+        self._sel.addItem("First enabled (config order)", "first_enabled")
+        self._sel.addItem("Pinned provider", "pinned")
+        self._sel.setToolTip(
+            "Official “highest-usage auto-selection” vs fixed provider for the tray icon."
+        )
+        form.addRow("Tray provider", self._sel)
+
+        self._pin = QComboBox()
+        for pid in (
+            "codex",
+            "claude",
+            "zai",
+            "grok",
+            "gemini",
+            "cursor",
+            "copilot",
+            "openrouter",
+            "deepseek",
+        ):
+            self._pin.addItem(pid, pid)
+        self._pin.setEditable(True)
+        form.addRow("Pinned id", self._pin)
+
+        self._show_as = QComboBox()
+        self._show_as.addItem("Show remaining % (default)", "remaining")
+        self._show_as.addItem("Show used %", "used")
+        self._show_as.setToolTip(
+            "Official: fill = remaining by default; “Show usage as used” flips the bar."
+        )
+        form.addRow("Bar fill", self._show_as)
+
+        self._icon_style = QComboBox()
+        self._icon_style.addItem("Dual bars (session + weekly)", "dual_bars")
+        self._icon_style.addItem("Primary bar only", "primary_only")
+        self._icon_style.addItem("Single brand bar", "brand_percent")
+        form.addRow("Icon style", self._icon_style)
+
+        self._overview = QLineEdit()
+        self._overview.setPlaceholderText(
+            "Overview order, e.g. codex,claude,zai  (empty = all enabled)"
+        )
+        self._overview.setToolTip(
+            "Official “Overview tab providers” — comma-separated ids; listed first in Overview."
+        )
+        form.addRow("Overview providers", self._overview)
+
+        self._tip_pct = QCheckBox("Show percent in tray tooltip")
+        self._tip_pct.setChecked(True)
+        form.addRow("", self._tip_pct)
+
+        self._interval = QSpinBox()
+        self._interval.setRange(10, 3600)
+        self._interval.setValue(60)
+        self._interval.setSuffix(" s")
+        self._interval.setToolTip("Refresh cadence (official presets: 1m / 2m / 5m / 15m)")
+        form.addRow("Refresh interval", self._interval)
+
+        dl.addLayout(form)
+        layout.addWidget(disp)
+
         filt = QHBoxLayout()
+        plab = QLabel("Providers")
+        plab.setFont(QFont("Sans", 11, QFont.Weight.DemiBold))
+        filt.addWidget(plab)
         self._show_all = QCheckBox("Show all providers (full catalog)")
         self._show_all.setToolTip(
             "When off: featured list (Codex, Claude, Grok, Z.ai/GLM, …). "
@@ -460,14 +557,7 @@ class ConfigDialog(QDialog):
         scroll.setWidget(self._list_host)
         layout.addWidget(scroll, 1)
 
-        # Global GUI refresh (local to gui.yaml-ish; store in config top-level if present)
         row = QHBoxLayout()
-        row.addWidget(QLabel("GUI refresh interval:"))
-        self._interval = QSpinBox()
-        self._interval.setRange(10, 3600)
-        self._interval.setValue(60)
-        self._interval.setSuffix(" s")
-        row.addWidget(self._interval)
         row.addStretch()
         reload_btn = QPushButton("Reload from disk")
         reload_btn.clicked.connect(self._load_config)
@@ -556,9 +646,22 @@ class ConfigDialog(QDialog):
             note.setWordWrap(True)
             self._list_layout.insertWidget(self._list_layout.count() - 1, note)
 
-        # interval from gui extras if any
-        gui = data.get("gui") if isinstance(data.get("gui"), dict) else {}
-        self._interval.setValue(int(gui.get("refresh_interval") or data.get("refresh_interval") or 60))
+        # Display / menu bar
+        mb = load_menu_bar_settings(path if path.is_file() else None)
+        idx = max(0, self._sel.findData(mb.provider_selection))
+        self._sel.setCurrentIndex(idx)
+        pin_idx = self._pin.findData(mb.pinned_provider)
+        if pin_idx >= 0:
+            self._pin.setCurrentIndex(pin_idx)
+        else:
+            self._pin.setEditText(mb.pinned_provider)
+        sa = max(0, self._show_as.findData(mb.show_as))
+        self._show_as.setCurrentIndex(sa)
+        istyle = max(0, self._icon_style.findData(mb.icon_style))
+        self._icon_style.setCurrentIndex(istyle)
+        self._overview.setText(",".join(mb.overview_providers))
+        self._tip_pct.setChecked(mb.show_percent_tooltip)
+        self._interval.setValue(int(mb.refresh_interval or 60))
 
     def _save_config(self) -> None:
         path = self._config_path()
@@ -603,10 +706,23 @@ class ConfigDialog(QDialog):
         out = dict(self._config)
         out["version"] = out.get("version", 1)
         out["providers"] = providers_out
-        out["gui"] = {
-            **(out.get("gui") if isinstance(out.get("gui"), dict) else {}),
-            "refresh_interval": self._interval.value(),
-        }
+
+        ov_raw = self._overview.text().strip()
+        ov_ids = [x.strip().lower() for x in ov_raw.split(",") if x.strip()]
+        pin = self._pin.currentData() or self._pin.currentText().strip() or "codex"
+        mb = MenuBarSettings(
+            provider_selection=str(self._sel.currentData() or "highest_usage"),
+            pinned_provider=str(pin).lower(),
+            show_as=str(self._show_as.currentData() or "remaining"),
+            icon_style=str(self._icon_style.currentData() or "dual_bars"),
+            overview_providers=ov_ids,
+            show_percent_tooltip=self._tip_pct.isChecked(),
+            refresh_interval=int(self._interval.value()),
+        )
+        out["gui"] = merge_menu_bar_into_gui(
+            out.get("gui") if isinstance(out.get("gui"), dict) else {},
+            mb,
+        )
 
         try:
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -618,8 +734,8 @@ class ConfigDialog(QDialog):
                 self,
                 "Settings",
                 f"Saved to {path}\n\n"
-                "OAuth sessions stay in provider homes "
-                "(~/.codex/auth.json, Claude credentials).",
+                "Menu bar display + providers updated.\n"
+                "Tray icon refreshes on the next poll (or click Refresh).",
             )
             logger.info("config saved %s", path)
             self.accept()

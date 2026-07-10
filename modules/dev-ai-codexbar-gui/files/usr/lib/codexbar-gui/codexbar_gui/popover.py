@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from codexbar_gui.cost import CostView, fetch_cost
 from codexbar_gui.icon_updater import paint_dual_window_pixmap
+from codexbar_gui.menu_bar import load_menu_bar_settings, order_overview_views
 from codexbar_gui.upstream import (
     ProviderView,
     RateWindowView,
@@ -1010,7 +1011,8 @@ class UsagePopover(QWidget):
             return
 
         if self._active == "overview":
-            for v in self._views:
+            mb = load_menu_bar_settings()
+            for v in order_overview_views(self._views, mb):
                 self._body_layout.addWidget(
                     _OverviewRow(
                         v,

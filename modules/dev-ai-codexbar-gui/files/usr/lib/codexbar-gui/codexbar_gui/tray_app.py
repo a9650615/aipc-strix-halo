@@ -15,8 +15,12 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 from codexbar_gui.icon_updater import (
     DEFAULT_TRAY_SIZE,
     make_simple_pixmap,
-    paint_dual_window_pixmap,
     paint_usage_pixmap,
+)
+from codexbar_gui.menu_bar import (
+    load_menu_bar_settings,
+    select_tray_view,
+    tray_tooltip_line,
 )
 from codexbar_gui.popover import UsagePopover
 from codexbar_gui.server_launcher import kill_server, start_server
@@ -90,15 +94,24 @@ class CodexBarApp:
         self._credits_remaining: Optional[float] = None
         self._web_url: Optional[str] = None
         self._fetch: Optional[_FetchWorker] = None
+        self._menu_bar = load_menu_bar_settings()
+        # Honor saved refresh cadence from Display settings
+        if self._menu_bar.refresh_interval:
+            self._refresh_interval_ms = max(10, self._menu_bar.refresh_interval) * 1000
 
     def run(self) -> int:
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setApplicationName("CodexBar")
         self._app.setQuitOnLastWindowClosed(False)
 
+        self._menu_bar = load_menu_bar_settings()
+        if self._menu_bar.refresh_interval:
+            self._refresh_interval_ms = max(10, self._menu_bar.refresh_interval) * 1000
+
         binary = find_codexbar_binary()
         logger.info(
-            "CodexBar GUI host=%s:%d web_port=%d refresh=%ds binary=%s wayland=%s platform=%s",
+            "CodexBar GUI host=%s:%d web_port=%d refresh=%ds binary=%s wayland=%s platform=%s "
+            "tray_sel=%s show_as=%s icon=%s",
             self._host,
             self._port,
             self._web_port,
@@ -106,6 +119,9 @@ class CodexBarApp:
             binary or "MISSING",
             _is_wayland(),
             self._app.platformName(),
+            self._menu_bar.provider_selection,
+            self._menu_bar.show_as,
+            self._menu_bar.icon_style,
         )
         if not binary:
             QMessageBox.critical(
@@ -198,6 +214,15 @@ class CodexBarApp:
 
     def _on_views(self, views: list) -> None:
         try:
+            # Re-read Display prefs each cycle so Settings save applies without restart
+            self._menu_bar = load_menu_bar_settings()
+            if self._menu_bar.refresh_interval:
+                want_ms = max(10, self._menu_bar.refresh_interval) * 1000
+                if want_ms != self._refresh_interval_ms:
+                    self._refresh_interval_ms = want_ms
+                    if self._refresh_timer is not None:
+                        self._refresh_timer.setInterval(want_ms)
+
             typed: list[ProviderView] = list(views)
             used, tip = summary_from_views(typed)
             self._current_used = used
@@ -207,19 +232,21 @@ class CodexBarApp:
                 if v.ok and v.headline_remaining is not None
             ]
             self._current_remaining = min(rems) if rems else None
-            # Dual-bar tray (IconRenderer: top session, bottom weekly)
+
+            # Official: pick which provider drives the merged status item
+            pick = select_tray_view(typed, self._menu_bar)
             self._session_remaining = None
             self._weekly_remaining = None
             self._credits_remaining = None
-            for v in typed:
-                if not v.ok:
-                    continue
-                if v.primary is not None:
-                    self._session_remaining = v.primary.remaining_percent
-                if v.secondary is not None:
-                    self._weekly_remaining = v.secondary.remaining_percent
-                self._credits_remaining = v.credits_remaining
-                break
+            if pick is not None and pick.ok:
+                if pick.primary is not None:
+                    self._session_remaining = pick.primary.remaining_percent
+                if pick.secondary is not None:
+                    self._weekly_remaining = pick.secondary.remaining_percent
+                self._credits_remaining = pick.credits_remaining
+                if pick.headline_remaining is not None:
+                    self._current_remaining = pick.headline_remaining
+
             err = not typed or all(not v.ok for v in typed)
             self._set_icon(remaining=self._current_remaining, error=err)
             if self._tray:
@@ -227,7 +254,8 @@ class CodexBarApp:
                 if err and not rems:
                     tip = "CLI timeout/empty — click for details" + extra
                 else:
-                    tip = tip + "\n(click tray icon)" + extra
+                    head = tray_tooltip_line(pick, self._menu_bar) if pick else tip
+                    tip = f"{head}\n{tip}\n(click tray icon){extra}"
                 self._tray.setToolTip(tip)
         except Exception:
             logger.warning("apply views failed", exc_info=True)
@@ -249,15 +277,20 @@ class CodexBarApp:
         rem = remaining if remaining is not None else self._current_remaining
         if rem is None and percent is not None:
             rem = 100.0 - percent
-        # Official dual-capsule meter only (no side "99" badge).
+        mb = self._menu_bar
+        # Official dual-capsule meter; style + remaining/used from Display prefs
         icon_pm = paint_usage_pixmap(
             remaining=rem,
             error=error,
             size=DEFAULT_TRAY_SIZE,
             primary_remaining=self._session_remaining,
-            secondary_remaining=self._weekly_remaining,
+            secondary_remaining=(
+                self._weekly_remaining if mb.icon_style == "dual_bars" else None
+            ),
             credits_remaining=self._credits_remaining,
             show_percent=False,
+            show_as=mb.show_as,
+            icon_style=mb.icon_style,
         )
         self._tray.setIcon(QIcon(icon_pm))
 
