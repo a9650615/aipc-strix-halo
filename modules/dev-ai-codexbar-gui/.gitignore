@@ -1,0 +1,6 @@
+flatpak/.flatpak-build/
+flatpak/.flatpak-repo/
+flatpak/.flatpak-builder/
+flatpak/io.aipc.CodexBarGui.png
+__pycache__/
+*.pyc

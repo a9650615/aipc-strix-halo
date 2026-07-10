@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=CodexBar
+GenericName=AI usage tracker
+Comment=System tray usage meters for Codex, Claude, Grok, Z.ai and more
+Exec=codexbar-gui
+Icon=io.aipc.CodexBarGui
+Terminal=false
+Categories=Development;Monitor;Utility;
+Keywords=codex;claude;usage;quota;tray;
+StartupNotify=false
+X-KDE-StartupNotify=false
+X-GNOME-Autostart-enabled=false
