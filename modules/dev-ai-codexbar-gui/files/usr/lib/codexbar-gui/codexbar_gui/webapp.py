@@ -13,7 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import urlparse
 
-from codexbar_gui.upstream import fetch_from_cli, find_codexbar_binary
+from codexbar_gui.cost import fetch_cost
+from codexbar_gui.upstream import fetch_enabled_providers, find_codexbar_binary
 
 logger = logging.getLogger("codexbar_gui.webapp")
 
@@ -93,15 +94,21 @@ _HTML = r"""<!DOCTYPE html>
   .win .pct.mid { color: var(--yellow); }
   .win .pct.low { color: var(--red); }
   .win .resets { color: var(--muted); font-size: .8rem; }
+  .barwrap { position: relative; margin: .25rem 0; }
   .bar {
-    height: 8px; background: #313244; border-radius: 999px; overflow: hidden;
+    position: relative; height: 8px; background: #313244; border-radius: 999px;
+    overflow: visible;
   }
-  .bar > i {
+  .bar > i.fill {
     display: block; height: 100%; border-radius: 999px;
-    background: var(--cyan); width: 0%; transition: width .35s ease;
+    background: #f5a97f; width: 0%;
   }
-  .bar.mid > i { background: var(--yellow); }
-  .bar.low > i { background: var(--red); }
+  .bar.mid > i.fill { background: var(--yellow); }
+  .bar.low > i.fill { background: var(--red); }
+  .bar .tick {
+    position: absolute; top: -3px; height: 14px; width: 2px;
+    background: var(--green); border-radius: 1px; transform: translateX(-1px);
+  }
   .used { color: var(--dim); font-size: .75rem; margin-top: .25rem; }
   .pace {
     font-size: .88rem; font-weight: 600; margin: .3rem 0 .15rem; line-height: 1.35;
@@ -110,6 +117,15 @@ _HTML = r"""<!DOCTYPE html>
   .pace.deficit { color: var(--yellow); }
   .pace.on_pace { color: var(--teal); }
   .exp { color: var(--dim); font-size: .72rem; }
+  .costbox {
+    background: #181825; border-radius: 10px; padding: .75rem .9rem; margin-top: .5rem;
+  }
+  .chart {
+    display: flex; align-items: flex-end; gap: 2px; height: 64px; margin-top: .5rem;
+  }
+  .chart i {
+    flex: 1; background: #f5a97f; border-radius: 2px 2px 0 0; min-width: 3px;
+  }
   .credits { display: flex; justify-content: space-between; gap: .75rem; font-size: .9rem; }
   .credits .muted { color: var(--muted); font-size: .8rem; }
   .err { color: var(--red); font-size: .9rem; line-height: 1.35; }
@@ -140,24 +156,61 @@ function tone(rem) {
 function winHtml(w) {
   if (!w) return '';
   const rem = w.remaining_percent;
-  const used = w.used_percent;
   const t = tone(rem);
   const pct = rem == null ? '—' : Math.round(rem) + '% left';
   const fill = rem == null ? 0 : rem;
   const resets = w.resets_in || w.reset_description || '';
   const pace = w.pace;
-  const paceHtml = pace ? `<div class="pace ${pace.status || ''}">${pace.summary}</div>
-    <div class="exp">expected ~${Math.round(pace.expected_used_percent)}% used by now (linear)</div>` : '';
+  let shortPace = '';
+  let lasts = '';
+  if (pace) {
+    if (pace.status === 'reserve') shortPace = Math.round(pace.reserve_percent) + '% in reserve';
+    else if (pace.status === 'deficit') shortPace = Math.round(-pace.reserve_percent) + '% over pace';
+    else shortPace = 'On pace';
+    lasts = pace.will_last_to_reset ? 'Lasts until reset' : 'May run out early';
+  }
+  // expected remaining tick = 100 - expected_used
+  const tick = pace && pace.expected_used_percent != null
+    ? Math.max(0, Math.min(100, 100 - pace.expected_used_percent)) : null;
   return `<div class="win">
-    <div class="row">
-      <span class="lab">${w.label.replace(' (5h)','')}</span>
-      <span class="pct ${t}">${pct}</span>
-      <span class="resets">${resets}</span>
+    <div class="row"><span class="lab">${w.label}</span></div>
+    <div class="barwrap">
+      <div class="bar ${t}"><i class="fill" style="width:${fill}%"></i>
+        ${tick != null ? `<span class="tick" style="left:${tick}%"></span>` : ''}
+      </div>
     </div>
-    <div class="bar ${t}"><i style="width:${fill}%"></i></div>
-    ${paceHtml}
-    <div class="used">${used == null ? '' : Math.round(used) + '% used'}${w.reset_description && w.resets_in ? ' · ' + w.reset_description : ''}</div>
+    <div class="row">
+      <div>
+        <div class="pct ${t}">${pct}</div>
+        ${shortPace ? `<div class="pace ${pace.status || ''}">${shortPace}</div>` : ''}
+      </div>
+      <div style="text-align:right">
+        <div class="resets">${resets}</div>
+        ${lasts ? `<div class="exp">${lasts}</div>` : ''}
+      </div>
+    </div>
   </div>`;
+}
+function costHtml(c) {
+  if (!c || c.error) return c && c.error ? `<div class="sec">Cost</div><div class="err">${c.error}</div>` : '';
+  const days = (c.daily || []).slice(-30);
+  const peak = Math.max(0.01, ...days.map(d => d.total_cost || 0));
+  const bars = days.map(d => {
+    const h = Math.max(2, Math.round(56 * ((d.total_cost || 0) / peak)));
+    return `<i style="height:${h}px" title="${d.date}: $${(d.total_cost||0).toFixed(2)}"></i>`;
+  }).join('');
+  return `<div class="sec">Cost</div>
+    <div class="costbox">
+      <div>Today: $${(c.today_cost||0).toFixed(2)} · ${fmtTok(c.today_tokens)} tokens</div>
+      <div class="muted">Last ${c.history_days||30} days: $${(c.period_cost||0).toFixed(2)} · ${fmtTok(c.period_tokens)} tokens</div>
+      ${days.length ? `<div class="chart">${bars}</div>` : ''}
+    </div>`;
+}
+function fmtTok(n) {
+  n = n || 0;
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return String(n);
 }
 function card(p) {
   if (p.error) {
@@ -165,7 +218,8 @@ function card(p) {
       <div class="sub">${p.source || ''}</div></div></div>
       <div class="err">${p.error}</div></article>`;
   }
-  const sub = [p.version, p.source, p.updated_label, p.data_confidence].filter(Boolean).join(' · ');
+  const sub = [p.updated_label, p.source].filter(Boolean).join(' · ');
+  const extras = (p.extra_windows || []).map(winHtml).join('');
   return `<article class="card">
     <div class="head">
       <div>
@@ -173,20 +227,17 @@ function card(p) {
         <div class="sub">${sub}</div>
       </div>
       <div class="right">
-        ${p.account ? `<div class="account">${p.account}</div>` : ''}
         ${p.plan_label ? `<span class="badge">${p.plan_label}</span>` : ''}
+        ${p.account ? `<div class="account">${p.account}</div>` : ''}
       </div>
     </div>
-    <div class="sec">Usage</div>
     ${winHtml(p.primary)}
     ${winHtml(p.secondary)}
     ${winHtml(p.tertiary)}
-    <div class="sec">Credits</div>
-    <div class="credits">
-      <span>${p.credits_remaining != null ? p.credits_remaining + ' left' : '—'}</span>
-      <span class="muted">${p.reset_credits_available != null
-        ? 'Limit reset credits: ' + p.reset_credits_available + ' available' : ''}</span>
-    </div>
+    ${extras}
+    ${p.credits_remaining != null ? `<div class="sec">Credits</div>
+      <div class="credits"><span>${p.credits_remaining} left</span></div>` : ''}
+    ${costHtml(p.cost)}
   </article>`;
 }
 async function load() {
@@ -246,9 +297,32 @@ def _win_json(win) -> Optional[dict]:
 
 
 def _views_to_json() -> dict:
-    views = fetch_from_cli() or []
+    views = fetch_enabled_providers(timeout=35.0) or []
     providers = []
     for v in views:
+        cost = None
+        if v.ok:
+            try:
+                cv = fetch_cost(provider=v.provider, days=30, timeout=40.0)
+            except Exception:
+                cv = None
+            if cv is not None:
+                cost = {
+                    "today_cost": cv.today_cost,
+                    "today_tokens": cv.today_tokens,
+                    "period_cost": cv.period_cost,
+                    "period_tokens": cv.period_tokens,
+                    "history_days": cv.history_days,
+                    "error": cv.error,
+                    "daily": [
+                        {
+                            "date": d.date,
+                            "total_cost": d.total_cost,
+                            "total_tokens": d.total_tokens,
+                        }
+                        for d in cv.daily
+                    ],
+                }
         providers.append(
             {
                 "provider": v.provider,
@@ -269,6 +343,8 @@ def _views_to_json() -> dict:
                 "primary": _win_json(v.primary),
                 "secondary": _win_json(v.secondary),
                 "tertiary": _win_json(v.tertiary),
+                "extra_windows": [_win_json(w) for w in v.extra_windows],
+                "cost": cost,
             }
         )
     binary = find_codexbar_binary()

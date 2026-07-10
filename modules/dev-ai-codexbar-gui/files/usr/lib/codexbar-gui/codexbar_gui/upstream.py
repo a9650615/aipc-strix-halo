@@ -235,12 +235,21 @@ class ProviderView:
     primary: Optional[RateWindowView] = None
     secondary: Optional[RateWindowView] = None
     tertiary: Optional[RateWindowView] = None
+    extra_windows: List[RateWindowView] = field(default_factory=list)
     pace_summary: Optional[str] = None
     credits_remaining: Optional[float] = None
     reset_credits_available: Optional[int] = None
     data_confidence: Optional[str] = None
     updated_at: Optional[str] = None
     raw: dict[str, Any] = field(default_factory=dict)
+
+    def all_windows(self) -> List[RateWindowView]:
+        out: List[RateWindowView] = []
+        for w in (self.primary, self.secondary, self.tertiary):
+            if w is not None:
+                out.append(w)
+        out.extend(self.extra_windows)
+        return out
 
     @property
     def display_name(self) -> str:
@@ -268,7 +277,9 @@ class ProviderView:
     @property
     def ok(self) -> bool:
         return self.error is None and (
-            self.primary is not None or self.secondary is not None
+            self.primary is not None
+            or self.secondary is not None
+            or bool(self.extra_windows)
         )
 
 
@@ -314,11 +325,26 @@ def _window_from_dict(
         mins_i = int(mins) if mins is not None else None
     except (TypeError, ValueError):
         mins_i = None
+    # Prefer explicit title from extra windows
+    title = (
+        data.get("title")
+        or data.get("name")
+        or data.get("id")
+    )
     label_map = {
         300: "Session",
         10080: "Weekly",
     }
-    if mins_i in label_map:
+    if title:
+        label = str(title).replace("_", " ").replace("-", " ").title()
+    elif mins_i in label_map and label in {
+        "Session",
+        "Weekly",
+        "Extra",
+        "Primary",
+        "Secondary",
+    }:
+        # Only rename primary lanes — do not clobber Designs / Daily Routines etc.
         label = label_map[mins_i]
     resets_at = data.get("resetsAt") or data.get("resets_at")
     pace = _pace_from_cli(cli_pace) or compute_pace(used, mins_i, resets_at)
@@ -333,6 +359,35 @@ def _window_from_dict(
         resets_at=resets_at,
         pace=pace,
     )
+
+
+def _extra_windows_from_usage(usage: dict[str, Any]) -> List[RateWindowView]:
+    """Official extraRateWindows / additional limits (Designs, Daily Routines…)."""
+    raw = (
+        usage.get("extraRateWindows")
+        or usage.get("extra_rate_windows")
+        or usage.get("additionalRateLimits")
+        or usage.get("additional_rate_limits")
+        or []
+    )
+    out: List[RateWindowView] = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        # Shape: {id, title, window: {usedPercent,...}} or flat window
+        win_data = item.get("window") if isinstance(item.get("window"), dict) else item
+        label = str(
+            item.get("title")
+            or item.get("name")
+            or item.get("id")
+            or "Extra"
+        )
+        w = _window_from_dict(label, win_data)
+        if w is not None:
+            out.append(w)
+    return out
 
 
 def parse_upstream_item(item: dict[str, Any]) -> ProviderView:
@@ -398,6 +453,7 @@ def parse_upstream_item(item: dict[str, Any]) -> ProviderView:
         "Weekly", usage.get("secondary"), cli_pace=pace_secondary or None
     )
     tertiary = _window_from_dict("Extra", usage.get("tertiary"))
+    extras = _extra_windows_from_usage(usage)
 
     # Prefer weekly pace for card-level summary (official menu highlights weekly reserve)
     card_pace = None
@@ -418,6 +474,7 @@ def parse_upstream_item(item: dict[str, Any]) -> ProviderView:
         primary=primary,
         secondary=secondary,
         tertiary=tertiary,
+        extra_windows=extras,
         pace_summary=card_pace,
         credits_remaining=creds_f,
         reset_credits_available=reset_n,
@@ -474,6 +531,27 @@ def fetch_from_http(
     return parse_upstream_list(body)
 
 
+def enabled_providers_from_config() -> List[str]:
+    """Enabled provider ids from official config (for multi-tab UI)."""
+    for path in (
+        Path.home() / ".config" / "codexbar" / "config.json",
+        Path.home() / ".codexbar" / "config.json",
+    ):
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        out: List[str] = []
+        for p in data.get("providers") or []:
+            if isinstance(p, dict) and p.get("enabled") and p.get("id"):
+                out.append(str(p["id"]))
+        if out:
+            return out
+    return ["codex"]
+
+
 def _cli_provider_arg(provider: Optional[str]) -> Optional[str]:
     """Which ``--provider`` to pass.
 
@@ -490,6 +568,34 @@ def _cli_provider_arg(provider: Optional[str]) -> Optional[str]:
     if os.environ.get("CODEXBAR_ALL_PROVIDERS", "").lower() in {"1", "true", "yes"}:
         return None
     return "codex"
+
+
+def fetch_enabled_providers(
+    providers: Optional[List[str]] = None,
+    timeout: float = CLI_TIMEOUT,
+) -> List[ProviderView]:
+    """Fetch each enabled provider separately (avoids multi-provider hang)."""
+    ids = providers or enabled_providers_from_config()
+    # Cap concurrent-feeling sequential fetches
+    max_n = int(os.environ.get("CODEXBAR_MAX_PROVIDERS", "4"))
+    ids = ids[: max(1, max_n)]
+    views: List[ProviderView] = []
+    for pid in ids:
+        try:
+            batch = fetch_from_cli(provider=pid, timeout=timeout)
+        except Exception:
+            logger.warning("fetch %s failed", pid, exc_info=True)
+            batch = None
+        if batch:
+            views.extend(batch)
+        else:
+            views.append(
+                ProviderView(
+                    provider=pid,
+                    error=f"No data for {pid} (timeout or not configured)",
+                )
+            )
+    return views
 
 
 def _usage_source_for_provider(provider_id: Optional[str]) -> Optional[str]:

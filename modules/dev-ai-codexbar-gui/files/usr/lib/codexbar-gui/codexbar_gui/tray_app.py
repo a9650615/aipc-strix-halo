@@ -20,7 +20,11 @@ from codexbar_gui.icon_updater import (
 )
 from codexbar_gui.popover import UsagePopover
 from codexbar_gui.server_launcher import kill_server, start_server
-from codexbar_gui.upstream import ProviderView, fetch_usage_views, find_codexbar_binary
+from codexbar_gui.upstream import (
+    ProviderView,
+    fetch_enabled_providers,
+    find_codexbar_binary,
+)
 from codexbar_gui.usage_panel import summary_from_views
 from codexbar_gui.webapp import DEFAULT_WEB_PORT, start_web, stop_web
 
@@ -55,7 +59,7 @@ class _FetchWorker(QThread):
 
     def run(self) -> None:
         try:
-            views = fetch_usage_views(self._host, self._port, prefer_cli=True)
+            views = fetch_enabled_providers(timeout=35.0)
         except Exception:
             logger.warning("background fetch failed", exc_info=True)
             views = []

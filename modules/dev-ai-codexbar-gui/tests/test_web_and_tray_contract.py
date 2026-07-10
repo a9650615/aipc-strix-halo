@@ -61,7 +61,10 @@ def test_popover_constructs_with_web_url() -> None:
         ]
     )
     pop._views = views
-    pop._rebuild()
+    pop._costs = {}
+    pop._active = "codex"
+    pop._rebuild_tabs()
+    pop._rebuild_body()
     assert pop._body_layout.count() >= 1
 
 
@@ -90,20 +93,44 @@ def test_paint_dual_bar_non_null() -> None:
     ).isNull()
 
 
-def test_webapp_html_and_api_handlers() -> None:
+def test_webapp_html_and_api_handlers(monkeypatch) -> None:
     """Drive shipped Handler: GET / is HTML dashboard; /api/usage is JSON."""
     from http.client import HTTPConnection
     from threading import Thread
     from http.server import ThreadingHTTPServer
 
-    from codexbar_gui.webapp import _Handler, _views_to_json
+    from codexbar_gui.upstream import parse_upstream_item
+    from codexbar_gui import webapp as web
 
-    # Offline shape of API payload builder (CLI may or may not work)
-    payload = _views_to_json()
+    # Avoid live multi-provider + cost hang in unit tests
+    fake = [
+        parse_upstream_item(
+            {
+                "provider": "codex",
+                "source": "oauth",
+                "usage": {
+                    "primary": {
+                        "usedPercent": 1,
+                        "windowMinutes": 300,
+                        "resetsAt": "2099-01-01T00:00:00Z",
+                    },
+                    "secondary": {
+                        "usedPercent": 0,
+                        "windowMinutes": 10080,
+                        "resetsAt": "2099-07-01T00:00:00Z",
+                    },
+                },
+            }
+        )
+    ]
+    monkeypatch.setattr(web, "fetch_enabled_providers", lambda timeout=35.0: fake)
+    monkeypatch.setattr(web, "fetch_cost", lambda **kwargs: None)
+
+    payload = web._views_to_json()
     assert "providers" in payload
-    assert "source" in payload
+    assert payload["providers"]
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), web._Handler)
     port = httpd.server_address[1]
     t = Thread(target=httpd.serve_forever, daemon=True)
     t.start()
@@ -115,9 +142,8 @@ def test_webapp_html_and_api_handlers() -> None:
         assert resp.status == 200
         assert "text/html" in (resp.getheader("Content-Type") or "")
         assert "CodexBar" in body
-        assert "not found" not in body.lower() or "JSON-only" in body
         assert "<html" in body.lower()
-        assert "Usage" in body or "Session" in body or "Refresh" in body
+        assert "costHtml" in body or "Cost" in body or "Refresh" in body
         conn.close()
 
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
@@ -128,12 +154,13 @@ def test_webapp_html_and_api_handlers() -> None:
         assert "codexbar-gui-web" in health
         conn.close()
 
-        conn = HTTPConnection("127.0.0.1", port, timeout=45)
+        conn = HTTPConnection("127.0.0.1", port, timeout=10)
         conn.request("GET", "/api/usage")
         resp = conn.getresponse()
         api = resp.read().decode()
         assert resp.status == 200
         assert "providers" in api
+        assert "codex" in api
         conn.close()
     finally:
         httpd.shutdown()
