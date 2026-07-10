@@ -11,7 +11,16 @@ import os
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPen
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QFont,
+    QGuiApplication,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QRegion,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -37,13 +46,17 @@ from codexbar_gui.upstream import (
 
 logger = logging.getLogger("codexbar_gui.popover")
 
-# Refined palette (dark, not muddy)
+# Refined palette (dark, not muddy). surface_a = glass fill (RGBA).
 C = {
     "bg": "#0f1117",
     "surface": "#171a22",
-    "card": "#1c2030",
-    "card2": "#222838",
-    "border": "#2a3144",
+    "surface_a": "rgba(23, 26, 34, 220)",  # ~86% — true glass over desktop
+    "card": "rgba(28, 32, 48, 235)",
+    "card_solid": "#1c2030",
+    "card2": "rgba(34, 40, 56, 240)",
+    "card2_solid": "#222838",
+    "border": "rgba(90, 100, 130, 120)",
+    "border_solid": "#2a3144",
     "text": "#e8ecf4",
     "muted": "#9aa3b5",
     "dim": "#6b7385",
@@ -53,8 +66,9 @@ C = {
     "warn": "#e0af68",
     "bad": "#f7768e",
     "bar": "#e0af68",
-    "track": "#2a3144",
+    "track": "rgba(42, 49, 68, 200)",
 }
+_RADIUS = 16
 
 
 def _rem_color(rem: Optional[float]) -> str:
@@ -867,8 +881,11 @@ class UsagePopover(QWidget):
         )
         self.setObjectName("CodexBarPopover")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        # Shadow effects break mouse hit-testing on Wayland — do not use.
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        # True glass: transparent window; rounded shell paints the fill.
+        # Opaque surface + border-radius was the black corner "glue".
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAutoFillBackground(False)
         self._host = host
         self._port = port
         self._web_url = web_url
@@ -882,43 +899,50 @@ class UsagePopover(QWidget):
         self._last_anchor: Optional[QRect] = None
         self._pin_top_left: Optional[QPoint] = None  # keep corner after resize (Wayland)
 
-        # Single continuous surface — avoids black voids between scroll/chrome
+        # Window itself is fully transparent; children sit in a glass shell.
         self.setStyleSheet(
-            f"#CodexBarPopover {{"
-            f"  background: {C['surface']};"
-            f"  border: 1px solid {C['border']};"
-            f"  border-radius: 16px;"
-            f"}}"
+            f"#CodexBarPopover {{ background: transparent; border: none; }}"
             f"QLabel {{ color: {C['text']}; background: transparent; }}"
-            f"QScrollArea {{ background: {C['surface']}; border: none; }}"
-            f"QScrollArea > QWidget > QWidget {{ background: {C['surface']}; }}"
-            f"QScrollBar:vertical {{ width: 8px; background: {C['surface']}; margin: 2px; }}"
+            f"QScrollArea {{ background: transparent; border: none; }}"
+            f"QScrollArea > QWidget > QWidget {{ background: transparent; }}"
+            f"QScrollBar:vertical {{ width: 8px; background: transparent; margin: 2px; }}"
             f"QScrollBar::handle:vertical {{"
-            f"  background: {C['border']}; border-radius: 4px; min-height: 24px;"
+            f"  background: {C['border_solid']}; border-radius: 4px; min-height: 24px;"
             f"}}"
             f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
             f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{"
-            f"  background: {C['surface']};"
+            f"  background: transparent;"
             f"}}"
             f"QPushButton {{ outline: none; }}"
         )
-        self.setAutoFillBackground(True)
-        pal = self.palette()
-        pal.setColor(self.backgroundRole(), QColor(C["surface"]))
-        self.setPalette(pal)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+
+        # Glass shell — single rounded surface (no black corner tiles)
+        self._shell = QFrame()
+        self._shell.setObjectName("GlassShell")
+        self._shell.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._shell.setStyleSheet(
+            f"#GlassShell {{"
+            f"  background: {C['surface_a']};"
+            f"  border: 1px solid {C['border']};"
+            f"  border-radius: {_RADIUS}px;"
+            f"}}"
+        )
+        shell_l = QVBoxLayout(self._shell)
+        shell_l.setContentsMargins(0, 0, 0, 0)
+        shell_l.setSpacing(0)
+        outer.addWidget(self._shell)
 
         # Pill tab track
         self._tab_wrap = QFrame()
         self._tab_wrap.setObjectName("TabTrack")
         self._tab_wrap.setStyleSheet(
             f"#TabTrack {{"
-            f"  background: {C['surface']};"
+            f"  background: transparent;"
             f"  border: none;"
-            f"  border-top-left-radius: 16px; border-top-right-radius: 16px;"
             f"}}"
         )
         tab_outer = QVBoxLayout(self._tab_wrap)
@@ -938,26 +962,24 @@ class UsagePopover(QWidget):
         # Room for uniform 48px chips (label + mini bar)
         self._tab_track.setMinimumHeight(_TabChip.TAB_H + 8)
         tab_outer.addWidget(self._tab_track)
-        outer.addWidget(self._tab_wrap, 0)
+        shell_l.addWidget(self._tab_wrap, 0)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll.setAutoFillBackground(True)
-        self._scroll.viewport().setAutoFillBackground(True)
-        sp = self._scroll.palette()
-        sp.setColor(self._scroll.backgroundRole(), QColor(C["surface"]))
-        self._scroll.setPalette(sp)
-        self._scroll.viewport().setPalette(sp)
-        self._scroll.viewport().setStyleSheet(f"background: {C['surface']};")
+        self._scroll.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._scroll.setAutoFillBackground(False)
+        self._scroll.viewport().setAutoFillBackground(False)
+        self._scroll.viewport().setAttribute(
+            Qt.WidgetAttribute.WA_TranslucentBackground, True
+        )
+        self._scroll.viewport().setStyleSheet("background: transparent;")
         self._body = QWidget()
-        self._body.setAutoFillBackground(True)
-        self._body.setStyleSheet(f"background: {C['surface']};")
-        bp = self._body.palette()
-        bp.setColor(self._body.backgroundRole(), QColor(C["surface"]))
-        self._body.setPalette(bp)
+        self._body.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._body.setAutoFillBackground(False)
+        self._body.setStyleSheet("background: transparent;")
         self._body_layout = QVBoxLayout(self._body)
         self._body_layout.setContentsMargins(14, 8, 14, 12)
         self._body_layout.setSpacing(10)
@@ -965,16 +987,18 @@ class UsagePopover(QWidget):
         self._scroll.setWidget(self._body)
         self._scroll.setMinimumWidth(400)
         # stretch=0 so scroll does not eat infinite empty black space
-        outer.addWidget(self._scroll, 1)
+        shell_l.addWidget(self._scroll, 1)
 
-        # Menu footer
+        # Menu footer — glass strip, not solid black slab
         self._foot = QFrame()
         self._foot.setObjectName("Footer")
         self._foot.setStyleSheet(
             f"#Footer {{"
-            f"  background: {C['card']};"
+            f"  background: rgba(20, 22, 30, 160);"
+            f"  border: none;"
             f"  border-top: 1px solid {C['border']};"
-            f"  border-bottom-left-radius: 16px; border-bottom-right-radius: 16px;"
+            f"  border-bottom-left-radius: {_RADIUS}px;"
+            f"  border-bottom-right-radius: {_RADIUS}px;"
             f"}}"
         )
         actions = QVBoxLayout(self._foot)
@@ -1005,12 +1029,36 @@ class UsagePopover(QWidget):
         self._btn_quit.setToolTip("Stop tray icon, web UI, and exit completely")
         self._btn_quit.clicked.connect(self._request_quit)
         actions.addWidget(self._btn_quit)
-        outer.addWidget(self._foot, 0)
+        shell_l.addWidget(self._foot, 0)
 
         self._set_web_url(web_url)
         self.setMinimumWidth(400)
         self.setMinimumHeight(280)
         self.resize(420, 520)
+        self._update_round_mask()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        # Keep window fully clear — only GlassShell draws the frosted panel
+        del event
+        p = QPainter(self)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        p.fillRect(self.rect(), QColor(0, 0, 0, 0))
+        p.end()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._update_round_mask()
+
+    def _update_round_mask(self) -> None:
+        """Clip window to rounded rect so compositor cannot paint black corners."""
+        r = self.rect()
+        if r.width() < 4 or r.height() < 4:
+            return
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), _RADIUS, _RADIUS)
+        # QRegion from path — kills rectangular black feet outside the glass
+        poly = path.toFillPolygon().toPolygon()
+        self.setMask(QRegion(poly))
 
     def set_web_url(self, url: Optional[str]) -> None:
         self._set_web_url(url)
