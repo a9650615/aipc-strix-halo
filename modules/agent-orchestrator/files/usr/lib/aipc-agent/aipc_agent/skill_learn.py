@@ -187,26 +187,28 @@ def maybe_learn_async(
     kind: str = "hermes",
     agent: str = "hermes",
 ) -> None:
-    """Fire-and-forget skill extraction after a successful turn."""
+    """Enqueue skill extraction on the background learn worker (non-blocking).
+
+    Prefer the shared learn_queue so TTS/voice return is never waiting on LLM
+    skill extract. Falls back to a daemon thread if the queue is unavailable.
+    """
     if not ENABLED:
         return
     if not _worth_candidate(user, reply, kind=kind):
         return
+    try:
+        from aipc_agent.learn_queue import enqueue_skill_extract
+
+        if enqueue_skill_extract(
+            user, reply, session_id=session_id, kind=kind, agent=agent
+        ):
+            return
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent: learn_queue enqueue fail: {exc}", flush=True)
 
     def _run() -> None:
-        t0 = time.monotonic()
         try:
-            meta = _learn_sync(
-                user, reply, session_id=session_id, kind=kind, agent=agent
-            )
-            dt = time.monotonic() - t0
-            if meta:
-                print(
-                    f"aipc-agent: skill-learn ok id={meta.get('id')} {dt:.1f}s",
-                    flush=True,
-                )
-            else:
-                print(f"aipc-agent: skill-learn skip {dt:.1f}s", flush=True)
+            _learn_sync(user, reply, session_id=session_id, kind=kind, agent=agent)
         except Exception as exc:  # noqa: BLE001
             print(f"aipc-agent: skill-learn error: {exc}", flush=True)
 

@@ -43,6 +43,11 @@ depend on heavy Vulkan agent models. Override with env
   profile under `/var/lib/aipc-agent/browser-sandbox` (isolated from the
   user's personal browser) so the agent can crawl pages to answer or to
   learn procedures. Controlled by `AIPC_HERMES_BROWSER=auto|1|0`.
+- **Background learning:** skill extract is enqueued on a **daemon learn
+  queue** (never blocks TTS). Idle batch:
+  `aipc-self-improve.timer` → scans episodes → grows local skills under
+  `/var/lib/aipc-agent/skills/`. Manual:
+  `python -m aipc_agent self-improve --hours 72`.
   See OpenSpec `assistant-self-improvement` (skill tree + sandbox browser).
 - **Classifier**: daily intents are **model-judged**
   (`AIPC_CLASSIFIER=always`); stock/live price multi-turn routes to

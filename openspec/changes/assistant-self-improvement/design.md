@@ -186,6 +186,17 @@ content root. Checkout = process source for image build only.
 - Classifier remains **model-first for daily**; self-improve may only
   inject **few-shot examples**, not resurrect keyword-only daily gates.
 
+### Background learning (always on, non-blocking)
+
+| Path | When | Blocks voice? |
+|------|------|----------------|
+| `learn_queue` skill_extract | After successful turn (Hermes/daily/respond) | **No** — enqueue only |
+| `aipc-self-improve.timer` | Idle calendar (e.g. 03:30, 14:00) + after boot | **No** — separate unit |
+| Sandbox browser | Hermes task needs live pages | Only inside Hermes job |
+
+Voice critical path: STT → plan → reply → TTS **must not wait** for skill
+LLM extract or episode backfill.
+
 ### Self-critique job (phase B)
 
 Input: last K episodes (default 50) + existing mem0 top facts.  

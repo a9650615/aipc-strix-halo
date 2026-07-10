@@ -1,0 +1,16 @@
+[Unit]
+Description=AIPC background self-improve timer (idle skill growth)
+Documentation=file:///var/home/birdyo/aipc-strix-halo/openspec/changes/assistant-self-improvement/design.md
+
+[Timer]
+# Nightly + a few daytime idle passes
+OnCalendar=*-*-* 03:30:00
+OnCalendar=*-*-* 14:00:00
+# Also run ~15m after boot once stack is up
+OnBootSec=15min
+Persistent=true
+RandomizedDelaySec=10min
+Unit=aipc-self-improve.service
+
+[Install]
+WantedBy=timers.target
