@@ -178,14 +178,17 @@ class CodexBarApp:
         # Do NOT use setContextMenu(QMenu) with QWidgetActions on Wayland.
         self._tray.activated.connect(self._on_activated)
 
-    def _open_popover(self) -> None:
+    def _open_popover(self, click_pos=None) -> None:
         if self._popover is None:
             return
         try:
             if self._web_url:
                 self._popover.set_web_url(self._web_url)
-            # Anchor under the system tray icon (not screen center)
-            self._popover.show_at_tray(self._tray)
+            # Must pass click_pos from activated (Wayland seat serial / pointer)
+            from PySide6.QtGui import QCursor
+
+            pos = click_pos if click_pos is not None else QCursor.pos()
+            self._popover.show_at_tray(self._tray, click_pos=pos)
         except Exception:
             logger.exception("failed to show popover")
 
@@ -303,7 +306,15 @@ class CodexBarApp:
             QSystemTrayIcon.ActivationReason.MiddleClick,
             QSystemTrayIcon.ActivationReason.Context,
         ):
-            self._open_popover()
+            # Capture pointer immediately — Wayland popup positioner needs the
+            # same event turn as the tray click (geometry() is empty on KDE).
+            from PySide6.QtGui import QCursor
+
+            click = QCursor.pos()
+            if self._popover is not None and self._popover.isVisible():
+                self._popover.hide()
+                return
+            self._open_popover(click_pos=click)
 
     def _cleanup(self) -> None:
         if self._refresh_timer:

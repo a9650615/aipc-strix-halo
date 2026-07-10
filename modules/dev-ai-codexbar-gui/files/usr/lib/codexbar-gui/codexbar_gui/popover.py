@@ -7,6 +7,7 @@ Data stays official ``codexbar`` CLI only.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QThread, QTimer, Signal
@@ -827,6 +828,17 @@ class _ReloadWorker(QThread):
         self.done.emit(views, costs)
 
 
+def _is_wayland() -> bool:
+    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        return True
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return True
+    app = QApplication.instance()
+    if app is not None and "wayland" in app.platformName().lower():
+        return True
+    return False
+
+
 class UsagePopover(QWidget):
     def __init__(
         self,
@@ -834,16 +846,20 @@ class UsagePopover(QWidget):
         port: int = 8080,
         web_url: Optional[str] = None,
     ) -> None:
+        # Popup (xdg_popup) — NOT Tool/toplevel. On Wayland, Tool windows are
+        # placed by the compositor (often center); Popup rides the seat serial
+        # from the tray click and opens near the pointer / panel icon.
         super().__init__(
             None,
-            Qt.WindowType.Tool
+            Qt.WindowType.Popup
             | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint,
+            | Qt.WindowType.NoDropShadowWindowHint,
         )
         self.setObjectName("CodexBarPopover")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         # Shadow effects break mouse hit-testing on Wayland — do not use.
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
         self._host = host
         self._port = port
         self._web_url = web_url
@@ -855,6 +871,7 @@ class UsagePopover(QWidget):
         self._settings_open = False
         self._hide_armed = False
         self._last_anchor: Optional[QRect] = None
+        self._pin_top_left: Optional[QPoint] = None  # keep corner after resize (Wayland)
 
         # Single continuous surface — avoids black voids between scroll/chrome
         self.setStyleSheet(
@@ -997,88 +1014,133 @@ class UsagePopover(QWidget):
         QDesktopServices.openUrl(QUrl(self._web_url))
 
     def show_at_cursor(self) -> None:
-        """Back-compat: open without a tray handle (uses cursor / panel corner)."""
-        self.show_at_tray(None)
+        """Back-compat: open at current pointer."""
+        self.show_at_tray(None, click_pos=QCursor.pos())
 
-    def show_at_tray(self, tray: Optional[QSystemTrayIcon] = None) -> None:
-        """Anchor popover to the system-tray icon (not screen center).
+    def show_at_tray(
+        self,
+        tray: Optional[QSystemTrayIcon] = None,
+        click_pos: Optional[QPoint] = None,
+    ) -> None:
+        """Open under the tray icon / click (never compositor-centered).
 
-        Official menu-bar UX: open under/near the status item. On Linux we:
-        1. Prefer ``QSystemTrayIcon.geometry()`` when valid
-        2. Else the click cursor (user just clicked the tray)
-        3. Else primary screen panel corner (top-right / bottom-right)
-        Then place below the icon when space allows, otherwise above.
+        Critical on Wayland/KDE:
+        - ``QSystemTrayIcon.geometry()`` is often empty
+        - ``Tool`` / xdg_toplevel ``move()`` is ignored → window appears centered
+        - ``Popup`` uses the seat's last input serial and opens at the click
+
+        Call this **synchronously** from the tray ``activated`` handler with the
+        click position captured immediately.
         """
+        # Capture pointer ASAP (caller should also pass click_pos from activated)
+        pos = QPoint(click_pos) if click_pos is not None else QCursor.pos()
+
         if len(self._views) > 1:
             self._active = "overview"
-        self.reload()
 
-        # Ensure we have a sensible size before placing
-        if self.width() < 200 or self.height() < 100:
-            self.resize(max(self.width(), 420), max(self.height(), 480))
+        # Size before show so the popup positioner gets a real extent
+        w, h = 420, max(self.height(), 480)
+        if self.width() >= 200:
+            w = max(self.width(), 420)
+        if self.height() >= 200:
+            h = self.height()
 
-        anchor = self._tray_anchor_rect(tray)
+        anchor = self._tray_anchor_rect(tray, pos)
         self._last_anchor = QRect(anchor)
-        self._place_near_anchor(anchor)
-        self.show()
+        x, y = self._compute_pos(anchor, w, h)
+
+        # Ensure Popup flags (re-apply if something cleared them)
+        flags = (
+            Qt.WindowType.Popup
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
+        if self.windowFlags() != flags:
+            self.setWindowFlags(flags)
+
+        if _is_wayland():
+            # Wayland: xdg_popup is positioned from the seat's last input event
+            # (the tray click). Absolute move()/setGeometry is ignored for
+            # toplevels and can make KWin place us in the screen center.
+            # Just set size, show immediately in the same call stack as activated.
+            self.resize(w, h)
+            self.show()
+            # After map, pin whatever corner the compositor gave us (near click)
+            self._pin_top_left = self.geometry().topLeft()
+            # If compositor still gave center-ish, nudge via setGeometry once
+            # using click coords (some Qt builds honor first geometry on popup).
+            g = self.geometry()
+            screen = QGuiApplication.primaryScreen()
+            if screen is not None:
+                ag = screen.availableGeometry()
+                cx, cy = ag.center().x(), ag.center().y()
+                if abs(g.center().x() - cx) < 120 and abs(g.center().y() - cy) < 120:
+                    self.setGeometry(x, y, w, h)
+                    self._pin_top_left = QPoint(x, y)
+        else:
+            self.setGeometry(x, y, w, h)
+            self.show()
+            self.move(x, y)
+            self._pin_top_left = QPoint(x, y)
+
         self.raise_()
         self.activateWindow()
         self.setFocus(Qt.FocusReason.PopupFocusReason)
-        # Re-place after first layout/reload may change height
-        QTimer.singleShot(0, lambda a=QRect(anchor): self._place_near_anchor(a))
-        QTimer.singleShot(120, lambda a=QRect(anchor): self._place_near_anchor(a))
+        logger.info(
+            "popover show wayland=%s anchor=%s geo=%s click=%s pin=%s",
+            _is_wayland(),
+            anchor,
+            self.geometry(),
+            pos,
+            self._pin_top_left,
+        )
+
+        # Load data after map so we don't lose the input serial for the popup
+        self.reload()
 
     @staticmethod
-    def _tray_anchor_rect(tray: Optional[QSystemTrayIcon]) -> QRect:
+    def _tray_anchor_rect(
+        tray: Optional[QSystemTrayIcon],
+        click: QPoint,
+    ) -> QRect:
         if tray is not None:
             try:
                 g = tray.geometry()
-                if g.isValid() and g.width() > 0 and g.height() > 0:
-                    return QRect(g)
+                if g.isValid() and g.width() > 2 and g.height() > 2:
+                    # Reject (0,0,0,0) and full-screen nonsense
+                    if g.x() != 0 or g.y() != 0 or g.width() < 500:
+                        return QRect(g)
             except Exception:
                 pass
-        # Click is almost always on the tray icon when user opens us
-        c = QCursor.pos()
-        # Small fake icon rect around cursor
-        return QRect(c.x() - 12, c.y() - 12, 24, 24)
+        return QRect(click.x() - 12, click.y() - 12, 24, 24)
 
-    def _place_near_anchor(self, anchor: QRect) -> None:
-        """Position this window under (or above) the tray icon rect."""
-        if not self.isVisible() and self.width() < 50:
-            self.resize(420, 480)
-        w = max(self.width(), self.sizeHint().width(), 420)
-        h = max(self.height(), 200)
-        # Prefer current size once laid out
-        w = self.frameGeometry().width() or w
-        h = self.frameGeometry().height() or h
-
+    def _compute_pos(self, anchor: QRect, w: int, h: int) -> tuple[int, int]:
         screen = (
             QGuiApplication.screenAt(anchor.center())
+            or QGuiApplication.screenAt(QCursor.pos())
             or QGuiApplication.primaryScreen()
         )
         if screen is None:
-            self.move(anchor.center() + QPoint(-w // 2, 16))
-            return
+            return anchor.center().x() - w // 2, anchor.bottom() + 8
         avail = screen.availableGeometry()
 
-        # If geometry was bogus (0,0) — common on some Wayland trays before show —
-        # snap to the panel side: prefer top-right when panel is top, else bottom-right.
-        if anchor.x() <= 0 and anchor.y() <= 0 and anchor.width() <= 24:
-            # Heuristic: use cursor if it is near a screen edge; else top-right
+        # Bogus anchor → put near click if it looks edge-ish, else panel corner
+        if (anchor.x() <= 1 and anchor.y() <= 1) or (
+            anchor.width() <= 24 and anchor.height() <= 24 and anchor.center().manhattanLength() < 8
+        ):
             c = QCursor.pos()
-            if c.y() < avail.top() + 80:
-                anchor = QRect(avail.right() - 40, avail.top() + 4, 24, 24)
-            elif c.y() > avail.bottom() - 80:
-                anchor = QRect(avail.right() - 40, avail.bottom() - 28, 24, 24)
+            if c.y() < avail.top() + 96:
+                anchor = QRect(min(c.x(), avail.right() - 40), avail.top() + 2, 24, 28)
+            elif c.y() > avail.bottom() - 96:
+                anchor = QRect(min(c.x(), avail.right() - 40), avail.bottom() - 30, 24, 28)
             else:
-                anchor = QRect(avail.right() - 40, avail.top() + 4, 24, 24)
+                # Prefer top-right of available (common Plasma top panel)
+                anchor = QRect(avail.right() - 48, avail.top() + 2, 32, 28)
 
-        # Horizontal: center on icon, clamp into screen
         x = anchor.center().x() - w // 2
-        x = max(avail.left() + 8, min(x, avail.right() - w - 8))
+        x = max(avail.left() + 6, min(x, avail.right() - w - 6))
 
-        gap = 8
-        # Prefer below tray (top panels: icon at top → panel opens downward)
+        gap = 6
         y_below = anchor.bottom() + gap
         y_above = anchor.top() - h - gap
         if y_below + h <= avail.bottom() - 4:
@@ -1086,10 +1148,26 @@ class UsagePopover(QWidget):
         elif y_above >= avail.top() + 4:
             y = y_above
         else:
-            # Squeeze into remaining space below, then above
-            y = max(avail.top() + 8, min(y_below, avail.bottom() - h - 8))
+            y = max(avail.top() + 6, min(y_below, avail.bottom() - h - 6))
+        return int(x), int(y)
 
-        self.move(QPoint(int(x), int(y)))
+    def _place_near_anchor(self, anchor: QRect) -> None:
+        """X11-only re-dock after resize. No-op on Wayland (move is ignored)."""
+        if _is_wayland():
+            if self._pin_top_left is not None:
+                g = self.geometry()
+                self.setGeometry(
+                    self._pin_top_left.x(),
+                    self._pin_top_left.y(),
+                    g.width(),
+                    g.height(),
+                )
+            return
+        w = max(self.width(), 420)
+        h = max(self.height(), 200)
+        x, y = self._compute_pos(anchor, w, h)
+        self.setGeometry(x, y, w, h)
+        self._pin_top_left = QPoint(x, y)
 
     def reload(self) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -1258,11 +1336,16 @@ class UsagePopover(QWidget):
         total = chrome + min(scroll_h, max_scroll)
         total = max(280, min(total, max_total))
         width = max(self.width(), 420)
-        self.resize(width, total)
+        # Preserve top-left (especially Wayland Popup — don't re-center)
+        pin = self._pin_top_left or self.geometry().topLeft()
+        if self.isVisible():
+            self.setGeometry(pin.x(), pin.y(), width, total)
+            self._pin_top_left = QPoint(pin)
+        else:
+            self.resize(width, total)
         self._body.updateGeometry()
         self.updateGeometry()
-        # Keep docked under tray icon after height changes
-        if self.isVisible() and self._last_anchor is not None:
+        if self.isVisible() and self._last_anchor is not None and not _is_wayland():
             self._place_near_anchor(self._last_anchor)
 
     def _open_settings(self) -> None:
