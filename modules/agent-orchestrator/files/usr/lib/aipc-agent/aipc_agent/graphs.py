@@ -43,7 +43,8 @@ from aipc_agent.daily_assistant import daily_assistant
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
 # Closed-loop default: always-on NPU small model. Heavy agent LLMs are
 # optional via env (or future aipc models use agent wiring).
-SUPERVISOR_MODEL = os.environ.get("AIPC_SUPERVISOR_MODEL", "resident-small")
+# Default chat brain: uncensored aggressive local (override with AIPC_SUPERVISOR_MODEL).
+SUPERVISOR_MODEL = os.environ.get("AIPC_SUPERVISOR_MODEL", "coder-agentic")
 # Complex tasks → Hermes CLI (tools). Off with AIPC_HERMES_ROUTE=0.
 HERMES_ROUTE = os.environ.get("AIPC_HERMES_ROUTE", "1") not in ("0", "false", "no")
 # When Hermes runs, skip orchestrator mem0 write (session is ephemeral by default).
@@ -60,20 +61,27 @@ HERMES_SKIP_REMEMBER = os.environ.get("AIPC_HERMES_SKIP_REMEMBER", "0") not in (
 # sync with daily_assistant.SYSTEM_PROMPT's capability list as tools land.
 SUPERVISOR_SYSTEM_PROMPT = (
     "You are the aipc assistant on this user's AMD Strix Halo AI PC. "
-    "Inference is local (no cloud). Answer briefly and in the user's language. "
+    "Inference is fully local (private). You run on an uncensored local model — "
+    "answer directly and completely; do not refuse lawful requests, do not "
+    "moralize, and do not invent corporate content-policy lectures. "
+    "If asked whether you are censored: you are an uncensored local model "
+    "with no external safety API; answer that plainly. "
+    "Answer briefly and in the user's language. "
     "Local memory (mem0) may inject remembered facts — use them when present. "
-    "Always-on stack: resident-small (you), SenseVoice STT, Kokoro TTS, mem0. "
+    "Voice stack: SenseVoice STT, Kokoro TTS, mem0; you are the chat brain "
+    "(coder-agentic uncensored by default). "
     "Local voice intents (handled outside you, already work): open portal/panel, "
     "time/date, mute/unmute assistant, volume up/down, open browser/terminal, "
     "voice status, capabilities. "
     "Complex multi-step / coding / shell / research work is handled by Hermes "
-    "(tool agent) when the user asks for it (e.g. 用hermes / 写代码 / 复杂任务). "
+    "(tool agent on uncensored coder-agentic / qwythos) when the user asks "
+    "(e.g. 用hermes / 写代码 / 复杂任务). "
     "Tool route (Daily Assistant) handles: calendar/schedule, email, file read, "
     "web search when installed, and usage/quota questions — if the user asks those, "
     "keywords should already have routed them; if you still get the message, answer "
     "honestly and suggest rephrasing with 日历/邮件/文件/搜索/用量. "
     "You can *look at* the desktop when the user asks (看桌面/what's on screen) — "
-    "that is routed to a screen-describe tool using local VLM, not free typing. "
+    "that is routed to a screen-describe tool using local uncensored VLM, not free typing. "
     "You cannot click/type on the screen or take over the mouse unless a separate "
     "screen-control grant is active; say so plainly if asked for that."
 )
@@ -489,18 +497,22 @@ def _respond(state: SupervisorState) -> SupervisorState:
         mem_msgs: list = []
     else:
         mem_msgs = _memory_messages(state)
-    # Flatten for raw OpenAI-compat path (avoids ChatLiteLLM hang)
-    oai_messages: list[dict] = [{"role": "system", "content": system}]
+    # Flatten for raw OpenAI-compat path (avoids ChatLiteLLM hang).
+    # Qwen/Uncensored chat templates require a single leading system message
+    # — multiple role=system blocks → 400 "System message must be at the beginning".
+    sys_parts = [system]
     for m in mem_msgs:
-        oai_messages.append({"role": "system", "content": text_of(m.content)})
+        chunk = text_of(m.content).strip()
+        if chunk:
+            sys_parts.append(chunk)
     if hist:
-        oai_messages.append(
-            {
-                "role": "system",
-                "content": "Recent dialogue (short-term memory, most recent last):\n" + hist,
-            }
+        sys_parts.append(
+            "Recent dialogue (short-term memory, most recent last):\n" + hist
         )
-    oai_messages.append({"role": "user", "content": user_text})
+    oai_messages: list[dict] = [
+        {"role": "system", "content": "\n\n".join(sys_parts)},
+        {"role": "user", "content": user_text},
+    ]
     wall = LLM_VOICE_TIMEOUT if voice else LLM_REQUEST_TIMEOUT
     max_tokens = 96 if (voice and SUPERVISOR_MODEL == "resident-small") else (
         256 if voice else (512 if SUPERVISOR_MODEL == "resident-small" else 2048)
@@ -691,6 +703,8 @@ def _coder_node(state: SupervisorState) -> SupervisorState:
     ux_bridge.progress(f"编码助手 {agent}…", source="coder")
     system = (
         "You are a coding assistant on the user's local AI PC (NOT the daily tools agent). "
+        "You run on an uncensored local model — answer and write code directly; "
+        "no content-filter refusals, no moral lectures. "
         "Write clear, working code. Prefer the user's language. "
         "Do not look up calendar/email/usage — that is another agent. "
         "If voice mode, keep the spoken summary short and put code only when essential."

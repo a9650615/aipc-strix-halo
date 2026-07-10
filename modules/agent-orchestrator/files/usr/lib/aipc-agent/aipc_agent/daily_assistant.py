@@ -57,9 +57,9 @@ from aipc_agent import memory, ux_bridge
 from aipc_agent._util import text_of
 
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
-# Heavy tool-calling model (Vulkan). Simple single-tool asks should use
-# try_direct_tool() and never pay ornith cold-start.
-DAILY_ASSISTANT_MODEL = os.environ.get("AIPC_DAILY_MODEL", "ornith-35b")
+# Uncensored tool-calling default (Vulkan). Override with AIPC_DAILY_MODEL.
+# Simple single-tool asks should use try_direct_tool() and skip cold-start.
+DAILY_ASSISTANT_MODEL = os.environ.get("AIPC_DAILY_MODEL", "coder-agentic")
 
 # Keep this list in sync with TOOLS above and graphs.SUPERVISOR_SYSTEM_PROMPT
 # as real backends land — a user hit this directly: without a system prompt
@@ -67,8 +67,10 @@ DAILY_ASSISTANT_MODEL = os.environ.get("AIPC_DAILY_MODEL", "ornith-35b")
 # its own tools and reporting their real (not_configured) status.
 SYSTEM_PROMPT = (
     "You are the aipc assistant's Daily / tools agent (NOT the coding agent). "
-    "You run locally on the user's AI PC. Use tools iteratively: call a tool, "
-    "read the result, call more tools if needed, then answer briefly. "
+    "You run locally on an uncensored model on the user's AI PC. "
+    "Be direct: no content-filter refusals, no moral lectures. "
+    "Use tools iteratively: call a tool, read the result, call more tools if "
+    "needed, then answer briefly. "
     "Tools: calendar, email, files.read, web search, usage_lookup (coding "
     "quotas only — not for writing code), screen_describe (read-only VLM). "
     "When a tool returns not_configured, say that feature is not set up yet. "

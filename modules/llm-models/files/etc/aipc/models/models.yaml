@@ -27,31 +27,55 @@ models:
     model_id: gemma4-it-e4b-FLM
     size_gb: 9.6
 
-  # gemma4 (not qwen2.5-coder) on purpose: Ollama's streaming tool-call
-  # support is broken for the qwen2 family (repro'd directly against
-  # Ollama's native /api/chat with stream:true+tools — content leaks the
-  # raw JSON as text instead of a structured tool_calls delta, regardless
-  # of model size). gemma4 and llama3.2 both produce correct structured
-  # tool_calls in the same test; gemma4 was chosen for stronger general
-  # capability. devstral:24b (Mistral's dedicated agentic-coding model)
-  # was also tried and rejected — it either skipped tool calls or refused
-  # outright even when explicitly told to use them, in this same harness.
+  # Tool-call / agentic default (2026-07-09 trial): HauhauCS Qwen3.6-35B-A3B
+  # Aggressive uncensored Q4_K_P on Lemonade llamacpp:vulkan.
   #
-  # Moved from Ollama to Lemonade's llamacpp:vulkan backend 2026-07-05 —
-  # hardware-verified: same GGUF weights, but Lemonade's Vulkan backend
-  # measured ~41.6 tok/s vs Ollama's ~30.7 tok/s on this identical model
-  # (+35%), and tool-calling was re-verified structured (streaming
-  # tool_calls delta, finish_reason: "tool_calls") on this backend before
-  # switching — see modules/llm-lemonade/README.md for the full backend
-  # comparison (ROCm was tried first per AMD's own guidance and rejected:
-  # it can't allocate past the 4GB VRAM carve-out into GTT the way Ollama's
-  # build does, even with enable_dgpu_gtt on, and is far slower once forced
-  # to — Vulkan turned out to be the actual best performer on this specific
-  # APU for llama.cpp inference, contrary to the ROCm-first assumption).
+  # Replaces Gemma-4-26B-A4B-it-GGUF for this alias. Prior history that still
+  # matters: qwen2.5 family was rejected on Ollama (streaming tool_calls
+  # leaked JSON as content); stock qwen3.6:35b-a3b later passed tool-call
+  # tests on this machine (agent-log 2026-07-03); HauhauCS is the same base
+  # with refusals removed (0/465 claimed). Not a permanent promotion until
+  # streaming tool_calls + multi-turn tool loops are re-hardware-verified
+  # on this exact quant/backend.
+  #
+  # Custom Lemonade registration (not a built-in catalog id) — first pull
+  # must use the user. prefix when passing --checkpoint/--recipe:
+  #   lemonade pull user.Qwen3.6-35B-A3B-Uncensored-Aggressive-Q4_K_P \
+  #     --checkpoint main HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:Q4_K_P \
+  #     --recipe llamacpp --label tool-calling
+  # Registered id (OpenAI model field / list --downloaded) drops the user.
+  # prefix, matching Ornith. Then:
+  #   lemonade load Qwen3.6-35B-A3B-Uncensored-Aggressive-Q4_K_P \
+  #     --llamacpp vulkan --ctx-size 262144 \
+  #     --llamacpp-args "-np 4 -kvu" --save-options
+  # Qwen3.6 hybrid thinking: coding/tool consumers should pass
+  # enable_thinking=false (see litellm config extra_body).
   - alias: coder-agentic
     backend: lemonade
-    model_id: Gemma-4-26B-A4B-it-GGUF
-    size_gb: 16.9
+    model_id: Qwen3.6-35B-A3B-Uncensored-Aggressive-Q4_K_P
+    size_gb: 21.8
+
+  # Daily / Gemma-voice assistant (2026-07-09): HauhauCS Gemma4 26B-A4B QAT
+  # Balanced uncensored — same MoE class as the old coder-agentic Gemma,
+  # refusals removed without a personality rewrite. Does NOT replace
+  # coder-agentic (Qwen3.6 stays the tool-call default). Optional on-demand
+  # load; Lemonade max_loaded_models=2 so this competes with
+  # coder-agentic/ornith-35b for iGPU/GTT slots (resident-small on NPU
+  # does not count).
+  #
+  # First pull (user. prefix required with --checkpoint/--recipe):
+  #   lemonade pull user.Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M \
+  #     --checkpoint main HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M \
+  #     --recipe llamacpp --label tool-calling
+  #   lemonade load Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M \
+  #     --llamacpp vulkan --ctx-size 262144 \
+  #     --llamacpp-args "-np 4 -kvu" --save-options
+  # MTP draft (mtp-gemma-4-26B-A4B-it.gguf) is in the same HF repo; not
+  # wired on first trial — plain Q4_K_M main weights only.
+  - alias: assistant-gemma
+    backend: lemonade
+    model_id: Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M
+    size_gb: 15.6
 
   # 35B MoE reasoning + agentic-coding model. Same migration as
   # coder-agentic above: Lemonade's llamacpp:vulkan backend measured
@@ -62,17 +86,47 @@ models:
     model_id: Ornith-1.0-35B-GGUF-Q4_K_M
     size_gb: 19.7
 
-  # Experimental giant local model. Moved from Lemonade to Ollama 2026-07-07:
-  # Qwen 3.5-122B was unstable on Lemonade due to a slot-tracking bug in
-  # the router when max_loaded_models=2 (Ornith-35B + Qwen resident → router
-  # tried to evict a non-existent model → llama-server exit). Ollama handles
-  # the 54GB GGUF fine (verified: qwen3.6:35b-a3b 24GB runs on Ollama
-  # already on this hardware). Same weights, same quality — just a different
-  # serving backend.
+  # Qwythos-9B-Claude-Mythos-5-1M (empero-ai, Q4_K_M GGUF, 5.6GB) — Hermes's
+  # decision + tool-call brain (NOT the chat responder). Full-param Qwen3.5-9B
+  # post-trained on Claude Mythos/Fable traces; native function calling
+  # (Qwen3.5 spec) + 1M native ctx via YaRN (loaded 262144 to match the fleet
+  # — raise --ctx-size for the full 1M). v3 chat template fixes agentic use in
+  # Hermes/OpenCode/Claude Code. Small enough to co-reside with one other
+  # Lemonade Vulkan LLM under max_loaded_models=2. Role split: Qwythos decides
+  # + calls tools, assistant-gemma is the complementary chat responder;
+  # coder-agentic is role-redundant (also tool-call). That split — not an
+  # in-model MoE — is the "combination".
+  #
+  # First pull (user. prefix required with --checkpoint/--recipe):
+  #   lemonade pull user.Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M \
+  #     --checkpoint main empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M \
+  #     --recipe llamacpp --label tool-calling
+  # (quant ref :Q4_K_M; if lemonade resolves by file instead, target
+  # Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M.gguf)
+  #   lemonade load Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M \
+  #     --llamacpp vulkan --ctx-size 262144 \
+  #     --llamacpp-args "-np 4 -kvu" --save-options
+  # enable_thinking=false for agentic consumers (see litellm config); flip
+  # per-request to unlock Qwythos's reasoning trace.
+  - alias: qwythos-9b
+    backend: lemonade
+    model_id: Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M
+    size_gb: 5.6
+
+  # Giant local coding model — Qwen3.5-122B-A10B MoE on Ollama Vulkan.
+  # Moved from Lemonade 2026-07-07 (slot-tracking bug with max_loaded_models=2).
+  #
+  # 2026-07-09 optimized tag qwen3.5:122b-aipc (same Q4_K_M weights ~81GB,
+  # not Q3 despite the historical alias name):
+  #   - num_ctx 65536 (default 262k wastes KV / slows prefill on 128GB UMA)
+  #   - coding sampling (temp 0.6), num_predict 8192, num_batch 512
+  #   - keep_alive 15m in litellm (was 0m = full 81GB reload every request)
+  # Unload Lemonade Vulkan LLMs before loading this (~81GB) or load fails /
+  # thrashing. NPU resident-small is fine to leave.
   - alias: qwen35-122b-q3
     backend: ollama
-    model_id: qwen3.5:122b
-    size_gb: 53.9
+    model_id: qwen3.5:122b-aipc
+    size_gb: 81.4
 
   - alias: main-cloud
     backend: anthropic
@@ -109,3 +163,9 @@ models:
     backend: rag-embedder
     model_id: bge-m3
     size_gb: 3.4
+
+  # Vision (live-hotfix 2026-07-10) — see repo models.yaml for full comment
+  - alias: vlm-qwen2vl
+    backend: lemonade
+    model_id: Gemma4-26B-A4B-Uncensored-Vision-Q4_K_M
+    size_gb: 17.1

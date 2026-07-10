@@ -1,7 +1,7 @@
 """Invoke local Hermes CLI for complex tool-using tasks.
 
-Hermes (qwythos-9b via LiteLLM + terminal/browser/MCP) is the heavy agent.
-Voice /chat stays on resident-small for simple turns; keyword route hands
+Hermes (coder-agentic uncensored via LiteLLM + terminal/browser/MCP) is the heavy agent.
+Voice /chat defaults to assistant-gemma; keyword/tool route hands
 complex work here.
 
 Default is ephemeral: tag session --source aipc-voice, then delete it so

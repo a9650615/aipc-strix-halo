@@ -24,22 +24,20 @@ model_list:
       timeout: 1800
       num_retries: 0
 
-  # See models.yaml for why this is gemma4 and not qwen2.5-coder: Ollama's
-  # streaming tool-call support is broken for the qwen2 family regardless
-  # of model size, hardware-verified via direct /api/chat testing.
-  #
-  # Moved from Ollama to Lemonade (llamacpp:vulkan) 2026-07-05 — see
-  # models.yaml and modules/llm-lemonade/README.md for the benchmark and
-  # backend-choice writeup. Same router (lemond on :8001) as resident-small;
-  # Lemonade forwards by the `model` field to whichever child llama-server
-  # process currently has that model loaded — no keep_alive needed here,
-  # Lemonade's own max_loaded_models=2 setting keeps both this and
-  # ornith-35b resident simultaneously (see llm-lemonade's config).
+  # See models.yaml: 2026-07-09 trial — HauhauCS Qwen3.6-35B-A3B Aggressive
+  # uncensored Q4_K_P on Lemonade llamacpp:vulkan (replaces Gemma-4-26B-A4B).
+  # Same lemond :8001 router as resident-small; no keep_alive — Lemonade
+  # max_loaded_models=2 keeps this + ornith-35b. enable_thinking false so
+  # agentic/tool consumers get structured tool_calls without hybrid-thinking
+  # preambles (daily chat can override per-request).
   - model_name: coder-agentic
     litellm_params:
-      model: openai/Gemma-4-26B-A4B-it-GGUF
+      model: openai/Qwen3.6-35B-A3B-Uncensored-Aggressive-Q4_K_P
       api_base: http://127.0.0.1:8001/v1
       api_key: none
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
       # Root-caused 2026-07-05 (task: "coder-agentic sessions stop mid-task
       # unexpectedly"): the global router_settings below (timeout: 600,
       # num_retries: 2) means that once real concurrent load saturates
@@ -60,6 +58,21 @@ model_list:
       timeout: 1800
       num_retries: 0
 
+  # Daily Gemma uncensored (2026-07-09) — does not replace coder-agentic.
+  # HauhauCS Gemma4-26B-A4B QAT Balanced; same lemond :8001 + timeout policy.
+  # enable_thinking false: otherwise Gemma hybrid thinking fills
+  # reasoning_content and leaves message.content empty until max_tokens.
+  - model_name: assistant-gemma
+    litellm_params:
+      model: openai/Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+      timeout: 1800
+      num_retries: 0
+
   # Ornith-1.0-35B (deepreinforce-ai/Ornith-1.0-35B-GGUF, Q4_K_M, 19.7GB) —
   # 35B MoE reasoning + agentic-coding model. Moved from Ollama to Lemonade
   # (llamacpp:vulkan) 2026-07-05, same reasoning as coder-agentic above.
@@ -72,19 +85,48 @@ model_list:
       # (Lemonade-backed) models override the global router_settings.
       timeout: 1800
       num_retries: 0
+    model_info:
+      max_input_tokens: 262144
+      max_output_tokens: 4096
 
-  # Qwen 3.5-122B moved from Lemonade to Ollama 2026-07-07 due to slot-tracking bug
-  # (see models.yaml for details). Ollama handles the 54GB GGUF fine.
+  # Qwythos-9B-Claude-Mythos-5-1M (empero-ai, Q4_K_M GGUF, 5.6GB) — Hermes's
+  # decision + tool-call brain. See models.yaml; same lemond :8001 router +
+  # timeout policy as the other Lemonade Vulkan LLMs. enable_thinking false:
+  # Qwythos decides + emits structured tool_calls, and hybrid-thinking would
+  # leave message.content empty until max_tokens (see assistant-gemma) — flip
+  # per-request only when you want a visible decision trace.
+  - model_name: qwythos-9b
+    litellm_params:
+      model: openai/Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+      timeout: 1800
+      num_retries: 0
+    model_info:
+      max_input_tokens: 131072
+      max_output_tokens: 4096
+
+  # Qwen3.5-122B-A10B (optimized tag 2026-07-09). Same Q4_K_M weights as
+  # stock qwen3.5:122b (~81GB) with capped ctx + coding sampling — see
+  # models.yaml. keep_alive 15m: 0m forced a full reload per request and
+  # felt "broken after interrupt". reasoning_effort none → think=false.
+  # Unload Lemonade Vulkan LLMs before first load (81GB + resident Lemonade
+  # models exceeds comfortable UMA headroom on 128GB).
   - model_name: qwen35-122b-q3
     litellm_params:
-      model: ollama_chat/qwen3.5:122b
+      model: ollama_chat/qwen3.5:122b-aipc
       api_base: http://127.0.0.1:11434
       api_key: none
-      keep_alive: 0m
-      # LiteLLM's ollama_chat adapter maps reasoning_effort outside low/medium/high to think=false.
+      keep_alive: 15m
       reasoning_effort: "none"
       timeout: 1800
       num_retries: 0
+    model_info:
+      max_input_tokens: 65536
+      max_output_tokens: 8192
 
   - model_name: main-cloud
     litellm_params:
@@ -122,6 +164,30 @@ model_list:
       timeout: 60
       num_retries: 0
 
+
+  # Vision alias (live-hotfix 2026-07-10): phase-4 vlm-qwen2vl → Gemma-4 + mmproj
+  - model_name: vlm-qwen2vl
+    litellm_params:
+      model: openai/Gemma4-26B-A4B-Uncensored-Vision-Q4_K_M
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+      timeout: 1800
+      num_retries: 0
+
+
+  # Screen UI / OCR — Qwen2.5-VL-7B (unsloth Q4_K_M + mmproj). Prefer this
+  # for "what's on screen" over heavy Gemma uncensored vision.
+  - model_name: vlm-screen
+    litellm_params:
+      model: openai/Qwen2.5-VL-7B-Instruct-Q4_K_M
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
+      timeout: 600
+      num_retries: 0
+
 router_settings:
   timeout: 600
   num_retries: 2
@@ -140,7 +206,7 @@ litellm_settings:
   # The model behind an alias can change backend (Ollama/vLLM/llama.cpp/
   # cloud) without every consumer knowing -- hardware-verified 2026-07-05:
   # Hermes sent reasoning_effort (fine for a reasoning model like ornith-35b)
-  # against coder-agentic when it was pointed at Gemma-4-26B-A4B-it-GGUF,
+  # against coder-agentic when it was still on Gemma-4-26B-A4B-it-GGUF,
   # which doesn't support that param, and got a hard 400 instead of the
   # gateway just dropping the field. This is the single choke point for
   # every consumer (CLAUDE.md §7); fixing it here beats teaching every

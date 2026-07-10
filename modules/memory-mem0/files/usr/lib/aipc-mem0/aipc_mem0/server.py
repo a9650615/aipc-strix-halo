@@ -40,7 +40,7 @@ CONFIG = {
     "llm": {
         "provider": "openai",
         "config": {
-            "model": "ornith-35b",
+            "model": "coder-agentic",
             "openai_base_url": LITELLM_BASE_URL,
             "api_key": "aipc-local",
         },

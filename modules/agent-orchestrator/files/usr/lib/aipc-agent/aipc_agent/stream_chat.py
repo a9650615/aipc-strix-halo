@@ -56,16 +56,13 @@ def _messages_for_voice(text: str, session_id: str) -> list[dict[str, str]]:
     if _is_voice_session(session_id):
         system = SUPERVISOR_SYSTEM_PROMPT + " " + VOICE_SYSTEM_PROMPT_EXTRA
     remembered = memory.recall(text, session_id, agent=memory.AGENT_CHAT)
-    msgs: list[dict[str, str]] = [{"role": "system", "content": system}]
+    # Single leading system (Qwen chat templates reject multi-system)
     if remembered:
-        msgs.append(
-            {
-                "role": "system",
-                "content": f"Relevant remembered facts:\n{remembered}",
-            }
-        )
-    msgs.append({"role": "user", "content": text})
-    return msgs
+        system = system + f"\n\nRelevant remembered facts:\n{remembered}"
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": text},
+    ]
 
 
 def _max_tokens(session_id: str) -> int:

@@ -6,7 +6,7 @@ no local/self-hosted mode, and mem0ai==2.0.11 ships no MCP entrypoint at all
 (no `mcp` dep installed, no `mem0 mcp` CLI). This module is the local
 equivalent: a stdio MCP server wrapping the real `mem0.Memory` configured
 against the LOCAL stack (pgvector via db-postgres + LiteLLM gateway on :4000
-for the ornith-35b LLM and embed-bge embedder), so agents store and search
+for the assistant-gemma LLM and embed-bge embedder), so agents store and search
 memories LOCALLY instead of hitting the SaaS quota.
 
 Same tool surface as the platform MCP (add_memory, search_memories, get_memories,
