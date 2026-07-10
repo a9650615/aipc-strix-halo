@@ -86,16 +86,18 @@ def svg_to_qicon_data(svg_string: str) -> str:
 
 
 def _new_canvas(size: int) -> tuple[QPixmap, QPainter]:
-    dpr = _device_pixel_ratio()
-    # Paint at least 2× physical so Plasma downscale stays sharp; keep content inset.
-    phys = max(size * 2, int(round(size * max(dpr, 2.0))))
+    """HiDPI canvas: paint in *logical* coords 0..size (do not double-scale)."""
+    dpr = max(1.0, _device_pixel_ratio())
+    # Prefer ≥2× for Plasma downscale sharpness without exceeding huge bitmaps.
+    dpr = max(dpr, 2.0)
+    phys = max(1, int(round(size * dpr)))
     pixmap = QPixmap(phys, phys)
     pixmap.fill(Qt.GlobalColor.transparent)
-    pixmap.setDevicePixelRatio(phys / float(size))
+    pixmap.setDevicePixelRatio(dpr)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-    painter.scale(phys / float(size), phys / float(size))
+    # No painter.scale — setDevicePixelRatio already maps logical→physical.
     return pixmap, painter
 
 
