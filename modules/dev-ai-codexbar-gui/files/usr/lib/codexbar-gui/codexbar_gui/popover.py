@@ -1086,6 +1086,30 @@ class UsagePopover(QWidget):
         """Back-compat: open at current pointer / panel corner."""
         self.show_at_tray(None, click_pos=QCursor.pos())
 
+    def apply_tray_views(self, views: list) -> None:
+        """Seed / refresh cache from tray background poll (no full cost fetch).
+
+        Keeps last known usage so the next open paints immediately.
+        """
+        if not views:
+            return
+        self._views = list(views)
+        # If panel is open, refresh body quietly without a blank flash
+        if self.isVisible() and not (
+            self._worker is not None and self._worker.isRunning()
+        ):
+            if self._active is None or (
+                self._active != "overview"
+                and self._active not in {v.provider for v in self._views}
+            ):
+                self._active = (
+                    "overview"
+                    if len(self._views) > 1
+                    else self._views[0].provider
+                )
+            self._rebuild_tabs()
+            self._rebuild_body()
+
     def show_at_tray(
         self,
         tray: Optional[QSystemTrayIcon] = None,
@@ -1093,22 +1117,39 @@ class UsagePopover(QWidget):
     ) -> None:
         """Open docked under the system-tray corner — stable every click.
 
-        Do **not** use QCursor: StatusNotifier activate reports junk coordinates
-        that change between clicks (horizontal "drift"). Only ``tray.geometry()``
-        when valid, else a fixed panel corner (top-right / bottom-right).
+        Paints **cached** usage immediately (from last tray poll / last open),
+        then refreshes in the background. Never blank the panel while waiting.
         """
         del click_pos  # intentionally ignored — unstable on KDE SNI
 
         if len(self._views) > 1:
             self._active = "overview"
+        elif self._views and self._active is None:
+            self._active = self._views[0].provider
 
         w = 420
-        probe_h = 360
+        # Prefer last fitted height so reopen does not shrink-flash
+        probe_h = max(self.height(), 360) if self.height() > 200 else 360
         x, y = self._stable_dock_pos(tray, w, probe_h)
         self._pin_top_left = QPoint(x, y)
         self._last_anchor = QRect(x + w - 28, y - 2, 24, 1)
 
         self.setGeometry(x, y, w, probe_h)
+
+        # Instant UI from cache (tray already polls every N seconds)
+        if self._views:
+            self._rebuild_tabs()
+            self._rebuild_body()
+            self._status.setText(
+                (self._status.text() or "Ready").split(" · refreshing")[0]
+                + " · refreshing..."
+            )
+            self.reload(quiet=True)
+        else:
+            # First open ever — no cache yet
+            self._status.setText("Loading providers...")
+            self.reload(quiet=False)
+
         self.show()
         self.move(x, y)
         self.raise_()
@@ -1118,13 +1159,12 @@ class UsagePopover(QWidget):
         screen = QGuiApplication.primaryScreen()
         if screen is not None:
             logger.info(
-                "popover show pin=%s full=%s avail=%s tray_geo=%s",
+                "popover show pin=%s cached=%d full=%s avail=%s",
                 self._pin_top_left,
+                len(self._views),
                 screen.geometry(),
                 screen.availableGeometry(),
-                tray.geometry() if tray is not None else None,
             )
-        self.reload()
 
     @staticmethod
     def _stable_dock_pos(
@@ -1200,9 +1240,20 @@ class UsagePopover(QWidget):
             return
         if not quiet:
             self._status.setText("Loading providers...")
-            # Disable actions while first load so footer does not look "half live"
-            self._set_footer_enabled(False)
+            # Only blank-disable footer when we have nothing to show yet
+            if not self._views:
+                self._set_footer_enabled(False)
+        else:
+            # Keep cards visible; light status hint only
+            base = self._status.text().split(" · refreshing")[0].strip()
+            if not base or base.startswith("Loading"):
+                base = f"{sum(1 for v in self._views if v.ok)}/{len(self._views)} providers"
+            self._status.setText(f"{base} · refreshing...")
         self._worker = _ReloadWorker(self._host, self._port, parent=self)
+        try:
+            self._worker.done.disconnect(self._on_reload_done)
+        except (TypeError, RuntimeError):
+            pass
         self._worker.done.connect(self._on_reload_done)
         self._worker.start()
 

@@ -263,6 +263,9 @@ class CodexBarApp:
                     head = tray_tooltip_line(pick, self._menu_bar) if pick else tip
                     tip = f"{head}\n{tip}\n(click tray icon){extra}"
                 self._tray.setToolTip(tip)
+            # Keep popover cache warm so open is instant (no blank Loading flash)
+            if self._popover is not None:
+                self._popover.apply_tray_views(typed)
         except Exception:
             logger.warning("apply views failed", exc_info=True)
             self._set_icon(error=True)
