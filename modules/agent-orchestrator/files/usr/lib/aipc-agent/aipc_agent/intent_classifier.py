@@ -38,8 +38,8 @@ TARGETS = frozenset(
 MODES = frozenset({"short", "long"})
 LONG_CAPABLE = frozenset({"hermes", "daily_assistant"})
 
-# Default: small Mythos local model (not NPU gemma-it). Override via env.
-CLASSIFIER_MODEL = os.environ.get("AIPC_CLASSIFIER_MODEL", "qwythos-9b")
+# Default: NPU resident-small for classify latency. Override via env.
+CLASSIFIER_MODEL = os.environ.get("AIPC_CLASSIFIER_MODEL", "resident-small")
 LITELLM_BASE_URL = os.environ.get("AIPC_LITELLM_URL", "http://127.0.0.1:4000")
 
 # Ultra-compact system prompt — model only labels, does not answer the user.

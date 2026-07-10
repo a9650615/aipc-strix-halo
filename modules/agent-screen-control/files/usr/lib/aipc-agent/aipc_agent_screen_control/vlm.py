@@ -25,7 +25,7 @@ from aipc_agent_screen_control import gate
 
 LITELLM_BASE_URL = os.environ.get("AIPC_LITELLM_URL", "http://127.0.0.1:4000").rstrip("/")
 # Prefer screen UI/OCR model; uncensored gemma vision remains vlm-qwen2vl.
-VLM_MODEL = os.environ.get("AIPC_SCREEN_VLM", "vlm-qwen2vl")
+VLM_MODEL = os.environ.get("AIPC_SCREEN_VLM", "vlm-screen")
 DEFAULT_PROMPT = (
     "Describe the visible UI layout: windows, buttons, text fields, "
     "and their approximate positions. Be concise."

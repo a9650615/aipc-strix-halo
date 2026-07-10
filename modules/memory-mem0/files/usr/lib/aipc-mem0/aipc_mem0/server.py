@@ -40,7 +40,7 @@ CONFIG = {
     "llm": {
         "provider": "openai",
         "config": {
-            "model": "coder-agentic",
+            "model": "resident-small",
             "openai_base_url": LITELLM_BASE_URL,
             "api_key": "aipc-local",
         },

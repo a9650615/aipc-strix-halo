@@ -18,7 +18,8 @@ import urllib.request
 from pathlib import Path
 
 LITELLM_BASE_URL = os.environ.get("AIPC_LITELLM_URL", "http://127.0.0.1:4000").rstrip("/")
-VLM_MODEL = os.environ.get("AIPC_SCREEN_VLM", "vlm-qwen2vl")
+# Prefer small/fast screen VLM; set AIPC_SCREEN_VLM=vlm-qwen2vl for uncensored vision.
+VLM_MODEL = os.environ.get("AIPC_SCREEN_VLM", "vlm-screen")
 TIMEOUT = float(os.environ.get("AIPC_SCREEN_VLM_TIMEOUT", "180"))
 # Cap long edge so VLM loads/infers faster on APU (full 4K PNGs are multi-MB base64).
 MAX_EDGE = int(os.environ.get("AIPC_SCREEN_MAX_EDGE", "1280"))

@@ -27,9 +27,9 @@ from aipc_lib.models import ModelEntry
 # Preset id -> human summary
 PRESETS: dict[str, str] = {
     "agent": (
-        "Agent role (uncensored): assistant-gemma chat, coder-agentic tools, "
-        "qwythos-9b classify/optional Hermes brain. Unloads giant Ollama 122B. "
-        "Baseline NPU resident-small + SenseVoice + Kokoro + mem0 stays."
+        "Agent hybrid: NPU resident-small for chat/classify (speed); "
+        "Vulkan coder-agentic uncensored for Hermes/tools. Unloads 122B. "
+        "Baseline SenseVoice + Kokoro + mem0 stays."
     ),
     "122b": (
         "Dev/coding role: giant Qwen3.5-122B on Ollama. Unloads Lemonade "
@@ -122,11 +122,11 @@ def plan_switch(
             if e is not None:
                 maybe_unload(e)
         notes.append(
-            "Uncensored agent path: assistant-gemma (chat), coder-agentic "
-            "(tools/Hermes), qwythos-9b (classify)."
+            "NPU chat/classify: resident-small. Vulkan tools: coder-agentic "
+            "(uncensored Hermes). Optional chat upgrade: assistant-gemma."
         )
-        # Warm primary tool/chat uncensored models if declared.
-        for warm_alias in ("coder-agentic", "assistant-gemma", "qwythos-9b"):
+        # Keep NPU warm; do not force-load heavy Vulkan until Hermes is used.
+        for warm_alias in ("resident-small",):
             agent = by_alias.get(warm_alias)
             if agent is not None and agent.backend == "lemonade":
                 warm = WarmAction(
