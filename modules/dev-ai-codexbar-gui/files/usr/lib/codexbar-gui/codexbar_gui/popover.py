@@ -1046,12 +1046,16 @@ class UsagePopover(QWidget):
         self.activateWindow()
         self.setFocus(Qt.FocusReason.PopupFocusReason)
 
-        logger.info(
-            "popover show pin=%s anchor=%s click=%s",
-            self._pin_top_left,
-            anchor,
-            pos,
-        )
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            logger.info(
+                "popover show pin=%s anchor=%s click=%s full=%s avail=%s",
+                self._pin_top_left,
+                anchor,
+                pos,
+                screen.geometry(),
+                screen.availableGeometry(),
+            )
         self.reload()
 
     @staticmethod
@@ -1059,6 +1063,13 @@ class UsagePopover(QWidget):
         tray: Optional[QSystemTrayIcon],
         click: Optional[QPoint],
     ) -> QRect:
+        """Resolve a rect to hang the popover under.
+
+        On KDE + StatusNotifier, ``tray.geometry()`` is usually empty and
+        ``QCursor.pos()`` at activate is often a *stale* pointer (y not on the
+        panel). Trust click **x** for horizontal, but pin **y** to the panel
+        edge so the window sits under the icon strip — not mid-screen.
+        """
         if tray is not None:
             try:
                 g = tray.geometry()
@@ -1072,56 +1083,75 @@ class UsagePopover(QWidget):
                     return QRect(g)
             except Exception:
                 pass
-        if click is not None and (click.x() > 0 or click.y() > 0):
-            return QRect(click.x() - 12, click.y() - 12, 24, 24)
+
         screen = QGuiApplication.primaryScreen()
         if screen is None:
+            if click is not None:
+                return QRect(click.x() - 12, click.y() - 12, 24, 24)
             return QRect(100, 40, 24, 24)
-        avail = screen.availableGeometry()
+
         full = screen.geometry()
-        if avail.top() > full.top() + 5:
-            return QRect(avail.right() - 40, avail.top(), 28, 24)
-        if full.bottom() - avail.bottom() > 5:
-            return QRect(avail.right() - 40, avail.bottom() - 24, 28, 24)
-        return QRect(avail.right() - 40, avail.top() + 4, 28, 24)
+        avail = screen.availableGeometry()
+        # Horizontal: prefer click x (user said left/right is about right)
+        if click is not None and click.x() > 0:
+            cx = click.x()
+        else:
+            cx = avail.right() - 20
+
+        # Vertical: always the panel strip — never stale cursor y (often ~200px mid-screen)
+        panel_top = avail.top() - full.top()
+        panel_bot = full.bottom() - avail.bottom()
+        if panel_top >= 8:
+            # Top panel reserves space; hang at first pixel of free area
+            return QRect(cx - 12, avail.top(), 24, 1)
+        if panel_bot >= 8:
+            return QRect(cx - 12, avail.bottom() - 1, 24, 1)
+
+        # No strut (common on Wayland/XWayland): assume Plasma top panel ~40px
+        # and only treat click.y as panel if it is actually near the edge.
+        assumed = 40
+        if click is not None and click.y() > full.bottom() - 80:
+            return QRect(cx - 12, full.bottom() - assumed, 24, 1)
+        return QRect(cx - 12, full.top() + assumed, 24, 1)
 
     def _compute_pos(self, anchor: QRect, w: int, h: int) -> tuple[int, int]:
-        """One-shot placement: prefer below tray, right-aligned when near edge."""
+        """One-shot: y flush under top panel (or above bottom); x near tray."""
         screen = (
-            QGuiApplication.screenAt(anchor.center())
+            QGuiApplication.screenAt(QPoint(anchor.center().x(), anchor.center().y()))
             or QGuiApplication.primaryScreen()
         )
         if screen is None:
-            return max(0, anchor.center().x() - w // 2), max(0, anchor.bottom() + 8)
+            return max(0, anchor.center().x() - w // 2), max(0, anchor.bottom() + 4)
         avail = screen.availableGeometry()
         full = screen.geometry()
+        gap = 2
 
-        # Horizontal: prefer right-align to icon (tray is usually on the right)
-        x = anchor.right() - w
-        if x < avail.left() + 6:
-            x = anchor.center().x() - w // 2
+        # Horizontal near tray/icon
+        x = anchor.center().x() - w // 2
+        if anchor.center().x() > avail.left() + avail.width() * 0.55:
+            x = min(anchor.right() + 4, avail.right() - 6) - w
         x = max(avail.left() + 6, min(x, avail.right() - w - 6))
 
-        gap = 6
-        # Top panel (common): always open downward into available area
-        if avail.top() > full.top() + 5:
-            y = max(avail.top() + 4, anchor.bottom() + gap)
+        panel_top = avail.top() - full.top()
+        panel_bot = full.bottom() - avail.bottom()
+
+        if panel_top >= 8:
+            # Flush under top panel
+            y = avail.top() + gap
             return int(x), int(y)
+        if panel_bot >= 8:
+            y = avail.bottom() - h - gap
+            return int(x), int(max(avail.top() + gap, y))
 
-        # Bottom panel: open upward
-        if full.bottom() - avail.bottom() > 5:
-            y = min(avail.bottom() - h - 4, anchor.top() - h - gap)
-            return int(x), int(max(avail.top() + 4, y))
-
-        # No clear panel: prefer below, else above
-        y_below = anchor.bottom() + gap
-        y_above = anchor.top() - h - gap
-        if y_below + h <= avail.bottom() - 4:
-            y = y_below
-        elif y_above >= avail.top() + 4:
-            y = y_above
+        # No strut: anchor.top() is already "under assumed panel"
+        y = anchor.top() + gap
+        # Bottom-tray case: anchor near bottom
+        if anchor.top() > full.center().y():
+            y = anchor.top() - h - gap
+            y = max(full.top() + gap, y)
         else:
-            y = max(avail.top() + 6, min(y_below, avail.bottom() - h - 6))
+            y = min(y, full.bottom() - h - gap)
+            y = max(full.top() + 36, y)  # never cover assumed panel
         return int(x), int(y)
 
     def _apply_pinned_geometry(self, width: int, height: int) -> None:
