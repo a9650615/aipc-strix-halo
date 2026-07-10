@@ -33,6 +33,28 @@ def test_parse_cost_item_daily() -> None:
     assert "30" in c.period_line
 
 
+def test_parse_cost_prefers_official_rollups() -> None:
+    """Live Claude cost JSON exposes last30DaysCostUSD even when a day lacks totalCost."""
+    from codexbar_gui.cost import parse_cost_item
+
+    item = {
+        "provider": "claude",
+        "currencyCode": "USD",
+        "historyDays": 30,
+        "last30DaysCostUSD": 110.41,
+        "last30DaysTokens": 132_000_000,
+        "sessionTokens": 16_000_000,
+        "daily": [
+            {"date": "2026-07-09", "totalCost": 13.85, "totalTokens": 10_000_000},
+            {"date": "2026-07-10", "totalCost": None, "totalTokens": 4_000_000},
+        ],
+    }
+    c = parse_cost_item(item)
+    assert abs(c.period_cost - 110.41) < 0.01
+    assert c.period_tokens == 132_000_000
+    assert c.today_tokens == 4_000_000 or c.today_tokens == 16_000_000
+
+
 def test_extra_windows_parsed() -> None:
     from codexbar_gui.upstream import parse_upstream_item
 

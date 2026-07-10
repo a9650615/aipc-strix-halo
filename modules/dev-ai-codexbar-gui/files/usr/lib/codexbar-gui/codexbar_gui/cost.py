@@ -59,6 +59,24 @@ def _fmt_tokens(n: int) -> str:
     return str(n)
 
 
+def _f(val: Any, default: float = 0.0) -> float:
+    try:
+        if val is None:
+            return default
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _i(val: Any, default: int = 0) -> int:
+    try:
+        if val is None:
+            return default
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
 def parse_cost_item(item: dict[str, Any]) -> CostView:
     provider = str(item.get("provider") or "unknown")
     daily_raw = item.get("daily") if isinstance(item.get("daily"), list) else []
@@ -66,26 +84,42 @@ def parse_cost_item(item: dict[str, Any]) -> CostView:
     for row in daily_raw:
         if not isinstance(row, dict):
             continue
-        try:
-            cost = float(row.get("totalCost") or row.get("total_cost") or 0)
-        except (TypeError, ValueError):
-            cost = 0.0
-        try:
-            tokens = int(row.get("totalTokens") or row.get("total_tokens") or 0)
-        except (TypeError, ValueError):
-            tokens = 0
+        cost = _f(row.get("totalCost") if row.get("totalCost") is not None else row.get("total_cost"))
+        tokens = _i(row.get("totalTokens") if row.get("totalTokens") is not None else row.get("total_tokens"))
         d = str(row.get("date") or "")
         if not d:
             continue
         days.append(DailyCost(date=d, total_cost=cost, total_tokens=tokens))
     days.sort(key=lambda x: x.date)
-    period_cost = sum(d.total_cost for d in days)
-    period_tokens = sum(d.total_tokens for d in days)
+
+    # Prefer official rollups when present (Claude cost JSON)
+    period_cost = _f(item.get("last30DaysCostUSD") or item.get("last_30_days_cost_usd"))
+    period_tokens = _i(item.get("last30DaysTokens") or item.get("last_30_days_tokens"))
+    if period_cost <= 0 and days:
+        period_cost = sum(d.total_cost for d in days)
+    if period_tokens <= 0 and days:
+        period_tokens = sum(d.total_tokens for d in days)
+
+    totals = item.get("totals") if isinstance(item.get("totals"), dict) else {}
     today = date.today().isoformat()
     today_row = next((d for d in reversed(days) if d.date == today), None)
-    if today_row is None and days:
-        # use last day as "latest"
-        today_row = days[-1]
+    today_cost = _f(
+        (today_row.total_cost if today_row and today_row.total_cost else None)
+        or totals.get("todayCost")
+        or totals.get("today_cost")
+        or item.get("todayCost")
+    )
+    today_tokens = _i(
+        (today_row.total_tokens if today_row and today_row.total_tokens else None)
+        or item.get("sessionTokens")
+        or totals.get("todayTokens")
+        or item.get("todayTokens")
+    )
+    if today_cost <= 0 and today_row:
+        today_cost = today_row.total_cost
+    if today_tokens <= 0 and today_row:
+        today_tokens = today_row.total_tokens
+
     try:
         hist = int(item.get("historyDays") or item.get("history_days") or 30)
     except (TypeError, ValueError):
@@ -95,8 +129,8 @@ def parse_cost_item(item: dict[str, Any]) -> CostView:
         currency=str(item.get("currencyCode") or item.get("currency") or "USD"),
         source=str(item.get("source") or ""),
         history_days=hist,
-        today_cost=today_row.total_cost if today_row else 0.0,
-        today_tokens=today_row.total_tokens if today_row else 0,
+        today_cost=today_cost,
+        today_tokens=today_tokens,
         period_cost=period_cost,
         period_tokens=period_tokens,
         daily=days,
