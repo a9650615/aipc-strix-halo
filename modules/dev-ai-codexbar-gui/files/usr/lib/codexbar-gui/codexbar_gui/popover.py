@@ -196,8 +196,10 @@ class _TabChip(QFrame):
         self.setObjectName("TabChip")
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedSize(self.TAB_W, self.TAB_H)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        # Default size; 3×N grid may stretch width to fill the track evenly
+        self.setFixedHeight(self.TAB_H)
+        self.setMinimumWidth(72)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._accent = accent or C["accent"]
         self._show_bar = show_bar
         self._remaining = remaining
@@ -852,8 +854,10 @@ class _ReloadWorker(QThread):
         self.done.emit(views, costs)
 
 
-class _FlowLayout(QLayout):
-    """Grid-aligned wrap: every cell is the same size so rows line up cleanly."""
+class _TabGridLayout(QLayout):
+    """Fixed 3-column tab grid (3×N). Equal cells, always aligned."""
+
+    COLS = 3
 
     def __init__(
         self,
@@ -861,14 +865,12 @@ class _FlowLayout(QLayout):
         *,
         h_spacing: int = 6,
         v_spacing: int = 6,
-        cell_w: int = _TabChip.TAB_W,
         cell_h: int = _TabChip.TAB_H,
     ) -> None:
         super().__init__(parent)
         self._items: List[QLayoutItem] = []
         self._h_space = h_spacing
         self._v_space = v_spacing
-        self._cell_w = cell_w
         self._cell_h = cell_h
         self.setContentsMargins(6, 6, 6, 6)
 
@@ -909,18 +911,21 @@ class _FlowLayout(QLayout):
 
         m = self.contentsMargins()
         n = max(1, len(self._items))
-        # At least one cell; height for worst-case single column
-        rows = n
-        w = self._cell_w + m.left() + m.right()
-        h = rows * self._cell_h + max(0, rows - 1) * self._v_space + m.top() + m.bottom()
+        rows = (n + self.COLS - 1) // self.COLS
+        # Prefer at least 3 cells wide when empty
+        w = (
+            self.COLS * 90
+            + (self.COLS - 1) * self._h_space
+            + m.left()
+            + m.right()
+        )
+        h = (
+            rows * self._cell_h
+            + max(0, rows - 1) * self._v_space
+            + m.top()
+            + m.bottom()
+        )
         return QSize(w, h)
-
-    def _cols_for_width(self, inner_w: int) -> int:
-        if inner_w <= 0:
-            return 1
-        # How many fixed cells fit
-        cols = max(1, (inner_w + self._h_space) // (self._cell_w + self._h_space))
-        return max(1, min(cols, max(1, len(self._items))))
 
     def _do_layout(self, rect: QRect, test_only: bool) -> int:
         m = self.contentsMargins()
@@ -928,22 +933,28 @@ class _FlowLayout(QLayout):
         if not self._items:
             return m.top() + m.bottom()
 
-        cols = self._cols_for_width(effective.width())
-        # Left-align grid (not stretched — keeps equal cells + aligned columns)
+        cols = self.COLS
+        # Equal column width filling the track (looks like a real grid)
+        total_gap = self._h_space * (cols - 1)
+        cell_w = max(72, (effective.width() - total_gap) // cols)
+        cell_h = self._cell_h
         x0 = effective.x()
         y0 = effective.y()
-        cell = QRect(0, 0, self._cell_w, self._cell_h)
 
         for i, item in enumerate(self._items):
             row, col = divmod(i, cols)
-            x = x0 + col * (self._cell_w + self._h_space)
-            y = y0 + row * (self._cell_h + self._v_space)
+            x = x0 + col * (cell_w + self._h_space)
+            y = y0 + row * (cell_h + self._v_space)
             if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), cell.size()))
+                w = item.widget()
+                if w is not None:
+                    # Stretch chip to cell so 3 columns fill width evenly
+                    w.setFixedSize(cell_w, cell_h)
+                item.setGeometry(QRect(x, y, cell_w, cell_h))
 
         rows = (len(self._items) + cols - 1) // cols
         return (
-            rows * self._cell_h
+            rows * cell_h
             + max(0, rows - 1) * self._v_space
             + m.top()
             + m.bottom()
@@ -1058,8 +1069,8 @@ class UsagePopover(QWidget):
             f"  border-radius: 11px;"
             f"}}"
         )
-        # Grid-aligned flow: fixed cells so multi-row tabs share column edges
-        self._tabs = _FlowLayout(self._tab_track)
+        # Fixed 3×N tab grid (Overview + providers wrap every 3)
+        self._tabs = _TabGridLayout(self._tab_track)
         self._tab_track.setMinimumHeight(_TabChip.TAB_H + 12)
         self._tab_track.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
@@ -1446,17 +1457,13 @@ class UsagePopover(QWidget):
             self._tab_buttons[v.provider] = chip
             self._tabs.addWidget(chip)
         self._paint_tabs()
-        # Height for N rows of fixed cells
+        # Always 3 columns → ceil(n/3) rows
         n = max(1, len(self._tab_buttons))
-        # ~4 cells per row at 420px width
-        cols = max(1, min(4, n))
+        cols = _TabGridLayout.COLS
         rows = (n + cols - 1) // cols
-        h = (
-            rows * _TabChip.TAB_H
-            + max(0, rows - 1) * 6
-            + 12
-        )
+        h = rows * _TabChip.TAB_H + max(0, rows - 1) * 6 + 12
         self._tab_track.setMinimumHeight(h)
+        self._tab_track.setMaximumHeight(h + 4)
         self._tab_track.updateGeometry()
         self._tab_wrap.updateGeometry()
         self._tabs.invalidate()
