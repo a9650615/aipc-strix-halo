@@ -65,7 +65,11 @@ def _rem_color(rem: Optional[float]) -> str:
 
 
 class _PaceBar(QWidget):
-    """Remaining fill + green expected-pace tick."""
+    """Remaining fill + green expected-pace tick.
+
+    Uses child frames (not paint-only) so bars stay visible under parent
+    stylesheets / Wayland compositing — custom paintEvent alone was disappearing.
+    """
 
     def __init__(
         self,
@@ -73,38 +77,72 @@ class _PaceBar(QWidget):
         expected_used: Optional[float] = None,
         color: str = C["bar"],
         *,
-        height: int = 9,
-        min_width: int = 140,
+        height: int = 12,
+        min_width: int = 120,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self._remaining = max(0.0, min(100.0, remaining))
+        self._remaining = max(0.0, min(100.0, float(remaining)))
         self._expected_used = expected_used
-        self._color = color
-        self.setFixedHeight(height)
+        self._color = color or C["bar"]
+        self._h = max(8, int(height))
+        self.setFixedHeight(self._h)
         self.setMinimumWidth(min_width)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet("background: transparent; border: none;")
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        del event
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = float(self.width()), float(self.height())
-        pad_y = max(0.5, h * 0.15)
-        track = QRectF(0, pad_y, w, h - pad_y * 2)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(C["track"]))
-        p.drawRoundedRect(track, h / 2, h / 2)
-        fill_w = w * (self._remaining / 100.0)
-        if fill_w > 0.5:
-            p.setBrush(QColor(self._color))
-            p.drawRoundedRect(QRectF(0, pad_y, fill_w, h - pad_y * 2), h / 2, h / 2)
+        self._track = QFrame(self)
+        self._track.setObjectName("PaceTrack")
+        self._track.setStyleSheet(
+            f"#PaceTrack {{"
+            f"  background:{C['track']}; border:1px solid {C['border']};"
+            f"  border-radius:{self._h // 2}px;"
+            f"}}"
+        )
+
+        self._fill = QFrame(self._track)
+        self._fill.setObjectName("PaceFill")
+        self._fill.setStyleSheet(
+            f"#PaceFill {{"
+            f"  background:{self._color}; border:none;"
+            f"  border-radius:{max(2, self._h // 2 - 1)}px;"
+            f"}}"
+        )
+
+        self._tick = QFrame(self)
+        self._tick.setObjectName("PaceTick")
+        self._tick.setFixedWidth(2)
+        self._tick.setStyleSheet(
+            f"#PaceTick {{ background:{C['good']}; border:none; border-radius:1px; }}"
+        )
+        self._tick.setVisible(expected_used is not None)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        w, h = self.width(), self.height()
+        # inset track 1px vertically for cleaner pill
+        y, th = 1, max(4, h - 2)
+        self._track.setGeometry(0, y, w, th)
+        fill_w = int(round(w * (self._remaining / 100.0)))
+        fill_w = max(0, min(w, fill_w))
+        # keep a visible nub when nearly empty but > 0
+        if self._remaining > 0.5 and fill_w < 4:
+            fill_w = 4
+        self._fill.setGeometry(1, 1, max(0, fill_w - 2), max(2, th - 2))
         if self._expected_used is not None:
-            exp_rem = max(0.0, min(100.0, 100.0 - self._expected_used))
-            x = w * (exp_rem / 100.0)
-            p.setPen(QPen(QColor(C["good"]), 1.5 if h < 8 else 2.0))
-            p.drawLine(int(round(x)), 0, int(round(x)), int(h))
-        p.end()
+            exp_rem = max(0.0, min(100.0, 100.0 - float(self._expected_used)))
+            x = int(round(w * (exp_rem / 100.0)))
+            self._tick.setGeometry(max(0, min(w - 2, x)), 0, 2, h)
+            self._tick.raise_()
+            self._tick.show()
+        else:
+            self._tick.hide()
+
+    def sizeHint(self):  # noqa: N802
+        from PySide6.QtCore import QSize
+
+        return QSize(max(self.minimumWidth(), 200), self._h)
 
 
 # Provider accent (official-style underlines / chart fills)
@@ -176,6 +214,7 @@ class _UsageMeter(QWidget):
                 remaining=rem,
                 expected_used=win.pace.expected_used_percent if win.pace else None,
                 color=color,
+                height=12,
             )
         )
 
@@ -614,7 +653,7 @@ class _OverviewRow(QFrame):
                         sess.pace.expected_used_percent if sess.pace else None
                     ),
                     color=color,
-                    height=10,
+                    height=14,
                 )
             )
             foot = QHBoxLayout()
