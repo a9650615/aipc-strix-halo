@@ -325,31 +325,61 @@ class CodexBarApp:
         """Real quit from popover footer — stop tray, web, timers, exit process."""
         logger.info("Quit CodexBar requested")
         self._cleanup()
-        if self._app is not None:
-            self._app.quit()
+        app = self._app or QApplication.instance()
+        if app is not None:
+            app.quit()
+        # Ensure process dies so the next Applications launch is not blocked
+        # by a half-dead tray (worker threads sometimes keep the loop alive).
+        QTimer.singleShot(400, self._force_exit)
+
+    @staticmethod
+    def _force_exit() -> None:
+        logger.info("force exit")
+        os._exit(0)
 
     def _cleanup(self) -> None:
-        if self._refresh_timer:
+        if self._refresh_timer is not None:
             self._refresh_timer.stop()
             self._refresh_timer = None
-        if self._fetch is not None and self._fetch.isRunning():
-            self._fetch.wait(2000)
-        # Only stop local web UI we own; do not kill shared `codexbar serve`
-        # if another instance may be using it (kill_server is best-effort).
+        # Stop background fetch
+        if self._fetch is not None:
+            if self._fetch.isRunning():
+                self._fetch.requestInterruption()
+                self._fetch.quit()
+                if not self._fetch.wait(1500):
+                    self._fetch.terminate()
+                    self._fetch.wait(500)
+            self._fetch = None
+        # Stop popover reload worker
+        if self._popover is not None:
+            worker = getattr(self._popover, "_worker", None)
+            if worker is not None and worker.isRunning():
+                worker.requestInterruption()
+                worker.quit()
+                if not worker.wait(1500):
+                    worker.terminate()
+                    worker.wait(500)
+            try:
+                self._popover.hide()
+                self._popover.close()
+            except Exception:
+                pass
+        # Local web UI only (daemon thread + httpd)
         try:
             stop_web()
         except Exception:
             logger.debug("stop_web on quit", exc_info=True)
+        # Only the serve process we started ourselves (not a pre-existing one)
         try:
             kill_server()
         except Exception:
             logger.debug("kill_server on quit", exc_info=True)
-        if self._popover is not None:
-            self._popover.hide()
-            self._popover.close()
         if self._tray is not None:
-            self._tray.hide()
-            self._tray.setVisible(False)
+            try:
+                self._tray.hide()
+                self._tray.setVisible(False)
+            except Exception:
+                pass
 
 
 def main(

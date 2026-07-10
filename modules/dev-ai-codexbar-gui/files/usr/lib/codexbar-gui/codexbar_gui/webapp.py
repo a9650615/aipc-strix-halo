@@ -443,10 +443,21 @@ def start_web(
 
 def stop_web() -> None:
     global _httpd, _thread
-    if _httpd is not None:
-        _httpd.shutdown()
-        _httpd = None
+    httpd = _httpd
+    _httpd = None
+    if httpd is not None:
+        try:
+            httpd.shutdown()
+        except Exception:
+            logger.debug("httpd.shutdown", exc_info=True)
+        try:
+            httpd.server_close()
+        except Exception:
+            logger.debug("httpd.server_close", exc_info=True)
+    thr = _thread
     _thread = None
+    if thr is not None and thr.is_alive():
+        thr.join(timeout=2.0)
 
 
 def main() -> int:

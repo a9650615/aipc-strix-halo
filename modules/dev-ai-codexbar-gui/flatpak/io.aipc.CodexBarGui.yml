@@ -22,8 +22,9 @@ finish-args:
   - --filesystem=xdg-config/codexbar:create
   - --filesystem=xdg-config/codex:create
   - --filesystem=xdg-config/claude:create
-  - --env=QT_QPA_PLATFORM=xcb
   - --env=CODEXBAR_FLATPAK=1
+  # Do NOT force QT_QPA_PLATFORM=xcb — Flatpak often has no XWayland display
+  # and then fails to start after quit. Prefer wayland (see codexbar-gui.sh).
 build-options:
   env:
     BASEAPP_REMOVE_WEBENGINE: "1"
