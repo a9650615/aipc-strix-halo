@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QPoint, QRectF, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
@@ -853,6 +854,7 @@ class UsagePopover(QWidget):
         self._tab_buttons: Dict[str, _TabChip] = {}
         self._settings_open = False
         self._hide_armed = False
+        self._last_anchor: Optional[QRect] = None
 
         # Single continuous surface — avoids black voids between scroll/chrome
         self.setStyleSheet(
@@ -995,30 +997,99 @@ class UsagePopover(QWidget):
         QDesktopServices.openUrl(QUrl(self._web_url))
 
     def show_at_cursor(self) -> None:
-        # Prefer Overview on open so multi-provider 5h bars are scannable immediately.
+        """Back-compat: open without a tray handle (uses cursor / panel corner)."""
+        self.show_at_tray(None)
+
+    def show_at_tray(self, tray: Optional[QSystemTrayIcon] = None) -> None:
+        """Anchor popover to the system-tray icon (not screen center).
+
+        Official menu-bar UX: open under/near the status item. On Linux we:
+        1. Prefer ``QSystemTrayIcon.geometry()`` when valid
+        2. Else the click cursor (user just clicked the tray)
+        3. Else primary screen panel corner (top-right / bottom-right)
+        Then place below the icon when space allows, otherwise above.
+        """
         if len(self._views) > 1:
             self._active = "overview"
         self.reload()
-        pos = QCursor.pos()
-        geo = self.frameGeometry()
-        screen = QGuiApplication.screenAt(pos) or QGuiApplication.primaryScreen()
-        if screen:
-            avail = screen.availableGeometry()
-            x = min(
-                max(pos.x() - geo.width() // 2, avail.left() + 8),
-                avail.right() - geo.width() - 8,
-            )
-            y = min(
-                max(pos.y() + 12, avail.top() + 8),
-                avail.bottom() - geo.height() - 8,
-            )
-            self.move(QPoint(x, y))
-        else:
-            self.move(pos + QPoint(-100, 12))
+
+        # Ensure we have a sensible size before placing
+        if self.width() < 200 or self.height() < 100:
+            self.resize(max(self.width(), 420), max(self.height(), 480))
+
+        anchor = self._tray_anchor_rect(tray)
+        self._last_anchor = QRect(anchor)
+        self._place_near_anchor(anchor)
         self.show()
         self.raise_()
         self.activateWindow()
         self.setFocus(Qt.FocusReason.PopupFocusReason)
+        # Re-place after first layout/reload may change height
+        QTimer.singleShot(0, lambda a=QRect(anchor): self._place_near_anchor(a))
+        QTimer.singleShot(120, lambda a=QRect(anchor): self._place_near_anchor(a))
+
+    @staticmethod
+    def _tray_anchor_rect(tray: Optional[QSystemTrayIcon]) -> QRect:
+        if tray is not None:
+            try:
+                g = tray.geometry()
+                if g.isValid() and g.width() > 0 and g.height() > 0:
+                    return QRect(g)
+            except Exception:
+                pass
+        # Click is almost always on the tray icon when user opens us
+        c = QCursor.pos()
+        # Small fake icon rect around cursor
+        return QRect(c.x() - 12, c.y() - 12, 24, 24)
+
+    def _place_near_anchor(self, anchor: QRect) -> None:
+        """Position this window under (or above) the tray icon rect."""
+        if not self.isVisible() and self.width() < 50:
+            self.resize(420, 480)
+        w = max(self.width(), self.sizeHint().width(), 420)
+        h = max(self.height(), 200)
+        # Prefer current size once laid out
+        w = self.frameGeometry().width() or w
+        h = self.frameGeometry().height() or h
+
+        screen = (
+            QGuiApplication.screenAt(anchor.center())
+            or QGuiApplication.primaryScreen()
+        )
+        if screen is None:
+            self.move(anchor.center() + QPoint(-w // 2, 16))
+            return
+        avail = screen.availableGeometry()
+
+        # If geometry was bogus (0,0) — common on some Wayland trays before show —
+        # snap to the panel side: prefer top-right when panel is top, else bottom-right.
+        if anchor.x() <= 0 and anchor.y() <= 0 and anchor.width() <= 24:
+            # Heuristic: use cursor if it is near a screen edge; else top-right
+            c = QCursor.pos()
+            if c.y() < avail.top() + 80:
+                anchor = QRect(avail.right() - 40, avail.top() + 4, 24, 24)
+            elif c.y() > avail.bottom() - 80:
+                anchor = QRect(avail.right() - 40, avail.bottom() - 28, 24, 24)
+            else:
+                anchor = QRect(avail.right() - 40, avail.top() + 4, 24, 24)
+
+        # Horizontal: center on icon, clamp into screen
+        x = anchor.center().x() - w // 2
+        x = max(avail.left() + 8, min(x, avail.right() - w - 8))
+
+        gap = 8
+        # Prefer below tray (top panels: icon at top → panel opens downward)
+        y_below = anchor.bottom() + gap
+        y_above = anchor.top() - h - gap
+        if y_below + h <= avail.bottom() - 4:
+            y = y_below
+        elif y_above >= avail.top() + 4:
+            y = y_above
+        else:
+            # Squeeze into remaining space below, then above
+            y = max(avail.top() + 8, min(y_below, avail.bottom() - h - 8))
+
+        self.move(QPoint(int(x), int(y)))
 
     def reload(self) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -1190,6 +1261,9 @@ class UsagePopover(QWidget):
         self.resize(width, total)
         self._body.updateGeometry()
         self.updateGeometry()
+        # Keep docked under tray icon after height changes
+        if self.isVisible() and self._last_anchor is not None:
+            self._place_near_anchor(self._last_anchor)
 
     def _open_settings(self) -> None:
         from codexbar_gui.config_dialog import ConfigDialog

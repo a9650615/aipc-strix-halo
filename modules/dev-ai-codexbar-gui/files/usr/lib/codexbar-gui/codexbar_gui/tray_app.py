@@ -157,10 +157,11 @@ class CodexBarApp:
                 "No system tray available.\nOpening usage window instead."
                 + (f"\nWeb: {self._web_url}" if self._web_url else ""),
             )
-            self._popover.show_at_cursor()
+            self._popover.show_at_tray(None)
         else:
             self._tray.show()
-            QTimer.singleShot(300, self._open_popover)
+            # Don't auto-pop in the center on launch — wait for tray click.
+            # (Previously singleShot(300) opened near cursor → looked centered.)
 
         try:
             return self._app.exec()
@@ -183,7 +184,8 @@ class CodexBarApp:
         try:
             if self._web_url:
                 self._popover.set_web_url(self._web_url)
-            self._popover.show_at_cursor()
+            # Anchor under the system tray icon (not screen center)
+            self._popover.show_at_tray(self._tray)
         except Exception:
             logger.exception("failed to show popover")
 
