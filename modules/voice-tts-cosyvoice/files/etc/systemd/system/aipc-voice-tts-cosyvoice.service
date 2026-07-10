@@ -1,5 +1,5 @@
 [Unit]
-Description=aipc-voice-tts-cosyvoice CosyVoice2 clone TTS (zero-shot, 127.0.0.1:9880)
+Description=aipc-voice-tts-cosyvoice CosyVoice3 clone TTS (zero-shot, 127.0.0.1:9880)
 After=network-online.target
 # No GPU/Lemonade Requires — device=cpu by default; model may be absent
 # until runtime pull. Unit still starts and serves degraded /healthz.
@@ -13,7 +13,7 @@ ExecStart=/bin/bash -c 'P=/var/lib/aipc-voice/cosyvoice/venv/bin/python3; [ -x "
 Environment=PYTHONPATH=/var/lib/aipc-voice/cosyvoice/CosyVoice:/var/lib/aipc-voice/cosyvoice/CosyVoice/third_party/Matcha-TTS:/usr/lib/aipc-voice
 Environment=AIPC_COSYVOICE_HOST=127.0.0.1
 Environment=AIPC_COSYVOICE_PORT=9880
-Environment=AIPC_COSYVOICE_MODEL=/var/lib/aipc-voice/models/cosyvoice2/CosyVoice2-0.5B
+Environment=AIPC_COSYVOICE_MODEL=/var/lib/aipc-voice/models/cosyvoice3/Fun-CosyVoice3-0.5B-2512
 Environment=AIPC_CLONE_WAV=/var/lib/aipc-voice/persona/clone.wav
 Environment=AIPC_COSYVOICE_ROOT=/var/lib/aipc-voice/cosyvoice
 Environment=AIPC_COSYVOICE_DEVICE=cpu

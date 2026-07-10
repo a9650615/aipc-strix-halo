@@ -1,7 +1,7 @@
-"""CosyVoice2 zero-shot clone TTS HTTP service (stdlib only).
+"""CosyVoice3 zero-shot clone TTS HTTP service (stdlib only).
 
 Contract:
-  GET  /healthz → {"status":"ok|degraded","backend":"cosyvoice2","clone":bool}
+  GET  /healthz → {"status":"ok|degraded","backend":"cosyvoice3","clone":bool}
   POST /tts     JSON {"text":"...","prompt_wav": optional path, "prompt_text": optional}
               → audio/wav  or JSON error
 
@@ -26,7 +26,7 @@ HOST = os.environ.get("AIPC_COSYVOICE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AIPC_COSYVOICE_PORT", "9880"))
 MODEL_DIR = os.environ.get(
     "AIPC_COSYVOICE_MODEL",
-    "/var/lib/aipc-voice/models/cosyvoice2/CosyVoice2-0.5B",
+    "/var/lib/aipc-voice/models/cosyvoice3/Fun-CosyVoice3-0.5B-2512",
 )
 CLONE_WAV = os.environ.get(
     "AIPC_CLONE_WAV",
@@ -57,20 +57,22 @@ def _clone_present() -> bool:
 
 
 def _model_present() -> bool:
-    """Require real weight files, not a partial modelscope download."""
+    """Require real weight files, not a partial download."""
     p = Path(MODEL_DIR)
     if not p.is_dir():
         return False
-    # CosyVoice2-0.5B ships several large weights; any empty/partial dir
-    # used to report ready and 503 on first /tts.
-    required_any = (
+    # CosyVoice3 needs the core LLM, flow, tokenizer and speaker files.
+    required_all = (
         "llm.pt",
         "flow.pt",
-        "flow.encoder.fp32.zip",
         "hift.pt",
-        "speech_tokenizer_v2.onnx",
+        "speech_tokenizer_v3.onnx",
+        "campplus.onnx",
+        "cosyvoice3.yaml",
+        "configuration.json",
+        "CosyVoice-BlankEN/model.safetensors",
     )
-    return any((p / name).is_file() and (p / name).stat().st_size > 1_000_000 for name in required_any)
+    return all((p / name).is_file() and (p / name).stat().st_size > 0 for name in required_all)
 
 
 def _checkout_present() -> bool:
@@ -88,7 +90,7 @@ def backend_ready() -> bool:
 
 
 def _load_model():
-    """Lazy-load CosyVoice2. Returns the model or raises RuntimeError."""
+    """Lazy-load CosyVoice3. Returns the model or raises RuntimeError."""
     global _model, _model_error
     if _model is not None:
         return _model
@@ -102,8 +104,8 @@ def _load_model():
             )
         if not _model_present():
             raise RuntimeError(
-                f"CosyVoice2 model missing at {MODEL_DIR}; "
-                "pull CosyVoice2-0.5B at runtime (not at image build)"
+                f"CosyVoice3 model missing at {MODEL_DIR}; "
+                "pull Fun-CosyVoice3-0.5B-2512 at runtime (not at image build)"
             )
         _prepare_sys_path()
         try:
@@ -132,7 +134,7 @@ def _load_model():
             return _model
         except Exception as exc:  # noqa: BLE001
             _model_error = str(exc)
-            raise RuntimeError(f"CosyVoice2 load failed: {exc}") from exc
+            raise RuntimeError(f"CosyVoice3 load failed: {exc}") from exc
 
 
 def synthesize_wav(
@@ -207,7 +209,7 @@ class Handler(BaseHTTPRequestHandler):
                 200,
                 {
                     "status": status,
-                    "backend": "cosyvoice2",
+                    "backend": "cosyvoice3",
                     "clone": _clone_present(),
                     "model_dir": MODEL_DIR,
                     "model_present": _model_present(),
@@ -250,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
                 503,
                 {
                     "detail": (
-                        f"CosyVoice2 model not present at {MODEL_DIR}. "
+                        f"CosyVoice3 model not present at {MODEL_DIR}. "
                         "Pull weights at runtime (not during image build)."
                     ),
                 },

@@ -21,6 +21,7 @@ python3 -c "import ast; ast.parse(open('$server').read())" \
 grep -q '9880' "$unit" || fail "unit must bind port 9880"
 grep -q 'aipc-voice-tts-cosyvoice' "$unit" || fail "unit Description/name mismatch"
 grep -q 'AIPC_COSYVOICE_DEVICE=cpu' "$unit" || fail "unit must default device=cpu"
+grep -q 'Fun-CosyVoice3-0.5B-2512' "$unit" || fail "unit must point at CosyVoice3 model"
 grep -q 'Restart=on-failure' "$unit" || fail "unit must Restart=on-failure"
 
 if [ -f "$this_dir/.disabled" ]; then

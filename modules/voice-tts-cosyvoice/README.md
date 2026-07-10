@@ -1,6 +1,6 @@
 # voice-tts-cosyvoice
 
-CosyVoice 2 zero-shot clone TTS for Chinese (primary) — D3 persona sample
+CosyVoice 3 zero-shot clone TTS for Chinese (primary) — D3 persona sample
 + D5 language-routed TTS.
 
 Ships **`.disabled`** until hardware-verified. Do not remove the gate without
@@ -12,7 +12,7 @@ a real CosyVoice round-trip on this host (CLAUDE.md §9).
   FastAPI dependency in the image path).
 - Zero-shot clone from **`/var/lib/aipc-voice/persona/clone.wav`** (firstboot
   / persona wizard sample).
-- Model dir: **`/var/lib/aipc-voice/models/cosyvoice2/CosyVoice2-0.5B`**.
+- Model dir: **`/var/lib/aipc-voice/models/cosyvoice3/Fun-CosyVoice3-0.5B-2512`**.
 - Runtime install root: **`/var/lib/aipc-voice/cosyvoice/`** (git checkout
   `CosyVoice/` + `venv/`).
 
@@ -20,7 +20,7 @@ a real CosyVoice round-trip on this host (CLAUDE.md §9).
 
 ```
 GET  http://127.0.0.1:9880/healthz
-→ {"status":"ok|degraded","backend":"cosyvoice2","clone":true|false, ...}
+→ {"status":"ok|degraded","backend":"cosyvoice3","clone":true|false, ...}
 
 POST http://127.0.0.1:9880/tts
 {"text":"你好，我是你的助手。","prompt_wav":"/var/lib/aipc-voice/persona/clone.wav"}
@@ -46,7 +46,7 @@ service is a Python venv + native unit, matching `voice-stt-sensevoice`.
 | When | What |
 |---|---|
 | **Image build** (`post-install.sh`) | `mkdir -p` persona / model / install dirs; `systemctl enable aipc-voice-tts-cosyvoice.service`. **No** model download, **no** `systemctl --now`, **no** curl. |
-| **Runtime** (manual or first-boot oneshot — not shipped yet) | `git clone` CosyVoice into `/var/lib/aipc-voice/cosyvoice/CosyVoice`, create `venv`, `pip install` deps, pull `CosyVoice2-0.5B` into the model dir. Then start/restart the unit. |
+| **Runtime** (manual or first-boot oneshot — not shipped yet) | `git clone` CosyVoice into `/var/lib/aipc-voice/cosyvoice/CosyVoice`, create `venv`, `pip install` deps, pull `Fun-CosyVoice3-0.5B-2512` into the model dir. Then start/restart the unit. |
 
 Host Python 3.11 is available on this machine for live experiments
 (`~/.local/bin/python3.11`); the image path prefers the runtime venv
