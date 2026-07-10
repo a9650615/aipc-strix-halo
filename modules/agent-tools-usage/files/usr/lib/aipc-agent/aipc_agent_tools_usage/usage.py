@@ -168,6 +168,38 @@ def _used_pct(window: Optional[dict]) -> Optional[float]:
     return max(0.0, min(100.0, val))
 
 
+def _compute_pace_summary(window: Optional[dict]) -> Optional[str]:
+    """Linear burn vs schedule — answers "faster/slower than expected?"."""
+    if not isinstance(window, dict):
+        return None
+    used = _used_pct(window)
+    if used is None:
+        return None
+    mins = window.get("windowMinutes", window.get("window_minutes"))
+    resets = window.get("resetsAt") or window.get("resets_at")
+    if mins is None or not resets:
+        return None
+    try:
+        from datetime import datetime, timezone
+
+        window_secs = float(mins) * 60.0
+        dt = datetime.fromisoformat(str(resets).replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        secs_left = max(0.0, min(window_secs, (dt - now).total_seconds()))
+        elapsed = 1.0 - (secs_left / window_secs)
+        expected = max(0.0, min(100.0, elapsed * 100.0))
+        reserve = expected - used
+        if reserve >= 2.0:
+            return f"{int(round(reserve))}% in reserve · Lasts until reset"
+        if reserve <= -2.0:
+            return f"{int(round(-reserve))}% over pace · Faster than expected"
+        return "On pace · Lasts until reset"
+    except Exception:
+        return None
+
+
 def _normalize_upstream(raw: list, ids: Optional[list[str]]) -> dict[str, Any]:
     out = []
     for item in raw:
@@ -211,12 +243,18 @@ def _normalize_upstream(raw: list, ids: Optional[list[str]]) -> dict[str, Any]:
         )
         pace = item.get("pace") if isinstance(item.get("pace"), dict) else {}
         pace_p = pace.get("primary") if isinstance(pace.get("primary"), dict) else {}
+        pace_s = (
+            pace.get("secondary") if isinstance(pace.get("secondary"), dict) else {}
+        )
         identity = (
             usage.get("identity") if isinstance(usage.get("identity"), dict) else {}
         )
         used = _used_pct(primary)
         rem = None if used is None else 100.0 - used
         week_used = _used_pct(secondary)
+        # Prefer CLI pace; else compute linear reserve (same idea as official UI)
+        session_pace = pace_p.get("summary") or _compute_pace_summary(primary)
+        weekly_pace = pace_s.get("summary") or _compute_pace_summary(secondary)
         out.append(
             {
                 "id": pid,
@@ -233,7 +271,9 @@ def _normalize_upstream(raw: list, ids: Optional[list[str]]) -> dict[str, Any]:
                 or primary.get("reset_description"),
                 "weekly_reset": secondary.get("resetDescription")
                 or secondary.get("reset_description"),
-                "pace": pace_p.get("summary"),
+                "pace": weekly_pace or session_pace,
+                "session_pace": session_pace,
+                "weekly_pace": weekly_pace,
                 "account": item.get("account")
                 or usage.get("accountEmail")
                 or identity.get("accountEmail"),

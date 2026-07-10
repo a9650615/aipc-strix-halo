@@ -103,7 +103,13 @@ _HTML = r"""<!DOCTYPE html>
   .bar.mid > i { background: var(--yellow); }
   .bar.low > i { background: var(--red); }
   .used { color: var(--dim); font-size: .75rem; margin-top: .25rem; }
-  .pace { color: var(--teal); font-size: .85rem; margin: .35rem 0 .5rem; line-height: 1.4; }
+  .pace {
+    font-size: .88rem; font-weight: 600; margin: .3rem 0 .15rem; line-height: 1.35;
+  }
+  .pace.reserve { color: var(--green); }
+  .pace.deficit { color: var(--yellow); }
+  .pace.on_pace { color: var(--teal); }
+  .exp { color: var(--dim); font-size: .72rem; }
   .credits { display: flex; justify-content: space-between; gap: .75rem; font-size: .9rem; }
   .credits .muted { color: var(--muted); font-size: .8rem; }
   .err { color: var(--red); font-size: .9rem; line-height: 1.35; }
@@ -139,6 +145,9 @@ function winHtml(w) {
   const pct = rem == null ? '—' : Math.round(rem) + '% left';
   const fill = rem == null ? 0 : rem;
   const resets = w.resets_in || w.reset_description || '';
+  const pace = w.pace;
+  const paceHtml = pace ? `<div class="pace ${pace.status || ''}">${pace.summary}</div>
+    <div class="exp">expected ~${Math.round(pace.expected_used_percent)}% used by now (linear)</div>` : '';
   return `<div class="win">
     <div class="row">
       <span class="lab">${w.label.replace(' (5h)','')}</span>
@@ -146,6 +155,7 @@ function winHtml(w) {
       <span class="resets">${resets}</span>
     </div>
     <div class="bar ${t}"><i style="width:${fill}%"></i></div>
+    ${paceHtml}
     <div class="used">${used == null ? '' : Math.round(used) + '% used'}${w.reset_description && w.resets_in ? ' · ' + w.reset_description : ''}</div>
   </div>`;
 }
@@ -171,7 +181,6 @@ function card(p) {
     ${winHtml(p.primary)}
     ${winHtml(p.secondary)}
     ${winHtml(p.tertiary)}
-    ${p.pace_summary ? `<div class="pace">${p.pace_summary}</div>` : ''}
     <div class="sec">Credits</div>
     <div class="credits">
       <span>${p.credits_remaining != null ? p.credits_remaining + ' left' : '—'}</span>
@@ -214,6 +223,16 @@ setInterval(load, 60000);
 def _win_json(win) -> Optional[dict]:
     if win is None:
         return None
+    pace = None
+    if win.pace is not None:
+        pace = {
+            "reserve_percent": win.pace.reserve_percent,
+            "expected_used_percent": win.pace.expected_used_percent,
+            "will_last_to_reset": win.pace.will_last_to_reset,
+            "summary": win.pace.summary,
+            "status": win.pace.status,
+            "source": win.pace.source,
+        }
     return {
         "label": win.label,
         "used_percent": win.used_percent,
@@ -222,6 +241,7 @@ def _win_json(win) -> Optional[dict]:
         "window_minutes": win.window_minutes,
         "resets_at": win.resets_at,
         "resets_in": win.resets_in,
+        "pace": pace,
     }
 
 

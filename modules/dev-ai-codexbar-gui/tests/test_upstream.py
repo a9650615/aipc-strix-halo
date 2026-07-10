@@ -58,6 +58,7 @@ def test_parse_real_codex_shape() -> None:
     assert v.secondary is not None
     assert v.secondary.remaining_percent == 0
     assert v.secondary.label == "Weekly"
+    # SAMPLE has no resetsAt → pace may be None; see dedicated pace tests
     assert v.account == "a9650615@gmail.com"
     assert v.plan == "plus"
     assert v.pace_summary and "reserve" in v.pace_summary
@@ -122,6 +123,67 @@ def test_official_used_percent_0_1_2_not_fraction_scaled() -> None:
         assert v.primary.used_percent == float(used)
         assert v.primary.remaining_percent == rem
         assert v.headline_remaining == rem
+
+
+def test_compute_pace_reserve_when_under_linear_burn() -> None:
+    """Barely used + long window left → large reserve (slower than expected)."""
+    from datetime import datetime, timedelta, timezone
+
+    from codexbar_gui.upstream import compute_pace
+
+    # 5h window, 4h left → 20% elapsed → expected used 20%; actual 1% → ~19% reserve
+    resets = (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat()
+    pace = compute_pace(1.0, 300, resets)
+    assert pace is not None
+    assert pace.reserve_percent > 10
+    assert pace.will_last_to_reset
+    assert "reserve" in pace.summary.lower()
+    assert pace.status == "reserve"
+
+
+def test_compute_pace_deficit_when_over_burn() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from codexbar_gui.upstream import compute_pace
+
+    # 5h window, 4h left → expected ~20% used; actual 80% → deficit
+    resets = (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat()
+    pace = compute_pace(80.0, 300, resets)
+    assert pace is not None
+    assert pace.reserve_percent < -10
+    assert pace.status == "deficit"
+    assert "over pace" in pace.summary.lower() or "faster" in pace.summary.lower()
+
+
+def test_parse_attaches_pace_to_windows() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from codexbar_gui.upstream import parse_upstream_item
+
+    resets = (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat()
+    v = parse_upstream_item(
+        {
+            "provider": "codex",
+            "source": "oauth",
+            "usage": {
+                "primary": {
+                    "usedPercent": 1,
+                    "windowMinutes": 300,
+                    "resetsAt": resets,
+                },
+                "secondary": {
+                    "usedPercent": 23,
+                    "windowMinutes": 10080,
+                    "resetsAt": (
+                        datetime.now(timezone.utc) + timedelta(hours=17)
+                    ).isoformat(),
+                },
+            },
+        }
+    )
+    assert v.primary is not None and v.primary.pace is not None
+    assert v.secondary is not None and v.secondary.pace is not None
+    assert v.pace_summary  # card-level from weekly
 
 
 def test_resets_in_and_plan_label() -> None:

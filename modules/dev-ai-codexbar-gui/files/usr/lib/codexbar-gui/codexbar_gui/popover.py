@@ -89,11 +89,33 @@ class _UsageMeter(QWidget):
         )
         root.addWidget(bar)
 
-        # Secondary line: used % (official Claude menu uses % used; we show both)
+        # Pace/reserve — the official "am I burning too fast?" line
+        if win.pace is not None:
+            st = win.pace.status
+            if st == "reserve":
+                pace_color = "#a6e3a1"
+            elif st == "deficit":
+                pace_color = "#fab387"
+            else:
+                pace_color = "#94e2d5"
+            pace_row = QHBoxLayout()
+            pace_l = QLabel(win.pace.summary)
+            pace_l.setWordWrap(True)
+            pace_l.setStyleSheet(
+                f"color:{pace_color}; border:none; font-size:12px; font-weight:600;"
+            )
+            pace_row.addWidget(pace_l, 1)
+            root.addLayout(pace_row)
+
+        # Secondary line: used % + absolute reset clock
         sub = QHBoxLayout()
         used_l = QLabel(f"{int(round(used))}% used")
         used_l.setStyleSheet("color:#6c7086; border:none; font-size:11px;")
         sub.addWidget(used_l)
+        if win.pace is not None:
+            exp = QLabel(f"expected ~{int(round(win.pace.expected_used_percent))}% used")
+            exp.setStyleSheet("color:#585b70; border:none; font-size:10px;")
+            sub.addWidget(exp)
         if win.reset_description and win.resets_in:
             abs_t = QLabel(win.reset_description)
             abs_t.setStyleSheet("color:#585b70; border:none; font-size:10px;")
@@ -196,14 +218,6 @@ class _ProviderCard(QFrame):
         for win in (view.primary, view.secondary, view.tertiary):
             if win is not None:
                 root.addWidget(_UsageMeter(win))
-
-        if view.pace_summary:
-            pace = QLabel(view.pace_summary)
-            pace.setWordWrap(True)
-            pace.setStyleSheet(
-                "color:#94e2d5; border:none; font-size:12px; padding:2px 0 4px 0;"
-            )
-            root.addWidget(pace)
 
         # Credits (always show when we have a value — including 0)
         root.addWidget(_SectionTitle("Credits"))

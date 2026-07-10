@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import urllib.error
@@ -80,6 +81,133 @@ def format_updated_ago(updated_at: Optional[str]) -> str:
 
 
 @dataclass
+class PaceInfo:
+    """Burn-rate vs linear schedule until reset (official reserve/deficit).
+
+    positive reserve_percent → under budget (slower than expected)
+    negative → over pace (faster than expected)
+    """
+
+    reserve_percent: float  # expected_used - actual_used
+    expected_used_percent: float
+    will_last_to_reset: bool
+    summary: str
+    source: str = "computed"  # or "cli"
+
+    @property
+    def status(self) -> str:
+        if abs(self.reserve_percent) < 2.0:
+            return "on_pace"
+        return "reserve" if self.reserve_percent > 0 else "deficit"
+
+
+def compute_pace(
+    used_percent: float,
+    window_minutes: Optional[int],
+    resets_at: Optional[str],
+) -> Optional[PaceInfo]:
+    """Compare actual used% to linear burn across the rate window.
+
+    Official CodexBar: ``13% in reserve`` / ``Lasts until reset`` when you are
+    under the straight-line schedule; opposite when burning faster.
+    """
+    if window_minutes is None or window_minutes <= 0:
+        return None
+    dt = _parse_iso(resets_at)
+    if dt is None:
+        return None
+    now = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs_left = (dt - now).total_seconds()
+    window_secs = float(window_minutes) * 60.0
+    # Clamp: if reset is far beyond window length, treat remaining as full window
+    secs_left = max(0.0, min(window_secs, secs_left))
+    elapsed_frac = 1.0 - (secs_left / window_secs)
+    expected_used = max(0.0, min(100.0, elapsed_frac * 100.0))
+    actual = max(0.0, min(100.0, used_percent))
+    reserve = expected_used - actual  # + = under budget
+    will_last = actual <= expected_used + 0.5  # tiny slack
+
+    if reserve >= 2.0:
+        summary = f"{int(round(reserve))}% in reserve · Lasts until reset"
+    elif reserve <= -2.0:
+        over = -reserve
+        # Rough time-to-exhaustion at current average burn rate
+        if actual > 0.5 and elapsed_frac > 0.01:
+            burn_per_sec = actual / (elapsed_frac * window_secs)
+            secs_to_empty = (100.0 - actual) / burn_per_sec if burn_per_sec > 0 else 0
+            if secs_to_empty < secs_left and secs_to_empty > 0:
+                h = int(secs_to_empty // 3600)
+                m = int((secs_to_empty % 3600) // 60)
+                if h > 0:
+                    eta = f"{h}h {m}m" if m else f"{h}h"
+                else:
+                    eta = f"{m}m"
+                summary = f"{int(round(over))}% over pace · May run out in ~{eta}"
+            else:
+                summary = f"{int(round(over))}% over pace · Faster than expected"
+        else:
+            summary = f"{int(round(over))}% over pace · Faster than expected"
+    else:
+        summary = "On pace · Lasts until reset"
+
+    return PaceInfo(
+        reserve_percent=reserve,
+        expected_used_percent=expected_used,
+        will_last_to_reset=will_last,
+        summary=summary,
+        source="computed",
+    )
+
+
+def _pace_from_cli(pace_blob: Optional[dict]) -> Optional[PaceInfo]:
+    if not isinstance(pace_blob, dict):
+        return None
+    summary = pace_blob.get("summary")
+    if not summary:
+        return None
+    try:
+        delta = float(pace_blob.get("deltaPercent"))
+    except (TypeError, ValueError):
+        # e.g. "67% in reserve" without delta
+        delta = 0.0
+        low = str(summary).lower()
+        if "reserve" in low:
+            m = re.search(r"(-?\d+(?:\.\d+)?)\s*%", str(summary))
+            if m:
+                # "67% in reserve" → +67 reserve; official delta was often negative
+                delta = abs(float(m.group(1)))
+        if "over" in low or "deficit" in low or "ahead" in low:
+            delta = -abs(delta) if delta else -1.0
+    will = pace_blob.get("willLastToReset")
+    if will is None:
+        will = delta >= 0
+    try:
+        expected = float(pace_blob.get("expectedUsedPercent", 0.0))
+    except (TypeError, ValueError):
+        expected = 0.0
+    # Official deltaPercent often means "ahead of schedule" as negative
+    # (e.g. -67 → 67% in reserve). Prefer summary keywords.
+    low = str(summary).lower()
+    if "reserve" in low and delta < 0:
+        reserve = -delta
+    elif "reserve" in low:
+        reserve = abs(delta)
+    elif delta != 0:
+        reserve = -delta  # negative delta → reserve in some builds
+    else:
+        reserve = 0.0
+    return PaceInfo(
+        reserve_percent=reserve,
+        expected_used_percent=expected,
+        will_last_to_reset=bool(will),
+        summary=str(summary),
+        source="cli",
+    )
+
+
+@dataclass
 class RateWindowView:
     label: str
     used_percent: float  # 0–100 used
@@ -87,6 +215,7 @@ class RateWindowView:
     reset_description: str = ""
     window_minutes: Optional[int] = None
     resets_at: Optional[str] = None
+    pace: Optional[PaceInfo] = None
 
     @property
     def resets_in(self) -> str:
@@ -160,7 +289,12 @@ def find_codexbar_binary() -> Optional[str]:
     return None
 
 
-def _window_from_dict(label: str, data: Optional[dict]) -> Optional[RateWindowView]:
+def _window_from_dict(
+    label: str,
+    data: Optional[dict],
+    *,
+    cli_pace: Optional[dict] = None,
+) -> Optional[RateWindowView]:
     if not isinstance(data, dict):
         return None
     # Official usedPercent is 0–100 (e.g. 1 = 1% used). Legacy aipc port may
@@ -181,11 +315,13 @@ def _window_from_dict(label: str, data: Optional[dict]) -> Optional[RateWindowVi
     except (TypeError, ValueError):
         mins_i = None
     label_map = {
-        300: "Session (5h)",
+        300: "Session",
         10080: "Weekly",
     }
     if mins_i in label_map:
         label = label_map[mins_i]
+    resets_at = data.get("resetsAt") or data.get("resets_at")
+    pace = _pace_from_cli(cli_pace) or compute_pace(used, mins_i, resets_at)
     return RateWindowView(
         label=label,
         used_percent=used,
@@ -194,7 +330,8 @@ def _window_from_dict(label: str, data: Optional[dict]) -> Optional[RateWindowVi
             data.get("resetDescription") or data.get("reset_description") or ""
         ),
         window_minutes=mins_i,
-        resets_at=data.get("resetsAt") or data.get("resets_at"),
+        resets_at=resets_at,
+        pace=pace,
     )
 
 
@@ -217,6 +354,9 @@ def parse_upstream_item(item: dict[str, Any]) -> ProviderView:
 
     pace = item.get("pace") if isinstance(item.get("pace"), dict) else {}
     pace_primary = pace.get("primary") if isinstance(pace.get("primary"), dict) else {}
+    pace_secondary = (
+        pace.get("secondary") if isinstance(pace.get("secondary"), dict) else {}
+    )
     credits = item.get("credits") if isinstance(item.get("credits"), dict) else {}
     identity = usage.get("identity") if isinstance(usage.get("identity"), dict) else {}
     reset_creds = (
@@ -251,6 +391,23 @@ def parse_upstream_item(item: dict[str, Any]) -> ProviderView:
         or item.get("updatedAt")
     )
 
+    primary = _window_from_dict(
+        "Session", usage.get("primary"), cli_pace=pace_primary or None
+    )
+    secondary = _window_from_dict(
+        "Weekly", usage.get("secondary"), cli_pace=pace_secondary or None
+    )
+    tertiary = _window_from_dict("Extra", usage.get("tertiary"))
+
+    # Prefer weekly pace for card-level summary (official menu highlights weekly reserve)
+    card_pace = None
+    if secondary and secondary.pace:
+        card_pace = secondary.pace.summary
+    elif primary and primary.pace:
+        card_pace = primary.pace.summary
+    elif pace_primary.get("summary"):
+        card_pace = str(pace_primary.get("summary"))
+
     return ProviderView(
         provider=provider,
         source=str(item.get("source") or ""),
@@ -258,12 +415,10 @@ def parse_upstream_item(item: dict[str, Any]) -> ProviderView:
         account=str(account) if account else None,
         plan=str(plan) if plan else None,
         version=str(item.get("version") or "") or None,
-        primary=_window_from_dict("Session", usage.get("primary")),
-        secondary=_window_from_dict("Weekly", usage.get("secondary")),
-        tertiary=_window_from_dict("Extra", usage.get("tertiary")),
-        pace_summary=(
-            str(pace_primary.get("summary")) if pace_primary.get("summary") else None
-        ),
+        primary=primary,
+        secondary=secondary,
+        tertiary=tertiary,
+        pace_summary=card_pace,
         credits_remaining=creds_f,
         reset_credits_available=reset_n,
         data_confidence=str(usage.get("dataConfidence") or "") or None,
