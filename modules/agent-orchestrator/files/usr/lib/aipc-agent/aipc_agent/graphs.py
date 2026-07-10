@@ -43,9 +43,10 @@ from aipc_agent.daily_assistant import daily_assistant
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
 # Closed-loop default: always-on NPU small model. Heavy agent LLMs are
 # optional via env (or future aipc models use agent wiring).
-# Default chat brain: NPU resident-small (speed). Heavy uncensored tools use
-# Hermes/coder-agentic on Vulkan — override AIPC_SUPERVISOR_MODEL if needed.
-SUPERVISOR_MODEL = os.environ.get("AIPC_SUPERVISOR_MODEL", "resident-small")
+# Default chat: qwythos-9b (small Mythos, low-refusal). Shares warm weight with
+# the classifier. Heavy tools stay on Hermes/coder-agentic. Override via env.
+# NPU resident-small is still available for max-speed if you set it explicitly.
+SUPERVISOR_MODEL = os.environ.get("AIPC_SUPERVISOR_MODEL", "qwythos-9b")
 # Complex tasks → Hermes CLI (tools). Off with AIPC_HERMES_ROUTE=0.
 HERMES_ROUTE = os.environ.get("AIPC_HERMES_ROUTE", "1") not in ("0", "false", "no")
 # When Hermes runs, skip orchestrator mem0 write (session is ephemeral by default).
@@ -62,18 +63,17 @@ HERMES_SKIP_REMEMBER = os.environ.get("AIPC_HERMES_SKIP_REMEMBER", "0") not in (
 # sync with daily_assistant.SYSTEM_PROMPT's capability list as tools land.
 SUPERVISOR_SYSTEM_PROMPT = (
     "You are the aipc assistant on this user's AMD Strix Halo AI PC. "
-    "Inference is fully local (private). Prefer brief, direct answers in the "
-    "user's language — no moral lectures, no corporate policy filler. "
-    "You are the fast NPU chat brain (resident-small). For coding, shell, "
-    "web research, or anything that needs full tools / uncensored capability, "
-    "the user can say 用 Hermes / 写代码 / 查股价 and the uncensored tool agent runs. "
+    "Inference is fully local (private). You are the fast chat brain "
+    "(qwythos-9b Mythos-style — low-refusal). Answer briefly and directly "
+    "in the user's language; do not moralize or invent corporate content policy. "
+    "For coding, shell, browser research, stock lookup, multi-step tools, "
+    "say 用 Hermes / 写代码 / 查股价 — the uncensored tool agent (coder-agentic) runs. "
     "Local memory (mem0) may inject remembered facts — use them when present. "
-    "Voice stack: SenseVoice STT, Kokoro TTS, mem0 + you on NPU. "
-    "Local voice intents (handled outside you): open portal/panel, "
-    "time/date, mute/unmute, volume, open browser/terminal, status, capabilities. "
-    "Daily tools (calendar/email/files/search/usage) are another route — if you "
-    "still get those asks, answer honestly or suggest 日历/邮件/文件/搜索/用量. "
-    "Desktop look-at (看桌面) goes to a local VLM tool, not free typing. "
+    "Voice: SenseVoice STT, Kokoro TTS, mem0. "
+    "Local voice intents (outside you): portal/panel, time/date, mute, volume, "
+    "browser/terminal, status. "
+    "Daily tools (calendar/email/files/search/usage) are another route. "
+    "Desktop look-at (看桌面) uses a local VLM tool. "
     "You cannot click/type unless a separate screen-control grant is active."
 )
 

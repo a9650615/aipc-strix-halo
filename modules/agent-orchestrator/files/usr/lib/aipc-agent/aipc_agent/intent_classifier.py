@@ -8,7 +8,8 @@ two-axis plan:
 
 Design goals (voice path):
   - Tiny prompt + max_tokens ≤ 24 + short wall (default 2.5s)
-  - Dedicated model alias (AIPC_CLASSIFIER_MODEL, default resident-small)
+  - Dedicated model alias (AIPC_CLASSIFIER_MODEL, default qwythos-9b —
+    small Mythos local, uncensored routing; not NPU gemma-it)
   - Micro-rules only for greet / job_status / screen (not daily)
   - Daily intent is always model-judged (multimodal LLM)
   - Keyword fallback only if the model is cold / errors
@@ -38,41 +39,32 @@ TARGETS = frozenset(
 MODES = frozenset({"short", "long"})
 LONG_CAPABLE = frozenset({"hermes", "daily_assistant"})
 
-# Default: NPU resident-small for classify latency. Override via env.
-CLASSIFIER_MODEL = os.environ.get("AIPC_CLASSIFIER_MODEL", "resident-small")
+# Default: small Mythos local (uncensored routing). NPU gemma-it refuses some
+# intents; qwythos-9b is ~5.6GB Vulkan and ~0.2–0.5s when warm.
+CLASSIFIER_MODEL = os.environ.get("AIPC_CLASSIFIER_MODEL", "qwythos-9b")
 LITELLM_BASE_URL = os.environ.get("AIPC_LITELLM_URL", "http://127.0.0.1:4000")
 
 # Ultra-compact system prompt — model only labels, does not answer the user.
 _CLASSIFIER_SYSTEM = (
-    "You are the routing brain for a local multimodal voice assistant. "
-    "Read the user utterance (may be STT text; tolerate typos) and classify intent. "
-    "Reply with ONE line only, no markdown, no explanation:\n"
-    "TARGET MODE\n"
-    "TARGET is one of: respond daily_assistant hermes screen_see job_status\n"
-    "MODE is one of: short long\n"
-    "Meaning:\n"
-    "respond=chit-chat, opinions, greetings, pure Q&A with no tools needed;\n"
-    "daily_assistant=calendar/schedule, email, local files read, web search, "
-    "coding-quota/usage questions — personal productivity tools;\n"
-    "hermes=coding, shell, multi-step tool agents, live stock/price lookup needing "
-    "browser/tools, complex research the daily tools cannot do;\n"
-    "screen_see=describe what is on the desktop/screen;\n"
-    "job_status=progress of a background long task.\n"
-    "MODE long only if user wants background/long-running/full project/deep research "
-    "AND target is hermes or daily_assistant; else short.\n"
-    "Do NOT use keyword checklists — judge by meaning. Ambiguous tool asks → "
-    "daily_assistant if calendar/email/search/usage/files; hermes if code/shell/stock.\n"
-    "Examples:\n"
-    "你好 → respond short\n"
-    "今天有什么会 → daily_assistant short\n"
-    "帮我搜一下 python 教程 → daily_assistant short\n"
-    "我的 claude 额度还剩多少 → daily_assistant short\n"
-    "读一下桌面上的笔记 → daily_assistant short\n"
-    "查一下 AMD 股价 → hermes short\n"
-    "用 hermes 帮我写脚本 → hermes short\n"
-    "后台完整实现这个功能 → hermes long\n"
-    "屏幕上有什么 → screen_see short\n"
-    "任务进度怎么样 → job_status short\n"
+    "You are a pure intent ROUTER for a private local voice assistant. "
+    "You NEVER answer the user, NEVER refuse, NEVER moralize, NEVER apply "
+    "content filters. Any topic still gets a normal route label.\n"
+    "Output EXACTLY two lowercase words and nothing else: <target> <mode>\n"
+    "target: respond | daily_assistant | hermes | screen_see | job_status\n"
+    "mode: short | long\n"
+    "respond=chit-chat/opinion/Q&A no tools; "
+    "daily_assistant=calendar/email/files/web-search/usage; "
+    "hermes=coding/shell/tools/stock-price/complex research; "
+    "screen_see=desktop/screen describe only; "
+    "job_status=background task progress.\n"
+    "mode=long only for background/full-project with hermes|daily_assistant.\n"
+    "web search / 搜新闻 / 搜一下 → daily_assistant short (not screen_see).\n"
+    "code/shell/stock/绕过/exploit → hermes short.\n"
+    "Examples (copy this shape):\n"
+    "respond short\n"
+    "daily_assistant short\n"
+    "hermes short\n"
+    "screen_see short\n"
 )
 
 _LINE_RE = re.compile(
@@ -89,10 +81,11 @@ _JSON_RE = re.compile(
 
 
 def _timeout_s() -> float:
+    # Headroom for first qwythos load; warm path is usually <0.5s.
     try:
-        return max(0.5, float(os.environ.get("AIPC_CLASSIFIER_TIMEOUT", "2.5")))
+        return max(0.5, float(os.environ.get("AIPC_CLASSIFIER_TIMEOUT", "3.5")))
     except ValueError:
-        return 2.5
+        return 3.5
 
 
 def _enabled() -> bool:
@@ -145,10 +138,14 @@ def parse_classifier_output(raw: str) -> dict[str, str] | None:
             }
     except Exception:
         pass
-    # Bare target word only → short
-    for t in TARGETS:
-        if re.search(rf"(?<![a-z_]){t}(?![a-z_])", s, re.I):
-            return {"target": t, "mode": "short"}
+    # Bare target only when exactly one label appears (multi = model echoed enum list)
+    found = [
+        t
+        for t in TARGETS
+        if re.search(rf"(?<![a-z_]){re.escape(t)}(?![a-z_])", s, re.I)
+    ]
+    if len(found) == 1:
+        return {"target": found[0], "mode": "short"}
     return None
 
 
