@@ -46,31 +46,61 @@ modular skill tree in **local folders**.
 
 ```
   wake / PTT / portal ──► SessionRegistry.open_or_resume()
-                              │  id, status, stm_turns, pending, job_id
-                              ▼
-  /chat {session_id} ──► plan → worker ──┬── short reply
+                              │
+  /chat ──► plan → worker ──┬── short reply
                               │          └── long job (Hermes…)
                               │                 │
-                              │                 ▼
-                              │          ActivityBus.publish(progress)
+                              │    discover skills from LOCAL roots only
+                              │    (~/.hermes/skills, /var/lib/…/skills)
                               │                 │
-                              │    ┌────────────┼────────────┐
-                              │    ▼            ▼            ▼
-                              │ overlay     portal card   notify-send
-                              │ (working)   (Activity)    (phase/done)
+                              ▼                 ▼
+                    STM + ActivityBus     tool/skill execution
+                              │
+                    memory.internalize() ──async──► mem0 (facts)
+                              │
+                    episode JSONL (mid-term, on-box)
+                              │
+         need / fail / idle   ▼
+                    aipc-self-improve PROCESS (in repo):
+                      critique → few-shots under /var/lib/…/learning/
+                      skill gap → install/propose into LOCAL skill tree
+                      thr/repo change → safety ledger only (no auto apply)
                               │
                               ▼
-                    agent_context[session]  (STM while status≠done)
-                              │
-                    memory.internalize() ──async──► mem0
-                              │
-              session complete (end_session / idle / job terminal)
-                              ▼
-                    consolidate_session() → clear STM
-                              │
-         idle timer           ▼
-                    aipc-self-improve (critique → few-shots / ledger)
+                    LOCAL skill tree grows (NOT the aipc git tree)
 ```
+
+**Closed loop (skill growth)**
+
+```
+ demand / failure episode
+        │
+        ▼
+  process (aipc): detect gap, model-judge “what skill is missing”
+        │
+        ├─► write/update skill module under local skill root
+        ├─► or append few-shot / mem0 habit
+        ├─► when live pages needed: Hermes -t browser +
+        │     isolated profile /var/lib/aipc-agent/browser-sandbox
+        │     (crawl to learn — not the user's personal browser)
+        └─► or ledger proposal (if would touch image/repo/security)
+        │
+        ▼
+  next /chat: worker loads skill from local folder → better outcome
+        │
+        ▼
+  new episode → refine (same loop)
+```
+
+**Sandbox browser (when truly needed)**
+
+| Item | Policy |
+|------|--------|
+| When | Task shape needs live web (lookup/browse/URL/long research); `AIPC_HERMES_BROWSER=auto\|1\|0` |
+| How | Hermes `-t browser` + `browser_sandbox.hermes_env` (agent-browser / Chromium) |
+| Profile | `/var/lib/aipc-agent/browser-sandbox` only — isolated cookies/storage |
+| Not | User desktop browser profile; not git; not always-on |
+| After | Successful crawl → skill_learn may write procedure into local skill tree |
 
 ### Session model
 
@@ -136,13 +166,17 @@ Rules:
 
 | Layer | Store | Lifetime | Writer | Reader |
 |-------|--------|----------|--------|--------|
-| Session | registry file/RAM under `/var/lib/aipc-agent/sessions/` | until done + grace | orchestrator, wake | voice, portal, doctor |
-| Short-term | `agent_context` keyed by session id | **while session open** | all workers | respond / slot-fill / consolidate |
-| Activity | job progress ring + session.last_activity | while working | task_jobs / hermes | overlay, portal, notify |
-| Episode | JSONL | days–weeks | middleware | critique, eval |
-| Long-term | mem0 | durable | internalize / consolidate | recall |
-| Routing priors | few-shot bank | durable | critique | classifier |
-| Safety ledger | append-only | durable | auto-apply refusals | human |
+| Session | registry under `/var/lib/aipc-agent/sessions/` | until done + grace | orchestrator, wake | voice, portal, doctor |
+| Short-term | `agent_context` (disk merge) | **while session open** | all workers | respond / slot-fill / consolidate |
+| Activity | job progress + session.last_activity | while working | task_jobs / hermes | overlay, portal, notify |
+| Episode | JSONL under `/var/lib/aipc-agent/episodes/` | days–weeks | middleware | critique, eval |
+| Long-term facts | mem0 | durable | internalize / consolidate | recall |
+| Routing priors | `/var/lib/aipc-agent/learning/fewshots.json` (local) | durable | critique process | classifier |
+| **Skill tree** | **local dirs only** (`~/.hermes/skills`, …) | durable per machine | learn/install process | Hermes / workers at runtime |
+| Safety ledger | `/var/lib/aipc-agent/learning/proposals/` (local) | durable | auto-apply refusals | human |
+
+**Not in the table:** any path under the aipc git checkout as a skill
+content root. Checkout = process source for image build only.
 
 ### Critical path rules
 
@@ -183,6 +217,8 @@ Apply policy:
 
 - Online LoRA / full fine-tune of gemma/ornith without a separate change.
 - Auto-edit of `modules/**` or systemd units without grant.
+- **Treat the aipc repo as a skill tree** (no shipping or auto-writing
+  user skills into git / image modules).
 - Cross-user memory bleed (single primary user id stays the scope).
 - Cloud upload of episodes.
 

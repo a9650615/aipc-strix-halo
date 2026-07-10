@@ -191,6 +191,32 @@ The system SHALL support a closed loop:
   skill root, and MUST NOT commit or patch the aipc project tree as the
   skill store
 
+### Requirement: Sandbox browser for on-box crawl learning
+
+When a Hermes (or equivalent tool-agent) turn requires live web pages to
+answer or to learn a procedure, the system SHALL be able to enable a
+**browser toolset** using an **isolated on-box browser profile** (sandbox),
+not the user's personal browser profile and not any path inside the aipc
+git tree.
+
+- Default sandbox profile root: `/var/lib/aipc-agent/browser-sandbox`
+  (or `AIPC_BROWSER_SANDBOX`).
+- Enabling the browser SHALL be driven by task shape / env policy
+  (`AIPC_HERMES_BROWSER=auto|1|0`), not by a static topic keyword allowlist.
+- After a successful browse+answer, skill learning MAY capture the
+  procedure into the local skill tree (same closed loop as other skills).
+
+#### Scenario: Isolated profile
+
+- **WHEN** Hermes runs with browser tools for a research lookup
+- **THEN** Chromium/agent-browser SHALL use the sandbox user-data directory
+  under the configured AIPC browser sandbox path
+
+#### Scenario: Not always-on
+
+- **WHEN** the user only greets or asks a pure offline question
+- **THEN** the system SHALL NOT require starting the sandbox browser
+
 ### Requirement: Safety envelope
 
 Self-improvement SHALL NOT:

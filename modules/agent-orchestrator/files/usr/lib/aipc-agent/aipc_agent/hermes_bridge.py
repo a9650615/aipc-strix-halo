@@ -133,7 +133,7 @@ def _is_unusable_answer(text: str) -> bool:
     return any(b in low or b in t for b in bad)
 
 
-def _build_query(text: str, session_id: str) -> str:
+def _build_query(text: str, session_id: str, *, browser: bool = False) -> str:
     parts = [
         "You are helping via the aipc voice assistant. "
         "Do the task with tools if needed, then stop. "
@@ -144,6 +144,17 @@ def _build_query(text: str, session_id: str) -> str:
         "",
         f"User request:\n{text.strip()}",
     ]
+    if browser:
+        try:
+            from aipc_agent.browser_sandbox import prompt_hint
+
+            parts.insert(1, prompt_hint() + "\n")
+        except Exception:
+            parts.insert(
+                1,
+                "Browser tools available: use web_search / browser_navigate when "
+                "live pages are required; keep the final spoken answer short.\n",
+            )
     # Local skill tree (on-box folders only) — process injects, never from git
     try:
         from aipc_agent.skill_learn import skills_for_query
@@ -262,7 +273,23 @@ def run(
 
     user, home = _primary_user_home()
     env = _build_env(home, user)
-    query = _build_query(text, session_id)
+    # Sandbox browser when task shape needs live crawl (skill learning / research)
+    use_browser = False
+    try:
+        from aipc_agent import browser_sandbox
+
+        use_browser = browser_sandbox.needs_browser(text, long_task=long_task)
+        if use_browser:
+            env = browser_sandbox.hermes_env(env)
+            browser_sandbox.ensure_profile()
+            print(
+                f"aipc-agent hermes: browser-sandbox on path={browser_sandbox.SANDBOX_ROOT}",
+                flush=True,
+            )
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent hermes: browser-sandbox skip: {exc}", flush=True)
+        use_browser = False
+    query = _build_query(text, session_id, browser=use_browser)
     voice = _is_voice_session(session_id)
     if wall is None:
         if long_task:
@@ -298,6 +325,9 @@ def run(
         str(max(1, max_turns)),
         "--accept-hooks",
     ]
+    if use_browser:
+        # Equip browser toolset (navigate/snapshot + web_search) for this run
+        cmd.extend(["-t", "browser"])
 
     t0 = time.monotonic()
     # Live UX ticker so voice users are not stuck on a silent "thinking" screen.

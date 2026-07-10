@@ -35,11 +35,15 @@ depend on heavy Vulkan agent models. Override with env
 - **Episodes**: JSONL under `/var/lib/aipc-agent/episodes/` for
   self-improvement critique (Phase B timer still optional).
 - **Skill tree (not in this repo):** durable skills live as **modular
-  folders on the machine** (e.g. `~/.hermes/skills/`, optional
+  folders on the machine** (e.g. `~/.hermes/skills/aipc-learned/`,
   `/var/lib/aipc-agent/skills/`). This module only supplies the
-  **process** (episodes, internalize, future critique/gap→install).
-  Do not commit skill corpora into `modules/**`. See OpenSpec
-  `assistant-self-improvement` (skill tree boundary + closed loop).
+  **process** (episodes, internalize, skill_learn → local SKILL.md,
+  Hermes inject). Do not commit skill corpora into `modules/**`.
+- **Sandbox browser (when needed):** Hermes can equip `-t browser` with
+  profile under `/var/lib/aipc-agent/browser-sandbox` (isolated from the
+  user's personal browser) so the agent can crawl pages to answer or to
+  learn procedures. Controlled by `AIPC_HERMES_BROWSER=auto|1|0`.
+  See OpenSpec `assistant-self-improvement` (skill tree + sandbox browser).
 - **Classifier**: daily intents are **model-judged**
   (`AIPC_CLASSIFIER=always`); stock/live price multi-turn routes to
   Hermes tool path, not “没有工具” chat.
