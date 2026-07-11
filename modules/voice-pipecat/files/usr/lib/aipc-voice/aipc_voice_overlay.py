@@ -522,6 +522,74 @@ def _extract_image_urls(text: str, *, limit: int = 6) -> list[str]:
     return out
 
 
+_MD_IMG_RE = re.compile(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)>?[^)]*\)")
+
+
+def _extract_and_strip_media(text, extra=None):
+    """Return (text_without_image_refs, ordered_unique_image_urls).
+
+    Pulls markdown ![](url) and bare image URLs so they render in the safe
+    gallery instead of as raw text. Non-image links are left in the text.
+    """
+    s = text or ""
+    urls: list[str] = []
+
+    def _add(u: str) -> None:
+        u = (u or "").strip().strip("<>")
+        if u and u not in urls:
+            urls.append(u)
+
+    for u in extra or []:
+        _add(u)
+
+    def _sub(m: "re.Match") -> str:
+        _add(m.group(1))
+        return ""
+
+    s = _MD_IMG_RE.sub(_sub, s)
+    for u in _extract_image_urls(re.sub(r"<[^>]+>", " ", s)):
+        _add(u)
+    for u in urls:
+        s = s.replace(u, "")
+    s = re.sub(r"[ \t]+\n", "\n", s)
+    s = re.sub(r"\n{3,}", "\n\n", s).strip()
+    return s, urls
+
+
+def _markdown_to_html(text):
+    """Markdown → Qt rich-text HTML via QTextDocument (built into PySide6).
+
+    Falls back to escaped plain text on empty/parse failure — never raises.
+    """
+    s = (text or "").strip()
+    if not s:
+        return ""
+    try:
+        from PySide6.QtGui import QTextDocument
+
+        doc = QTextDocument()
+        doc.setMarkdown(s)
+        html = doc.toHtml()
+        if html and "<" in html:
+            return html
+    except Exception:
+        pass
+    import html as _h
+
+    return _h.escape(s).replace("\n", "<br>")
+
+
+def _source_host(url):
+    """Bare host for a URL caption (drops www.), '' on failure."""
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(url).hostname or "").lower()
+        return host[4:] if host.startswith("www.") else host
+    except Exception:
+        return ""
+
+
 class _ImageFetch(QObject):
     """Background HTTP fetch → main-thread pixmap (no Qt Network dependency)."""
 
