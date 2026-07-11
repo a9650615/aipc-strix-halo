@@ -113,14 +113,14 @@
 - [x] 6.1 Grant checks stubbed; auto subscription off.
 - [ ] 6.2–6.6 Quota/reserve/portal paid UX — deferred with paid path.
 - [x] 6.7 Update `cloud-llm-fallback` documentation (STATUS.md + ai-runtime note).
-- [ ] 6.8 Add `glm-cloud` provisioning and SOPS key flow under
+- [x] 6.8 Add `glm-cloud` provisioning and SOPS key flow under
   `cloud-llm-fallback`; it must not make the alias a default route.
-- [ ] 6.9 Add the local `ask_glm` adapter and tool contract: deny credentials
+- [x] 6.9 Add the local `ask_glm` adapter and tool contract: deny credentials
   and private data scopes, foreground-only, no automatic fallback/retry, and
   leave moderation-sensitive or ambiguous content local.
 - [ ] 6.10 Consume CodexBar provider `zai` quota; unknown, stale, or exhausted
   quota keeps the request local. Hardware-verify the enabled canary before any
-  live assistant traffic.
+  live assistant traffic. (Quota gate implemented; hardware canary pending.)
 
 ## 7. Slice A — latency, reliability (local only; paid load tests deferred)
 
