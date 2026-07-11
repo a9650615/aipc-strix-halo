@@ -20,6 +20,8 @@
   complete requirements here. Two conflicting active `ai-runtime` deltas are
   forbidden.
   (`cloud-llm-fallback/STATUS.md` + ai-runtime routing note: provisioning-only)
+- [ ] 0.6 Record the user-approved Z.AI GLM tool exception: general API model,
+  maximum spend, foreground-only scope, and hardware enablement gate.
 
 ## 1. Slice A — router core in observe mode
 
@@ -110,6 +112,13 @@
 - [x] 6.1 Grant checks stubbed; auto subscription off.
 - [ ] 6.2–6.6 Quota/reserve/portal paid UX — deferred with paid path.
 - [x] 6.7 Update `cloud-llm-fallback` documentation (STATUS.md + ai-runtime note).
+- [ ] 6.8 Add `glm-cloud` provisioning and SOPS key flow under
+  `cloud-llm-fallback`; it must not make the alias a default route.
+- [ ] 6.9 Add the local `ask_glm` adapter and tool contract: deny credentials
+  and private data scopes, foreground-only, no automatic fallback/retry, and
+  leave moderation-sensitive or ambiguous content local.
+- [ ] 6.10 Set and enforce the user-approved GLM spending cap; hardware-verify
+  the enabled canary before any live assistant traffic.
 
 ## 7. Slice A — latency, reliability (local only; paid load tests deferred)
 
