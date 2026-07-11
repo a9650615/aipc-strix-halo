@@ -12,6 +12,10 @@ single source of truth for "what does `coder-strong` actually run?"
 - `llm-litellm` reads this file at startup to render its router config.
 - `llm-ollama` and `llm-lemonade` use it to decide which weights to pull /
   compile.
+- Optional residency metadata may live beside an alias when a backend needs
+  it. Today `coder-compact` carries `idle_unload_after_s: 300` so the compact
+  lane can release itself after five idle minutes. Future aliases opt in by
+  declaring the same field; aliases without it keep their existing policy.
 
 ## Dependencies
 

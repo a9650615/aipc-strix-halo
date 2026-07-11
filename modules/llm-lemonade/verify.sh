@@ -69,6 +69,15 @@ sys.exit(0 if d.get('max_models', {}).get('llm', 0) >= 3 else 1)
   || [ -x /etc/aipc/llm-lemonade/ensure-resident-small.sh ] \
   || [ -x /var/lib/aipc-lemonade/ensure-resident-small.sh ] \
   || fail "llm-lemonade: ensure-resident-small.sh missing"
+[ -x /usr/lib/aipc/llm-lemonade/lemonade-idle-release.py ] \
+  || [ -x /etc/aipc/llm-lemonade/lemonade-idle-release.py ] \
+  || fail "llm-lemonade: lemonade-idle-release.py missing"
+idle_release=/usr/lib/aipc/llm-lemonade/lemonade-idle-release.py
+[ -x "${idle_release}" ] || idle_release=/etc/aipc/llm-lemonade/lemonade-idle-release.py
+python3 "${idle_release}" --self-test >/dev/null \
+  || fail "llm-lemonade: lemonade-idle-release.py self-test failed"
+systemctl is-enabled --quiet aipc-lemonade-idle-release.timer \
+  || fail "llm-lemonade: aipc-lemonade-idle-release.timer not enabled"
 printf '%s' "$config_json" | grep -q '"enable_dgpu_gtt": *true' \
   || fail "llm-lemonade: config.json enable_dgpu_gtt != true — restart lemonade.service to reapply, or check jq is installed"
 

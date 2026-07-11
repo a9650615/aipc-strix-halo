@@ -88,6 +88,17 @@ unit file for why):
   ROCm can't load either model at all. Left on even though Vulkan is the
   active backend, in case ROCm is revisited later.
 
+### Compact idle release
+
+`coder-compact` is intentionally on-demand. Its residency policy lives next
+to the alias in `modules/llm-models/files/etc/aipc/models/models.yaml` as
+`idle_unload_after_s: 300`. A small host timer in this module reads the
+manifest, checks Lemonade's live `all_models_loaded` payload, and unloads the
+model once it has been idle for five minutes. Other aliases stay unchanged
+unless they explicitly opt in later. Lemonade reports `last_use` as monotonic
+milliseconds, so the job compares it with the host monotonic clock and never
+unloads an entry whose status is `in_use`.
+
 ## 10.8.1 per-type `max_models` in `/api/v1/health` — no separate config key (2026-07-11)
 
 `/api/v1/health` reports `max_models: {llm, embedding, image, reranking,
