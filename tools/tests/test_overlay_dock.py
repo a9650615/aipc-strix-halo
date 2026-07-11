@@ -39,30 +39,30 @@ def _panel(m):
     return m.OverlayPanel()
 
 
-def test_anchor_for_state_right_states():
+def test_anchor_for_state_right_is_bg_task_and_short_results():
     m = _mod()
-    for state in ("listening", "wake", "recording", "no_speech", "followup", "bg_task"):
-        assert m.OverlayPanel._anchor_for_state(state) == "right", state
-
-
-def test_anchor_for_state_rich_result_centers():
-    m = _mod()
-    # A genuinely rich result (long text / media) centers...
-    for state in ("speaking", "done", "error"):
-        assert m.OverlayPanel._anchor_for_state(state, rich=True) == "center", state
-    # ...but the same states with little content stay right — no center trip
-    # for a one-line answer (fixes "問時間也滑到中間").
+    # Only the background-task pill and short (non-rich) results dock right.
+    assert m.OverlayPanel._anchor_for_state("bg_task") == "right"
     for state in ("speaking", "done", "error"):
         assert m.OverlayPanel._anchor_for_state(state, rich=False) == "right", state
-    # Transient activity never centers, rich flag or not.
-    for state in ("thinking", "working"):
-        assert m.OverlayPanel._anchor_for_state(state, rich=True) == "right", state
 
 
-def test_anchor_for_state_unknown_defaults_right():
+def test_anchor_for_state_active_states_center():
     m = _mod()
-    assert m.OverlayPanel._anchor_for_state("muted") == "right"
-    assert m.OverlayPanel._anchor_for_state("") == "right"
+    # Active capture + processing always centre (prominent — user sees she's
+    # engaged). This is the revised model: active→centre, idle→hidden.
+    for state in ("recording", "wake", "followup", "thinking", "working", "no_speech"):
+        assert m.OverlayPanel._anchor_for_state(state) == "center", state
+    # Rich results centre too.
+    for state in ("speaking", "done", "error"):
+        assert m.OverlayPanel._anchor_for_state(state, rich=True) == "center", state
+
+
+def test_anchor_for_state_unknown_defaults_center():
+    m = _mod()
+    # Any shown-but-unknown state is treated as active → centre.
+    assert m.OverlayPanel._anchor_for_state("muted") == "center"
+    assert m.OverlayPanel._anchor_for_state("") == "center"
 
 
 def test_effective_anchor_env_override_wins(monkeypatch):
@@ -78,7 +78,9 @@ def test_effective_anchor_state_driven_by_default(monkeypatch):
     panel = _panel(m)
     monkeypatch.delenv("AIPC_OVERLAY_ANCHOR", raising=False)
     monkeypatch.delenv("AIPC_OVERLAY_STATE_DOCK", raising=False)
-    assert panel._effective_anchor("listening") == "right"
+    # Active capture centres; background pill docks right.
+    assert panel._effective_anchor("recording") == "center"
+    assert panel._effective_anchor("bg_task") == "right"
     # Short result stays right; only a rich result centers.
     assert panel._effective_anchor("done", rich=False) == "right"
     assert panel._effective_anchor("done", rich=True) == "center"
@@ -131,14 +133,14 @@ def test_mini_chip_label_bg_task_is_fixed_regardless_of_detail():
 
 
 def test_compute_geom_right_is_more_rightward_than_center(monkeypatch):
-    """listening (right) should place further right (larger x) than done
-    (center) on the same screen."""
+    """bg_task (right pill) should place further right (larger x) than a rich
+    done result (center) on the same screen."""
     m = _mod()
     panel = _panel(m)
     monkeypatch.delenv("AIPC_OVERLAY_ANCHOR", raising=False)
     monkeypatch.delenv("AIPC_OVERLAY_STATE_DOCK", raising=False)
 
-    panel._state = "listening"
+    panel._state = "bg_task"
     panel._mini = True
     x_right, *_ = panel._compute_geom(body_len=0, long_form=False, mini=True)
 
@@ -155,13 +157,13 @@ def test_compute_geom_right_is_more_rightward_than_center(monkeypatch):
 
 def test_compute_geom_short_result_stays_right(monkeypatch):
     """A short (non-rich) done answer must NOT slide to center — it docks
-    right, same as listening. Regression guard for '問時間也滑到中間'."""
+    right, like the bg_task pill. Regression guard for '問時間也滑到中間'."""
     m = _mod()
     panel = _panel(m)
     monkeypatch.delenv("AIPC_OVERLAY_ANCHOR", raising=False)
     monkeypatch.delenv("AIPC_OVERLAY_STATE_DOCK", raising=False)
 
-    panel._state = "listening"
+    panel._state = "bg_task"
     panel._mini = True
     x_listen, *_ = panel._compute_geom(body_len=0, long_form=False, mini=True)
 

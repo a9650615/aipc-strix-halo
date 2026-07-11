@@ -1643,15 +1643,18 @@ class OverlayPanel(QWidget):
 
     @staticmethod
     def _anchor_for_state(state: str, rich: bool = False) -> str:
-        """Content-driven dock: center ONLY for a genuinely rich result
-        (long text / media / markdown). Everything else — idle, listening,
-        thinking, working, bg_task, AND short one-line answers — docks compact
-        to the right. Keeps the HUD from sliding center for a one-liner and
-        kills the right↔center bounce (flicker) across a turn's state changes.
-        Pure mapping, no env/hardware reads — stays trivially unit-testable."""
-        if rich and state in ("speaking", "done", "error"):
-            return "center"
-        return "right"
+        """Where a SHOWN state docks (idle states never show — see HIDE_STATES).
+        bg_task is an unobtrusive RIGHT pill (a background task running while you
+        do other things). A result centers only when rich — a one-line answer
+        stays compact right (don't yank a one-liner to centre). Every other
+        active state — recording/wake/followup capture, thinking/working
+        processing — CENTERS, so you clearly see the assistant is engaged with
+        you. Pure mapping, no env/hardware reads — stays trivially testable."""
+        if state == "bg_task":
+            return "right"
+        if state in ("speaking", "done", "error"):
+            return "center" if rich else "right"
+        return "center"
 
     def _state_dock_enabled(self) -> bool:
         """AIPC_OVERLAY_ANCHOR (explicit) always wins; otherwise state-driven
@@ -1669,14 +1672,15 @@ class OverlayPanel(QWidget):
         return "top-center"
 
     def _mini_for_state(self, state: str) -> bool:
-        """Compact pill layout: working/thinking (unchanged) plus any
-        state-driven right-docked idle state (reuses the existing narrow
-        mini form instead of a bespoke width path)."""
+        """Results (speaking/done/error) are content-sized cards. Everything
+        else that shows — active capture (recording/wake/followup), processing
+        (thinking/working), and the bg_task pill — is a compact pill (small,
+        just orb + short label)."""
         if state in ("speaking", "done", "error"):
             return False
-        if state in ("working", "thinking"):
-            return True
-        return self._state_dock_enabled() and self._anchor_for_state(state) == "right"
+        if not self._state_dock_enabled():
+            return state in ("working", "thinking")  # legacy env-override path
+        return True
 
     def _compute_geom(
         self,
