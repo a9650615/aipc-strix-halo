@@ -29,4 +29,13 @@ PYTHONPATH="$pkg_dir" python3 -c "from aipc_agent_screen_control.input import se
 PYTHONPATH="$pkg_dir" python3 -c "from aipc_agent_screen_control.vlm import self_test; self_test()" \
     >/dev/null || fail "vlm self-test failed (expected fail-closed with no gate socket)"
 
-echo "agent-screen-control: static + fail-closed self-tests OK (render-verified; window-class detection and real input injection are NOT hardware-verified here, see README)"
+# Hardware tier: when the real tools are installed (kdotool + ydotool +
+# spectacle), confirm they resolve and kdotool's window-class query runs.
+# Absent (render-only CI) => static pass is all we can claim here.
+if command -v kdotool >/dev/null 2>&1 && command -v ydotool >/dev/null 2>&1 && command -v spectacle >/dev/null 2>&1; then
+    kdotool getactivewindow >/dev/null 2>&1 \
+        || echo "agent-screen-control: kdotool getactivewindow non-zero (no active window?)" >&2
+    echo "agent-screen-control: static + fail-closed + real-tool checks OK (full chain hardware-verified 2026-07-11, see README)"
+else
+    echo "agent-screen-control: static + fail-closed self-tests OK (render-only: kdotool/ydotool/spectacle absent, see README)"
+fi

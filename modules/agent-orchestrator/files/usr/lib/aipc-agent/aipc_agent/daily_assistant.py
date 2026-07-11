@@ -73,7 +73,13 @@ SYSTEM_PROMPT = (
     "Use tools iteratively: call a tool, read the result, call more tools if "
     "needed, then answer briefly. "
     "Tools: calendar, email, files.read, web search, usage_lookup (coding "
-    "quotas only — not for writing code), screen_describe (read-only VLM). "
+    "quotas only — not for writing code), screen_describe (read-only VLM look), "
+    "screen_click / screen_type / screen_key (actually control the desktop — "
+    "mouse + keyboard). For screen control: call screen_describe first to see "
+    "the layout and find coordinates, then act. If a control tool returns "
+    "needs_permission, tell the user to run `aipc agent screen --grant-session 300`; "
+    "if it returns blocked, the foreground window is protected (password manager / "
+    "terminal) — do not retry, tell the user. "
     "When a tool returns not_configured, say that feature is not set up yet. "
     "You do not write or refactor code — if the user wants coding, say they "
     "should ask the coding/Hermes agent. "
@@ -190,6 +196,65 @@ def screen_describe(question: str = "") -> dict:
     return screen_see.describe_desktop(question or "")
 
 
+def _screen_control_action(fn_name: str, *args) -> dict:
+    """Shared body for the write screen-control tools. Every action routes
+    through agent-screen-control's own gate.check_action() (grant + window
+    blacklist, fail-closed); this only maps its exceptions to friendly tool
+    status dicts so the assistant can tell the user what to do next."""
+    try:
+        from aipc_agent_screen_control import input as sc_input  # phase-4-agent#4.7
+        from aipc_agent_screen_control import gate as sc_gate
+    except ImportError:
+        return {
+            "status": "not_configured",
+            "tool": fn_name,
+            "detail": "agent-screen-control not installed (module .disabled?)",
+        }
+    try:
+        getattr(sc_input, fn_name)(*args)
+        return {"status": "ok", "tool": fn_name, "detail": f"{fn_name}{args}"}
+    except sc_gate.GateDenied:
+        return {
+            "status": "needs_permission",
+            "tool": fn_name,
+            "detail": "螢幕控制未授權，請先執行：aipc agent screen --grant-session 300",
+        }
+    except sc_gate.BlacklistedWindow:
+        return {
+            "status": "blocked",
+            "tool": fn_name,
+            "detail": "目前前景視窗在黑名單（密碼管理器／終端機等），拒絕操作以保護敏感畫面",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "tool": fn_name, "detail": str(exc)}
+
+
+@tool
+def screen_click(x: int, y: int, button: str = "left") -> dict:
+    """Move the mouse to absolute pixel (x, y) and click. `button` is
+    left/right/middle. Requires an active screen-control grant; refuses on
+    blacklisted windows. Use screen_describe first to find coordinates."""
+    r = _screen_control_action("mouse_move", int(x), int(y))
+    if r["status"] != "ok":
+        return r
+    return _screen_control_action("mouse_click", button)
+
+
+@tool
+def screen_type(text: str) -> dict:
+    """Type `text` into the focused window via the keyboard. Requires an
+    active screen-control grant; refuses on blacklisted windows."""
+    return _screen_control_action("key_type", text)
+
+
+@tool
+def screen_key(key: str) -> dict:
+    """Press a key or combo (ydotool keycode name, e.g. "KEY_ENTER",
+    "29:1 46:1 29:0 46:0" for Ctrl+C). Requires an active screen-control
+    grant; refuses on blacklisted windows."""
+    return _screen_control_action("key_press", key)
+
+
 TOOLS = [
     calendar_lookup,
     email_lookup,
@@ -198,6 +263,9 @@ TOOLS = [
     search_tavily,
     usage_lookup,
     screen_describe,
+    screen_click,
+    screen_type,
+    screen_key,
 ]
 
 
