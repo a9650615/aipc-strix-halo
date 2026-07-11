@@ -328,15 +328,32 @@ def chat(req: ChatRequest) -> ChatResponse | JSONResponse:
         except Exception:
             spoken = ""
 
+    background = background_from_result(result)
+    text = str(text)
+    if not background and not end_session:
+        # Single chokepoint: every normal turn passes through here, so this
+        # is where a finished/interrupted background task (from a prior turn
+        # the user wasn't watching) gets proactively mentioned — once.
+        try:
+            from aipc_agent import task_jobs
+
+            pending = task_jobs.take_pending_followups(sid)
+            notice = task_jobs.followup_notice(pending) if pending else ""
+            if notice:
+                text = f"{notice}\n{text}"
+                spoken = f"{notice} {spoken}".strip() if spoken else notice
+        except Exception as exc:  # noqa: BLE001 — must never break /chat
+            print(f"aipc-agent server: followup surfacing failed sid={sid}: {exc}", flush=True)
+
     return ChatResponse(
-        text=str(text),
+        text=text,
         task_id=task_id,
         end_session=end_session,
         session_id=sid,
         session_status=st,
         spoken_summary=spoken,
         expect_reply=expect_reply_from_result(result),
-        background=background_from_result(result),
+        background=background,
     )
 
 

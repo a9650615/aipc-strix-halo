@@ -279,9 +279,20 @@ def job_update(
             pass
 
 
-def format_status_speech(limit: int = 5) -> str:
-    """Spoken / text summary for voice「任务进度」."""
-    jobs = job_list(limit=limit)
+def format_status_speech(limit: int = 5, sid: str | None = None) -> str:
+    """Spoken / text summary for voice「任务进度」.
+
+    When ``sid`` is given, that session's own jobs are surfaced first (still
+    capped at ``limit`` total) so "我那个任务好了吗" resolves to the caller's
+    own task before falling back to the global list.
+    """
+    pool = job_list(limit=max(limit * 4, 20)) if sid else job_list(limit=limit)
+    if sid:
+        mine = [j for j in pool if j.get("session_id") == sid]
+        others = [j for j in pool if j.get("session_id") != sid]
+        jobs = (mine + others)[:limit]
+    else:
+        jobs = pool
     if not jobs:
         return "目前没有后台长任务在跑。"
     parts: list[str] = []
@@ -302,6 +313,53 @@ def format_status_speech(limit: int = 5) -> str:
             preview = (j.get("result_text") or j.get("text") or "")[:50]
             parts.append(f"{jid} {worker}：{st} — {preview}")
     return "后台任务：\n" + "\n".join(parts)
+
+
+def take_pending_followups(sid: str) -> list[dict[str, Any]]:
+    """Claim finished/interrupted jobs for ``sid`` that haven't been mentioned
+    to the user yet, and atomically mark them acknowledged so each surfaces
+    exactly once (across processes, via the same lock guarding disk saves).
+    """
+    if not sid:
+        return []
+    out: list[dict[str, Any]] = []
+    with _JOBS_LOCK:
+        for jid, j in _JOBS.items():
+            if (
+                j.get("session_id") == sid
+                and j.get("status") in ("ok", "error", "interrupted")
+                and j.get("needs_followup")
+            ):
+                j["needs_followup"] = False
+                _JOBS[jid] = j
+                out.append(dict(j))
+        if out:
+            _save_store_locked()
+    return out
+
+
+def followup_notice(jobs: list[dict[str, Any]]) -> str:
+    """Short zh notice for jobs that finished/interrupted while unattended."""
+    if not jobs:
+        return ""
+    if len(jobs) == 1:
+        j = jobs[0]
+        plan = (j.get("plan_summary") or j.get("text") or "任务")[:40]
+        st = j.get("result_status") or j.get("status") or ""
+        if st == "ok":
+            return f"对了，你刚才让我做的「{plan}」已经完成了。"
+        if st == "error":
+            return f"对了，你刚才让我做的「{plan}」处理时出错了。"
+        if st == "interrupted":
+            return f"对了，你刚才让我做的「{plan}」在重启时中断了，需要我重试吗？"
+        return f"对了，你刚才让我做的「{plan}」有更新了。"
+    tag = {"ok": "已完成", "error": "出错了", "interrupted": "被中断"}
+    bits = [
+        f"「{(j.get('plan_summary') or j.get('text') or '任务')[:20]}」"
+        f"{tag.get(j.get('result_status') or j.get('status') or '', '有更新')}"
+        for j in jobs[:3]
+    ]
+    return f"你有 {len(jobs)} 个后台任务有更新：" + "、".join(bits) + "。"
 
 
 def submit(
@@ -461,6 +519,14 @@ def submit(
             claim_done.wait(timeout=0.2)
         with _JOBS_LOCK:
             delivered = bool((_JOBS.get(job_id) or {}).get("delivered_inline"))
+            # A job delivered inline within grace_s already spoke its result
+            # synchronously to the caller — no followup owed. Anything else
+            # (plain background finish, or delivered too late) owes one.
+            cur_j = _JOBS.get(job_id)
+            if cur_j is not None:
+                cur_j["needs_followup"] = not delivered
+                _JOBS[job_id] = cur_j
+                _save_store_locked()
         if delivered:
             # Answer already went back synchronously to the caller; no
             # duplicate HUD notify / memory-internalize for this job.

@@ -1144,7 +1144,7 @@ def _clarify_node(state: SupervisorState) -> SupervisorState:
 def _job_status_node(state: SupervisorState) -> SupervisorState:
     sid = state.get("session_id") or "default"
     ux_bridge.progress("查询任务进度…", state="thinking", source="job-status")
-    text = task_jobs.format_status_speech(limit=5)
+    text = task_jobs.format_status_speech(limit=5, sid=sid)
     try:
         from aipc_agent import activity
 
