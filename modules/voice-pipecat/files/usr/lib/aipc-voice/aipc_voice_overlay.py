@@ -50,6 +50,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QScrollArea,
@@ -713,9 +714,11 @@ class BodyScroll(QScrollArea):
 
         self._gallery = QWidget()
         self._gallery.setStyleSheet("background: transparent;")
-        self._gal = QVBoxLayout(self._gallery)
+        self._gal = QGridLayout(self._gallery)
         self._gal.setContentsMargins(0, 4, 0, 0)
         self._gal.setSpacing(8)
+        self._gal_cols = 1
+        self._gal_cell_w = 0
         self._v.addWidget(self._gallery, 0, Qt.AlignmentFlag.AlignTop)
         self._v.addStretch(0)
 
@@ -801,7 +804,13 @@ class BodyScroll(QScrollArea):
         w = max(120, w - 8)
         gen = self._load_gen
         self._gallery.show()
-        for url in urls[:max_n]:
+        items = urls[:max_n]
+        # 2-up grid when there is more than one image; single column otherwise.
+        cols = 2 if len(items) > 1 else 1
+        cell_w = max(120, (w - (cols - 1) * 8) // cols)
+        self._gal_cols = cols
+        self._gal_cell_w = cell_w
+        for i, url in enumerate(items):
             lab = QLabel("🖼 載入中…")
             lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lab.setWordWrap(True)
@@ -811,14 +820,16 @@ class BodyScroll(QScrollArea):
                 "border: 1px solid rgba(255,255,255,28); border-radius: 10px; "
                 "padding: 10px; font-size: 12px;"
             )
-            lab.setFixedWidth(w)
+            lab.setFixedWidth(cell_w)
             lab.setMinimumHeight(56)
             lab.setCursor(Qt.CursorShape.PointingHandCursor)
             lab.setProperty("img_url", url)
+            host = _source_host(url)
+            lab.setToolTip(f"{host}\n{url}" if host else url)
             lab.mousePressEvent = (  # type: ignore[method-assign]
                 lambda ev, u=url: QDesktopServices.openUrl(QUrl(u))
             )
-            self._gal.addWidget(lab)
+            self._gal.addWidget(lab, i // cols, i % cols)
             self._img_labels.append(lab)
             self._img_urls.append(url)
             self._fetcher.fetch(gen, url)
@@ -836,7 +847,7 @@ class BodyScroll(QScrollArea):
         if not pm.loadFromData(data):
             lab.setText("⚠ 無法解碼圖片")
             return
-        w = max(100, lab.width() or self._inner_w)
+        w = max(100, self._gal_cell_w or lab.width() or self._inner_w)
         # Fit width, cap height
         scaled = pm.scaled(
             w,
@@ -888,12 +899,21 @@ class BodyScroll(QScrollArea):
 
         gal_h = 0
         if self._img_labels:
-            for lab in self._img_labels:
-                lab.setFixedWidth(w)
+            cols = max(1, self._gal_cols)
+            cell_w = self._gal_cell_w or w
+            row_h = 0
+            for i, lab in enumerate(self._img_labels):
+                lab.setFixedWidth(cell_w)
                 if lab.pixmap() is not None and not lab.pixmap().isNull():
-                    gal_h += lab.height() + 8
+                    lh = lab.height()
                 else:
-                    gal_h += max(56, lab.minimumHeight()) + 8
+                    lh = max(56, lab.minimumHeight())
+                row_h = max(row_h, lh)
+                if i % cols == cols - 1:
+                    gal_h += row_h + 8
+                    row_h = 0
+            if row_h:
+                gal_h += row_h + 8
             self._gallery.setFixedWidth(w)
             self._gallery.setFixedHeight(max(0, gal_h))
             self._gallery.show()

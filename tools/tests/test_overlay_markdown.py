@@ -86,3 +86,28 @@ def test_set_body_renders_markdown_widget():
     html = body.body_text()
     assert "strong" in html
     assert ("font-weight:700" in html) or ("<b" in html.lower())
+
+
+def test_gallery_two_column_grid():
+    m = _mod()
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    body = m.BodyScroll()
+    # non-resolvable hosts → background fetch fails fast, harmless
+    body.set_images(
+        ["https://x.test/a.png", "https://x.test/b.png", "https://x.test/c.png"],
+        width=400,
+    )
+    assert body._gal_cols == 2
+    assert len(body._img_labels) == 3
+
+
+def test_gallery_single_image_one_column():
+    m = _mod()
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    body = m.BodyScroll()
+    body.set_images(["https://x.test/only.png"], width=400)
+    assert body._gal_cols == 1
