@@ -87,6 +87,9 @@
 - [ ] 6.1 Persona screen contribution: name + voice preset / clone
   sample capture. Writes `/etc/aipc/voice/persona.yaml` and
   `/var/lib/aipc-voice/persona/clone.wav`.
+  The CLI portion now supports desktop monitor capture, automatic SenseVoice
+  transcription, named WAV + transcript presets, and preset activation;
+  firstboot UI integration remains open.
 - [ ] 6.2 Wake-word screen contribution: 3–5 sample recording UI
   (TUI), invokes `aipc-voice-train-wake`, surfaces progress.
 - [ ] 6.3 Hand-off: both screens are owned in Phase 3 but rendered by

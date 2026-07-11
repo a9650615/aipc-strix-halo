@@ -219,6 +219,7 @@ def render_portal_html(
     services: list[ServiceMetadata] | list[CardProbe],
     *,
     refresh_seconds: int = 5,
+    automation: list[dict[str, object]] | None = None,
 ) -> str:
     """HTML cards; delegates to module package renderer when importable."""
     reg = _try_import_registry()
@@ -242,7 +243,9 @@ def render_portal_html(
                 statuses.append(
                     reg.ServiceStatus(meta, c.unit_state, c.health_ok, c.health_detail)
                 )
-            return reg.render_portal_html(statuses, refresh_seconds=refresh_seconds)
+            return reg.render_portal_html(
+                statuses, refresh_seconds=refresh_seconds, automation=automation
+            )
         converted = [
             reg.ServiceMetadata(
                 id=s.id,
@@ -259,16 +262,23 @@ def render_portal_html(
             for s in services
             if isinstance(s, ServiceMetadata)
         ]
-        return reg.render_portal_html(converted, refresh_seconds=refresh_seconds)
+        return reg.render_portal_html(
+            converted, refresh_seconds=refresh_seconds, automation=automation
+        )
     if reg is not None and not services:
-        return reg.render_portal_html([], refresh_seconds=refresh_seconds)
-    return _render_html_fallback(services, refresh_seconds=refresh_seconds)
+        return reg.render_portal_html(
+            [], refresh_seconds=refresh_seconds, automation=automation
+        )
+    return _render_html_fallback(
+        services, refresh_seconds=refresh_seconds, automation=automation
+    )
 
 
 def _render_html_fallback(
     services: list[ServiceMetadata] | list[CardProbe],
     *,
     refresh_seconds: int = 5,
+    automation: list[dict[str, object]] | None = None,
 ) -> str:
     import html as html_mod
 
@@ -298,10 +308,23 @@ def _render_html_fallback(
             f"<p>Endpoint: <code>{endpoint}</code></p>{link}</article>"
         )
     body = "\n".join(cards) or '<p class="empty">No AIPC services declared yet.</p>'
+    controlled: list[str] = []
+    for row in automation or []:
+        task_id = html_mod.escape(str(row.get("task_id") or ""))
+        state = html_mod.escape(str(row.get("state") or "unknown"))
+        cancel = ""
+        if state in ("running", "cancelling") and task_id:
+            cancel = f'<form method="post" action="/automation/{task_id}/cancel"><button type="submit">Cancel</button></form>'
+        controlled.append(
+            f'<article><h2>{html_mod.escape(str(row.get("provider") or "unknown"))}</h2>'
+            f'<p>{state} · {html_mod.escape(str(row.get("branch") or "detached"))}</p>{cancel}</article>'
+        )
+    controls = "".join(controlled) or "<p>No assistant-controlled CLI tasks.</p>"
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         f'<meta http-equiv="refresh" content="{int(refresh_seconds)}">'
         "<title>AIPC Portal</title></head><body><main><h1>AIPC Portal</h1>"
+        f"<h2>Assistant-controlled terminals</h2><section>{controls}</section>"
         f'<section class="grid">{body}</section></main></body></html>'
     )
 

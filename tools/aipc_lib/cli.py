@@ -103,7 +103,7 @@ def _lemonade_unload(model_name: str, base_url: str = LEMONADE_BASE_URL) -> bool
 
 
 @lemonade_cmd.command("unload")
-@click.argument("model", default="qwen35-122b-q3", required=False)
+@click.argument("model", default="coder-agentic", required=False)
 @click.option("--base-url", default=LEMONADE_BASE_URL, show_default=True)
 def lemonade_unload(model: str, base_url: str) -> None:
     """Unload a Lemonade model by aipc alias or raw Lemonade model id."""

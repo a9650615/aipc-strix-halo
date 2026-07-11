@@ -32,7 +32,11 @@ CFG=/var/lib/aipc-lemonade/cache/config.json
 
 if [ -f "$CFG" ]; then
   tmp=$(mktemp -p "$(dirname "$CFG")")
-  jq '.max_loaded_models = 2 | .enable_dgpu_gtt = true | .llamacpp.backend = "vulkan"' "$CFG" > "$tmp"
+  # High slot count: 128GB unified memory — keep FLM + several Vulkan LLMs
+  # resident. Pin gemma4-it-e4b-FLM via ensure-resident-small.sh so LRU never
+  # evicts the always-on chat model. Do not thrash by unloading big models.
+  # FLM is type=llm in this lemond build and counts against the pool.
+  jq '.max_loaded_models = 8 | .enable_dgpu_gtt = true | .llamacpp.backend = "vulkan" | .global_timeout = 600' "$CFG" > "$tmp"
   mv "$tmp" "$CFG"
 fi
 

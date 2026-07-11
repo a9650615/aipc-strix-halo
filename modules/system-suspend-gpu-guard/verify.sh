@@ -17,6 +17,11 @@ grep -q 'ConditionPathExists=!/etc/aipc/suspend-gpu-guard.disabled' "$UNIT" \
   || fail "missing kill-switch ConditionPathExists"
 grep -q 'systemd-inhibit' "$SH" || fail "guard.sh must use systemd-inhibit"
 grep -q -- '--mode=block' "$SH" || fail "must use block mode, not delay"
-grep -q 'AC0/online' "$SH" || fail "must gate the block on AC power"
+grep -q 'AC0/online\|AC_ONLINE_PATH' "$SH" || fail "must gate the block on AC power"
+grep -q 'IDLE_STREAK_NEED' "$SH" || fail "must hysteresis-release (IDLE_STREAK_NEED)"
+grep -q 'BUSY_THRESHOLD' "$SH" || fail "must expose BUSY_THRESHOLD"
+# Default threshold must clear ambient desktop/always-on LLM load (~10–30%).
+grep -qE 'BUSY_THRESHOLD:-50|BUSY_THRESHOLD=50' "$SH" \
+  || fail "default BUSY_THRESHOLD should be >=50 (was 15 — stuck inhibitor on ambient load)"
 
 echo "suspend-gpu-guard verify OK (static)"

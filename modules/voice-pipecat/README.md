@@ -218,6 +218,51 @@ Response: 200 {"text": "..."}
   machine, verified installed via the image's package set for the target
   build.
 
+## Speak only (TTS, no think)
+
+```sh
+aipc-voice-say '你好，我是語音助手。'
+echo '任意句子' | aipc-voice-say
+aipc-voice-say --file note.txt
+aipc-voice-say --kokoro 'English fallback path'
+```
+
+Uses the same router as `aipc-voice-once` (CosyVoice clone for CJK when
+preferred, else Kokoro). Does **not** record, STT, or call `/chat`.
+
+## Voice templates (apply by situation)
+
+Named packs under `/var/lib/aipc-voice/persona/templates/<id>/` hold a
+CosyVoice clone sample + manifest (system prompt, mode, TTS prefer).
+
+```sh
+aipc-voice-template list
+aipc-voice-template show self-a
+aipc-voice-template apply self-a          # live switch, no CosyVoice restart
+aipc-voice-template current
+aipc-voice-template save weekend-soft --from-current \
+  --name "Weekend soft" --tags casual,soft --apply
+```
+
+`apply` copies `clone.wav`/`clone.txt` to the live persona path and writes
+`persona/active.json`. CosyVoice re-reads those on the next `/tts`.
+
+## Desktop-audio CosyVoice presets
+
+Capture the current default output sink, transcribe it with the existing
+SenseVoice service, and activate the resulting WAV + transcript as the
+CosyVoice clone prompt:
+
+```sh
+aipc-voice-record-clone --desktop --seconds 10 --preset sample-name --activate
+```
+
+Presets are stored under `/var/lib/aipc-voice/persona/presets/`. Prefer
+`aipc-voice-template save` for situation packs. Desktop capture uses `ffmpeg`
+with the default PipeWire/Pulse sink monitor; it does not change the default
+microphone source. SenseVoice supplies the transcript by default; pass
+`--prompt-text 'exact words'` when its result needs correction.
+
 ## Spec
 
 - `openspec/changes/phase-3-voice/design.md` — D9 (text in, text out to

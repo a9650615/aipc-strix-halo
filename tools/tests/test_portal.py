@@ -70,6 +70,9 @@ def test_empty_registry_still_renders() -> None:
     assert "AIPC Portal" in html
     assert "No AIPC services declared yet" in html
     assert 'http-equiv="refresh"' in html
+    assert "Closed loop" in html or "hear" in html.lower()
+    assert "Quick commands" in html
+    assert "Live work" in html
 
 
 def test_render_portal_html_links_to_declared_ui() -> None:
@@ -79,14 +82,81 @@ def test_render_portal_html_links_to_declared_ui() -> None:
         module="memory-mem0",
         kind="memory",
         ui="http://127.0.0.1:3000/",
-        tags=("memory", "dashboard"),
+        tags=("memory", "baseline"),
     )
 
     html = portal.render_portal_html([service])
 
     assert "Mem0 Memory" in html
     assert "http://127.0.0.1:3000/" in html
-    assert "Open" in html
+    assert "Open UI" in html
+    assert "Remember" in html
+    assert "Long-term memory" in html
+    assert "Technical" in html
+
+
+def test_render_portal_html_status_first_not_endpoint_wall() -> None:
+    stt = portal.ServiceMetadata(
+        id="sensevoice",
+        title="SenseVoice STT",
+        module="voice-stt-sensevoice",
+        kind="voice",
+        systemd="aipc-voice-stt-sensevoice.service",
+        health="http://127.0.0.1:9001/healthz",
+        endpoint="http://127.0.0.1:9001",
+        tags=("voice", "stt", "baseline"),
+    )
+    html = portal.render_portal_html(
+        [
+            portal.CardProbe(stt, "active", True, "200 ok"),
+        ]
+    )
+    assert "Hear" in html
+    assert "Healthy" in html
+    assert "Speech-to-text" in html
+    assert "Copy endpoint" in html
+    assert "Start baseline units" in html
+    assert "aipc voice status" in html
+    # Endpoint still present, but under technical details — not the headline.
+    assert html.index("Healthy") < html.index("http://127.0.0.1:9001")
+
+
+def test_render_portal_html_shows_start_when_unit_down() -> None:
+    meta = portal.ServiceMetadata(
+        id="kokoro",
+        title="Kokoro TTS",
+        module="voice-tts-kokoro",
+        kind="voice",
+        systemd="aipc-kokoro.service",
+        endpoint="http://127.0.0.1:8880",
+        tags=("voice", "tts", "baseline"),
+    )
+    html = portal.render_portal_html(
+        [portal.CardProbe(meta, "inactive", False, "timed out")]
+    )
+    assert "/services/kokoro/start" in html
+    assert "Start unit" in html
+    assert "Speak" in html
+
+
+def test_render_portal_html_shows_controlled_cli_without_prompt() -> None:
+    row = {
+        "task_id": "codex-1",
+        "provider": "codex-subscription",
+        "repo": "/work/repo",
+        "branch": "task/demo",
+        "pid": 123,
+        "state": "running",
+        "elapsed_s": 4.2,
+        "last_activity": "editing",
+        "prompt": "must not render",
+    }
+    rendered = portal.render_portal_html([], automation=[row])
+    assert "Live work" in rendered
+    assert "codex-subscription" in rendered
+    assert "task/demo" in rendered
+    assert "/automation/codex-1/cancel" in rendered
+    assert "must not render" not in rendered
 
 
 def test_invalid_metadata_skipped(tmp_path: Path) -> None:

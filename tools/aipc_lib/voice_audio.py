@@ -23,9 +23,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-DUCK_STATES = frozenset({"wake", "recording", "thinking"})
+DUCK_STATES = frozenset({"wake", "recording", "thinking", "working"})
 UNDUCK_STATES = frozenset(
-    {"speaking", "listening", "done", "muted", "miss", "no_speech", "error", "detecting"}
+    {"speaking", "listening", "done", "muted", "miss", "no_speech", "error", "detecting", "followup"}
 )
 
 DENOISE_SINK = "aipc_denoise_out"
@@ -118,17 +118,23 @@ def get_default_sink_volume_pct() -> int | None:
 
 
 def duck_factor() -> float:
+    """How loud other apps stay while ducking (1.0 = no change).
+
+    Soft default: keep media listenable (~55%) while still leaving headroom
+    for the mic; recognition uses adaptive bleed thr, not hard silence.
+    """
     try:
-        return float(os.environ.get("AIPC_VOICE_DUCK_FACTOR", "0.30"))
+        return float(os.environ.get("AIPC_VOICE_DUCK_FACTOR", "0.55"))
     except ValueError:
-        return 0.30
+        return 0.55
 
 
 def duck_floor_pct() -> int:
+    """Never duck other streams below this % (listenable floor)."""
     try:
-        return int(os.environ.get("AIPC_VOICE_DUCK_FLOOR", "15"))
+        return int(os.environ.get("AIPC_VOICE_DUCK_FLOOR", "40"))
     except ValueError:
-        return 15
+        return 40
 
 
 def duck_enabled() -> bool:
@@ -136,11 +142,11 @@ def duck_enabled() -> bool:
 
 
 def duck_fade_ms() -> int:
-    """Mac-style fade duration for duck/unduck (0 = instant). Default 350ms."""
+    """Mac-style fade duration for duck/unduck (0 = instant). Default 200ms."""
     try:
-        return max(0, int(os.environ.get("AIPC_VOICE_DUCK_MS", "350")))
+        return max(0, int(os.environ.get("AIPC_VOICE_DUCK_MS", "200")))
     except ValueError:
-        return 350
+        return 200
 
 
 def denoise_enabled() -> bool:
@@ -148,11 +154,12 @@ def denoise_enabled() -> bool:
 
 
 def denoise_vad_threshold() -> str:
-    return os.environ.get("AIPC_VOICE_DENOISE_VAD", "45")
+    # Higher = more aggressive ambient suppression (RNNoise VAD %).
+    return os.environ.get("AIPC_VOICE_DENOISE_VAD", "80")
 
 
 def list_sink_inputs() -> list[dict]:
-    """Parse `pactl list sink-inputs` into [{index, volume_pct, name}, ...]."""
+    """Parse `pactl list sink-inputs` into [{index, volume_pct, name, state}, ...]."""
     proc = _run(["pactl", "list", "sink-inputs"])
     text = proc.stdout or ""
     items: list[dict] = []
@@ -166,7 +173,16 @@ def list_sink_inputs() -> list[dict]:
             except ValueError:
                 cur = None
                 continue
-            cur = {"index": idx, "volume_pct": 100, "name": ""}
+            cur = {
+                "index": idx,
+                "volume_pct": 100,
+                "name": "",
+                "sink": "",
+                "target": "",
+                "state": "",
+                "corked": False,
+                "props": "",
+            }
             continue
         if cur is None:
             continue
@@ -175,10 +191,36 @@ def list_sink_inputs() -> list[dict]:
             m = re.search(r"/\s*(\d+)%", s)
             if m:
                 cur["volume_pct"] = int(m.group(1))
-        elif "application.name" in s or "media.name" in s or "node.name" in s:
-            # application.name = "Zen"
-            if "=" in s:
-                cur["name"] = s.split("=", 1)[1].strip().strip('"')
+        elif s.startswith("State:"):
+            cur["state"] = s.split(":", 1)[1].strip().upper()
+        elif s.startswith("Corked:"):
+            cur["corked"] = "yes" in s.lower()
+        elif s.startswith("Sink:"):
+            # numeric id or name depending on pactl version
+            cur["sink"] = s.split(":", 1)[1].strip()
+        elif "=" in s and any(
+            k in s
+            for k in (
+                "application.name",
+                "media.name",
+                "node.name",
+                "target.object",
+                "device.description",
+                "node.group",
+                "node.link-group",
+            )
+        ):
+            key = s.split("=", 1)[0].strip().lower()
+            val = s.split("=", 1)[1].strip().strip('"')
+            cur["props"] = f"{cur.get('props') or ''} {key}={val}"
+            if "target.object" in key:
+                cur["target"] = val
+            if "application.name" in key:
+                cur["name"] = val
+            elif not cur["name"] and (
+                "media.name" in key or "node.name" in key or "device.description" in key
+            ):
+                cur["name"] = val
     if cur:
         items.append(cur)
     return items
@@ -186,7 +228,155 @@ def list_sink_inputs() -> list[dict]:
 
 def _is_tts_stream(name: str) -> bool:
     n = (name or "").lower()
-    return any(k in n for k in ("paplay", "pw-play", "aipc-tts", "aipc", "tts", "ffplay", "mpv"))
+    return any(k in n for k in ("paplay", "pw-play", "aipc-tts", "aipc-voice", "tts", "ffplay"))
+
+
+def _is_aipc_internal_stream(inp: dict) -> bool:
+    """Denoise null-sink / RNNoise loopback must not count as media playback."""
+    blob = " ".join(
+        str(inp.get(k) or "")
+        for k in ("name", "sink", "target", "props")
+    ).lower()
+    return any(
+        k in blob
+        for k in (
+            "aipc_denoise",
+            "aipc-denoise",
+            "denoise_in",
+            "denoise_out",
+            "noise_suppressor",
+            "filter-chain-",  # PipeWire ladspa filter chain for denoise
+            "ladspa-sink-",
+            "aipc_denoise_in",
+            "aipc_denoise_out",
+        )
+    )
+
+
+def playback_active(*, include_tts: bool = False) -> bool:
+    """True if speakers are likely producing sound (any non-corked sink-input).
+
+    Used to raise mic energy gates so speaker bleed is not treated as speech.
+    Ignores aipc denoise filter graph (always present; was false-positive playback).
+    """
+    for inp in list_sink_inputs():
+        name = str(inp.get("name") or "")
+        if _is_aipc_internal_stream(inp):
+            continue
+        if not include_tts and _is_tts_stream(name):
+            continue
+        if inp.get("corked"):
+            continue
+        state = str(inp.get("state") or "")
+        # RUNNING or empty (some PipeWire builds omit State)
+        if state in ("", "RUNNING", "IDLE"):
+            # IDLE still often means a held stream; count if volume > 0
+            if int(inp.get("volume_pct") or 0) <= 0:
+                continue
+            return True
+    return False
+
+
+def tts_playback_active() -> bool:
+    """True if our TTS / paplay stream is currently on a sink."""
+    for inp in list_sink_inputs():
+        if _is_tts_stream(str(inp.get("name") or "")) and not inp.get("corked"):
+            return True
+    return False
+
+
+def effective_energy_thr(
+    base: float,
+    *,
+    playback: bool,
+    ratio: float | None = None,
+    extra: float | None = None,
+    floor: float = 12000.0,
+    bleed_floor: float = 0.0,
+) -> float:
+    """Raise mic energy gate while speakers play so bleed is not treated as speech.
+
+    Prefer adaptive `bleed_floor` (EMA of mic while music plays) so we do not
+    need to mute media for recognition — thr sits just above speaker bleed.
+    Pure function — unit-tested without pactl.
+    """
+    if not playback:
+        return float(base)
+    if ratio is None:
+        try:
+            ratio = float(os.environ.get("AIPC_WAKE_PLAYBACK_ENERGY_RATIO", "1.55"))
+        except ValueError:
+            ratio = 1.55
+    if extra is None:
+        try:
+            extra = float(os.environ.get("AIPC_WAKE_PLAYBACK_ENERGY_EXTRA", "3500"))
+        except ValueError:
+            extra = 3500.0
+    # Adaptive: thr ≈ bleed * 1.45 + margin (user voice over music)
+    adaptive = 0.0
+    if bleed_floor > 0:
+        try:
+            br = float(os.environ.get("AIPC_WAKE_BLEED_RATIO", "1.45"))
+        except ValueError:
+            br = 1.45
+        try:
+            bm = float(os.environ.get("AIPC_WAKE_BLEED_MARGIN", "2800"))
+        except ValueError:
+            bm = 2800.0
+        adaptive = float(bleed_floor) * br + bm
+    fixed = max(float(base) * float(ratio), float(base) + float(extra), float(floor))
+    if adaptive > 0:
+        # Cap so continuous loud media does not push thr out of human range
+        try:
+            # Cap must stay in human voice range (~12–22k RMS on this hardware).
+            # 28k made wake/PTT deaf while media played (user speech ~16k lost).
+            cap = float(os.environ.get("AIPC_WAKE_PLAYBACK_THR_CAP", "16000"))
+        except ValueError:
+            cap = 16000.0
+        return min(max(fixed * 0.55, adaptive, float(base) * 1.2), cap)
+    return fixed
+
+
+def update_bleed_floor(ema: float, rms: float, *, alpha_down: float = 0.12, alpha_up: float = 0.04) -> float:
+    """Track non-speech mic level (speaker bleed + room). Slow up, faster down."""
+    r = float(rms)
+    if ema <= 0:
+        return r
+    if r <= ema:
+        return (1.0 - alpha_down) * ema + alpha_down * r
+    return (1.0 - alpha_up) * ema + alpha_up * r
+
+
+def barge_energy_thr(
+    base: float,
+    *,
+    bleed_peak: float = 0.0,
+    ratio: float | None = None,
+    min_rms: float | None = None,
+    over_bleed: float | None = None,
+) -> float:
+    """Threshold for barge-in: must beat ambient thr and recent TTS→mic bleed."""
+    if ratio is None:
+        try:
+            ratio = float(os.environ.get("AIPC_WAKE_BARGE_ENERGY_RATIO", "1.85"))
+        except ValueError:
+            ratio = 1.85
+    if min_rms is None:
+        try:
+            min_rms = float(os.environ.get("AIPC_WAKE_BARGE_MIN_RMS", "20000"))
+        except ValueError:
+            min_rms = 20000.0
+    if over_bleed is None:
+        try:
+            over_bleed = float(os.environ.get("AIPC_WAKE_BARGE_OVER_BLEED", "1.35"))
+        except ValueError:
+            over_bleed = 1.35
+    return max(
+        float(base) * float(ratio),
+        float(min_rms),
+        float(base) + 6000.0,
+        float(bleed_peak) * float(over_bleed),
+    )
 
 
 def _set_input_volume(idx: int, pct: int) -> bool:
@@ -269,14 +459,19 @@ def duck_start() -> None:
             if target >= orig:
                 continue
             targets[idx] = target
+        already = _duck_active
         _saved_inputs.update(saved)
         _duck_active = True
         if not targets:
             return
-        n = _fade_inputs(targets, duck_fade_ms())
+        # Re-entry (wake→recording→thinking): don't re-spend a full fade each state.
+        ms = 0 if already else duck_fade_ms()
+        n = _fade_inputs(targets, ms)
         if n:
             print(
-                f"aipc-voice-audio: ducked {n} stream(s) over {duck_fade_ms()}ms (no master OSD)",
+                f"aipc-voice-audio: ducked {n} stream(s)"
+                + (f" over {ms}ms" if ms else " (already ducked)")
+                + " (no master OSD)",
                 flush=True,
             )
 
@@ -354,17 +549,42 @@ def ensure_speaker_output(sink: str | None = None) -> str:
 
 
 def playback_sinks() -> list[str]:
-    """TTS → system primary output only."""
+    """TTS output sinks — prefer hearing the assistant.
+
+    Default sink alone is wrong when BT headphones are default but not worn:
+    TTS goes only to AirPods and laptop speakers stay silent. Always include a
+    hardware analog/HDMI speaker sink when present, plus the default (if different).
+    Override with AIPC_TTS_SINK=exact_name for a single sink.
+    """
     override = (os.environ.get("AIPC_TTS_SINK") or "").strip()
     if override:
         return [override]
+    multi = (os.environ.get("AIPC_TTS_MULTI_SINK", "1").strip() != "0")
+    sinks = list_sinks()
+    names = [n for n, _st in sinks if n and "aipc_denoise" not in n]
     default = get_default_sink()
-    if default and "aipc_denoise" not in default:
-        return [default]
-    for name, _state in list_sinks():
-        if "aipc_denoise" not in name:
-            return [name]
-    return [default] if default else []
+    out: list[str] = []
+
+    def _add(name: str | None) -> None:
+        if name and name not in out and "aipc_denoise" not in name:
+            out.append(name)
+
+    # Prefer built-in analog speaker first when multi-sink (user often hears this).
+    for n in names:
+        if "analog-stereo" in n or "analog_output" in n.lower():
+            _add(n)
+            break
+    if multi:
+        for n in names:
+            if "hdmi" in n.lower() or "pci-" in n:
+                _add(n)
+        _add(default)
+        # Cap: speaker + default is enough; avoid blasting every BT device.
+        return out[:3] if out else ([default] if default else [])
+    _add(default)
+    if out:
+        return out
+    return names[:1] if names else []
 
 
 @contextmanager
@@ -372,10 +592,11 @@ def full_volume_for_playback():
     """Prepare for TTS: unduck other streams, unmute speakers. No master vol change."""
     # Restore other apps so mix is sane, then TTS plays at system volume
     duck_stop()
-    sink = ensure_speaker_output(session_sink() or get_default_sink())
+    speaker = ensure_speaker_output(session_sink() or get_default_sink())
     sinks = playback_sinks()
-    if sink and sink not in sinks:
-        sinks = [sink]
+    # Ensure the unmuted hardware speaker is in the play list (multi-sink safe).
+    if speaker and speaker not in sinks:
+        sinks = [speaker] + list(sinks)
     print(f"aipc-voice-audio: TTS sinks={sinks} (master volume untouched)", flush=True)
     try:
         yield sinks
@@ -384,17 +605,117 @@ def full_volume_for_playback():
         pass
 
 
+def _denoise_modules_present() -> bool:
+    text = _run(["pactl", "list", "short", "modules"]).stdout or ""
+    return DENOISE_SINK in text or "aipc_denoise" in text or "librnnoise" in text
+
+
+def _denoise_control_matches() -> bool:
+    """True if loaded RNNoise control equals current env threshold."""
+    want = denoise_vad_threshold()
+    text = _run(["pactl", "list", "modules"]).stdout or ""
+    # Look for our ladspa line: control=NN
+    for block in text.split("Module #"):
+        if "librnnoise" not in block and "aipc_denoise_in" not in block:
+            continue
+        m = re.search(r"control=([0-9.]+)", block)
+        if m and m.group(1).split(".")[0] == str(want).split(".")[0]:
+            return True
+        if "librnnoise" in block or "aipc_denoise_in" in block:
+            return False
+    return False
+
+
+def unload_denoise_chain() -> None:
+    """Tear down aipc denoise null/ladspa/loopback modules (idempotent)."""
+    global _denoise_ready
+    text = _run(["pactl", "list", "modules"]).stdout or ""
+    # Unload in reverse dependency order: loopback → ladspa → null
+    ids: list[str] = []
+    cur = None
+    for line in text.splitlines():
+        if line.startswith("Module #"):
+            cur = line.split("#", 1)[1].strip()
+            continue
+        if cur and (
+            "aipc_denoise" in line
+            or "librnnoise" in line
+            or ("loopback" in line and "aipc_denoise" in line)
+        ):
+            ids.append(cur)
+            cur = None
+    # Also match Argument lines with aipc_denoise in full module dump
+    cur = None
+    for line in text.splitlines():
+        if line.startswith("Module #"):
+            cur = line.split("#", 1)[1].strip()
+        if cur and "aipc_denoise" in line:
+            if cur not in ids:
+                ids.append(cur)
+    for mid in reversed(ids):
+        _run(["pactl", "unload-module", mid])
+    # Fallback: short list by name fragments
+    for line in (_run(["pactl", "list", "short", "modules"]).stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        mid, name = parts[0], parts[1]
+        args = "\t".join(parts[2:]) if len(parts) > 2 else ""
+        if "aipc_denoise" in args or "librnnoise" in args:
+            _run(["pactl", "unload-module", mid])
+        elif name == "module-loopback" and "aipc_denoise" in args:
+            _run(["pactl", "unload-module", mid])
+    _denoise_ready = False
+
+
+def ensure_mic_capture_level() -> None:
+    """Soft-cap analog input gain so 100% hardware capture does not clip RMS.
+
+    At 100% this machine's built-in mic hits absmax=32768 on ambient alone and
+    blinds wake VAD (energy thr races to 12–28k). Default soft gain 65%.
+    """
+    try:
+        pct = int(os.environ.get("AIPC_WAKE_MIC_VOLUME_PCT", "65"))
+    except ValueError:
+        pct = 65
+    if pct <= 0:
+        return
+    pct = max(20, min(100, pct))
+    proc = _run(["pactl", "get-default-source"])
+    mic = (proc.stdout or "").strip()
+    if not mic or "aipc_denoise" in mic or "monitor" in mic:
+        ls = _run(["pactl", "list", "short", "sources"])
+        for line in (ls.stdout or "").splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2 and "input" in parts[1] and "monitor" not in parts[1]:
+                if "aipc_denoise" not in parts[1]:
+                    mic = parts[1]
+                    break
+    if not mic:
+        return
+    _run(["pactl", "set-source-volume", mic, f"{pct}%"])
+
+
 def ensure_denoise_source() -> str | None:
     global _denoise_ready
+    # Always soft-cap mic gain even if RNNoise plugin missing
+    try:
+        ensure_mic_capture_level()
+    except Exception:
+        pass
     if not denoise_enabled():
         return None
     if not Path("/usr/lib64/ladspa/librnnoise_ladspa.so").is_file() and not Path(
         "/usr/lib/ladspa/librnnoise_ladspa.so"
     ).is_file():
         return None
-    if _denoise_ready or DENOISE_SINK in (_run(["pactl", "list", "short", "modules"]).stdout or ""):
-        _denoise_ready = True
-        return DENOISE_SOURCE
+
+    reload = os.environ.get("AIPC_VOICE_DENOISE_RELOAD", "0") == "1"
+    if _denoise_modules_present():
+        if not reload and _denoise_control_matches():
+            _denoise_ready = True
+            return DENOISE_SOURCE
+        unload_denoise_chain()
 
     proc = _run(["pactl", "get-default-source"])
     mic = (proc.stdout or "").strip()
@@ -410,6 +731,7 @@ def ensure_denoise_source() -> str | None:
 
     # device.class=filter keeps these off Plasma's preferred output list
     # (null-sink appearance was stacking volume OSD handlers in kded).
+    thr = denoise_vad_threshold()
     _run(
         [
             "pactl",
@@ -428,7 +750,7 @@ def ensure_denoise_source() -> str | None:
             f"sink_master={DENOISE_SINK}",
             "plugin=librnnoise_ladspa",
             "label=noise_suppressor_mono",
-            f"control={denoise_vad_threshold()}",
+            f"control={thr}",
             "sink_properties=device.description=AIPC_Denoise_In device.class=filter",
         ]
     )
@@ -446,7 +768,7 @@ def ensure_denoise_source() -> str | None:
         ]
     )
     _denoise_ready = True
-    print(f"aipc-voice-audio: denoise {DENOISE_SOURCE}", flush=True)
+    print(f"aipc-voice-audio: denoise {DENOISE_SOURCE} vad={thr}", flush=True)
     return DENOISE_SOURCE
 
 

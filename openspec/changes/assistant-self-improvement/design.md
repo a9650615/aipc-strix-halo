@@ -96,7 +96,7 @@ modular skill tree in **local folders**.
 
 | Item | Policy |
 |------|--------|
-| When | Task shape needs live web (lookup/browse/URL/long research); `AIPC_HERMES_BROWSER=auto\|1\|0` |
+| When | Hermes already model-routed; equip tools via `AIPC_HERMES_BROWSER=auto\|1\|0` (no topic keywords). Model chooses whether to call browser tools. |
 | How | Hermes `-t browser` + `browser_sandbox.hermes_env` (agent-browser / Chromium) |
 | Profile | `/var/lib/aipc-agent/browser-sandbox` only — isolated cookies/storage |
 | Not | User desktop browser profile; not git; not always-on |
@@ -188,6 +188,25 @@ content root. Checkout = process source for image build only.
 - `infer` / consolidate use **long wall** (60–120s) and **always async**.
 - Classifier remains **model-first for daily**; self-improve may only
   inject **few-shot examples**, not resurrect keyword-only daily gates.
+
+### Learning mentor model
+
+Skill extract (PATH / procedure) may call the strong local reasoner
+**`ornith-35b`** via LiteLLM (`AIPC_SKILL_LEARN_MODEL`, default). This is
+**async only** (learn queue / self-improve timer) — never blocks voice TTS.
+If the mentor is cold or unreachable, fall back to
+`AIPC_SKILL_LEARN_FALLBACK_MODEL` (default `assistant-gemma`). No topic
+keyword gates; the mentor judges whether a turn is a reusable procedure.
+
+### Hermes trail → mentor (not learn-inside-voice-turn)
+
+Hermes **executes** tools in the user-facing turn. On success it returns a
+compact **trail** (URLs + tool-shaped log lines) extracted from process
+output. That trail is enqueued with the reply for skill extract so PATH
+skills cite real sites/tools. Episodes may store `learn_trail` for
+self-improve backfill. Learning is **not** a second Hermes chat in the
+voice path (would thrash turns / TTS); optional long-task Hermes reflect
+can be added later without changing this contract.
 
 ### Background learning (always on, non-blocking)
 

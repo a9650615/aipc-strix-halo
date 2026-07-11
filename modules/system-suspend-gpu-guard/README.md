@@ -25,10 +25,28 @@ manual) already exist and just work once this guard gets out of the way.
 Polls `gpu_busy_percent` under `/sys/class/drm/card*/device/` and
 `/sys/class/power_supply/AC0/online` every 5s.
 
-- **On AC + GPU busy:** holds a `systemd-inhibit --what=sleep --mode=block`
-  lock (refuses the suspend request outright, does not just delay it).
-- **Otherwise (AC + GPU idle, or on battery at all):** releases the lock;
-  normal suspend proceeds through whatever triggered it.
+- **On AC + GPU sustained busy:** holds a `systemd-inhibit --what=sleep
+  --mode=block` lock (refuses the suspend request outright, does not just
+  delay it).
+- **Otherwise (AC + GPU idle for a few polls, or on battery at all):**
+  releases the lock; normal suspend proceeds through whatever triggered it.
+
+### Threshold + hysteresis (2026-07-10)
+
+Ambient load on this AI PC (desktop compositor + always-on Lemonade/Kokoro)
+often sits at **10–30%** `gpu_busy_percent`. The original default
+`BUSY_THRESHOLD=15` therefore held the sleep block almost permanently on
+AC — “该释放不放”. Defaults are now:
+
+| Env | Default | Meaning |
+|---|---|---|
+| `BUSY_THRESHOLD` | **50** | % busy before counting toward a lock |
+| `BUSY_STREAK_NEED` | 2 | consecutive busy polls (~10s) to *acquire* |
+| `IDLE_STREAK_NEED` | 3 | consecutive idle polls (~15s) to *release* |
+| `POLL_INTERVAL` | 5 | seconds between polls |
+
+Override via `Environment=` on the unit (or drop-in). Kill switch:
+`/etc/aipc/suspend-gpu-guard.disabled`.
 
 ## Hardware assumption
 

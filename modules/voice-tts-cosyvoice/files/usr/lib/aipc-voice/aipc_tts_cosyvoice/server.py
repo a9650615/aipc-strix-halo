@@ -2,8 +2,18 @@
 
 Contract:
   GET  /healthz → {"status":"ok|degraded","backend":"cosyvoice3","clone":bool}
-  POST /tts     JSON {"text":"...","prompt_wav": optional path, "prompt_text": optional}
+  POST /tts     JSON {
+                    "text":"...",
+                    "prompt_wav": optional path,
+                    "prompt_text": optional transcript of prompt wav,
+                    "mode": optional "zero_shot"|"instruct2" (default env),
+                    "instruct": optional instruct2 system text
+                 }
               → audio/wav  or JSON error
+
+CosyVoice3 prompt_text format (zero_shot):
+  "You are a helpful assistant. <style>. <|endofprompt|> <audio transcript>"
+Not "transcript <|endofprompt|>" alone — that drifts to mainland Putonghua prior.
 
 When the CosyVoice checkout / model / deps are missing the process stays up:
 healthz reports degraded and /tts returns 503. No crash-loop on first boot
@@ -32,9 +42,37 @@ CLONE_WAV = os.environ.get(
     "AIPC_CLONE_WAV",
     "/var/lib/aipc-voice/persona/clone.wav",
 )
+# Transcript-only fallback (no system prefix). Prefer clone.txt next to wav.
 PROMPT_TEXT_DEFAULT = os.environ.get(
     "AIPC_CLONE_PROMPT_TEXT",
-    "希望你以后能够做的比我还好呦。 <|endofprompt|>",
+    "唉，你真好，好帥哦。",
+)
+# CosyVoice3 system side of prompt_text (before <|endofprompt|>).
+# Active voice template may override via /var/lib/aipc-voice/persona/active.json.
+# Default: young TW girl vibe (avoid mature「阿姨感」) + less retroflex.
+_DEFAULT_SYSTEM = (
+    "You are a helpful assistant. "
+    "请用台湾国语、年轻少女声线（大约二十岁）表达：清亮偏高、轻快可爱、"
+    "像同龄女生聊天，不要成熟御姐，绝对不要阿姨感或大妈感；"
+    "尽量不要捲舌音（少用或弱化 zh/ch/sh/r），不要大陆普通话腔调。"
+)
+SYSTEM_PROMPT = os.environ.get("AIPC_COSYVOICE_SYSTEM", _DEFAULT_SYSTEM)
+# zero_shot (default) | instruct2
+INFER_MODE = os.environ.get("AIPC_COSYVOICE_MODE", "zero_shot").strip().lower()
+# instruct2-only text (must end with <|endofprompt|> after normalize)
+INSTRUCT_DEFAULT = os.environ.get(
+    "AIPC_COSYVOICE_INSTRUCT",
+    (
+        "You are a helpful assistant. "
+        "请用台湾国语、年轻少女、清亮偏高、轻快可爱的语气说，"
+        "不要阿姨感，少捲舌音，不要大陆普通话腔调。<|endofprompt|>"
+    ),
+)
+ACTIVE_JSON = Path(
+    os.environ.get(
+        "AIPC_VOICE_ACTIVE_JSON",
+        "/var/lib/aipc-voice/persona/active.json",
+    )
 )
 COSYVOICE_ROOT = os.environ.get(
     "AIPC_COSYVOICE_ROOT",
@@ -46,10 +84,77 @@ CHECKOUT = os.environ.get(
 )
 MATCHA = os.path.join(CHECKOUT, "third_party", "Matcha-TTS")
 DEVICE = os.environ.get("AIPC_COSYVOICE_DEVICE", "cpu")
+# GPU inference is not thread-safe on ROCm (concurrent /tts OOMs / hangs).
+# Serialize synth; reject extras when the wait queue is full (503 busy).
+MAX_INFLIGHT = max(1, int(os.environ.get("AIPC_COSYVOICE_MAX_INFLIGHT", "2")))
+QUEUE_WAIT_S = float(os.environ.get("AIPC_COSYVOICE_QUEUE_WAIT_S", "180"))
+MAX_CHARS = max(1, int(os.environ.get("AIPC_COSYVOICE_MAX_CHARS", "800")))
+# CosyVoice speed>1 shortens mel → faster speech (also lower wall-clock).
+DEFAULT_SPEED = float(os.environ.get("AIPC_COSYVOICE_SPEED", "1.15"))
+PRELOAD = os.environ.get("AIPC_COSYVOICE_PRELOAD", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+
+
+def _patch_torchaudio_soundfile() -> None:
+    """ROCm torchaudio may require torchcodec; fall back to soundfile I/O."""
+    try:
+        import torch
+        import torchaudio
+        import soundfile as sf
+        import numpy as np
+
+        def _load(path, *args, **kwargs):
+            data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+            return torch.from_numpy(data.T.copy()), int(sr)
+
+        def _save(path, src, sample_rate, **kwargs):
+            if hasattr(src, "detach"):
+                arr = src.detach().cpu().numpy()
+            else:
+                arr = np.asarray(src)
+            if arr.ndim == 2 and arr.shape[0] <= 8 and arr.shape[0] < arr.shape[1]:
+                arr = arr.T
+            # BytesIO has no extension — force WAV subtype.
+            fmt = kwargs.get("format") or "WAV"
+            if hasattr(path, "write"):
+                sf.write(path, arr, int(sample_rate), format=str(fmt).upper())
+            else:
+                sf.write(str(path), arr, int(sample_rate), format=str(fmt).upper())
+
+        torchaudio.load = _load  # type: ignore[assignment]
+        torchaudio.save = _save  # type: ignore[assignment]
+    except Exception:
+        pass
+
+
 
 _model = None
 _model_lock = threading.Lock()
 _model_error: str | None = None
+# Serializes ROCm/CUDA synth. Separate from _model_lock (load only).
+_gpu_lock = threading.Lock()
+_queue_lock = threading.Lock()
+_inflight = 0  # waiting for GPU + holding GPU
+_busy_rejects = 0
+
+
+class BusyError(RuntimeError):
+    """Queue full or wait timed out — map to HTTP 503."""
+
+
+def _queue_snapshot() -> dict:
+    with _queue_lock:
+        return {
+            "inflight": _inflight,
+            "max_inflight": MAX_INFLIGHT,
+            "queue_wait_s": QUEUE_WAIT_S,
+            "busy_rejects": _busy_rejects,
+            "gpu_busy": _gpu_lock.locked(),
+        }
 
 
 def _clone_present() -> bool:
@@ -132,18 +237,38 @@ def _load_model():
                 f"({COSYVOICE_ROOT}/venv/bin/python3)."
             ) from exc
         try:
-            # load_jit/load_trt off: no GPU assumptions; device via env for later.
-            _model = AutoModel(
-                model_dir=MODEL_DIR,
-                load_jit=False,
-                load_trt=False,
-                fp16=False,
+            _patch_torchaudio_soundfile()
+            # CosyVoice3 accepts load_trt/fp16; CosyVoice2 may also take load_jit.
+            # Prefer fp16 on CUDA when available (faster on gfx1151 ROCm).
+            use_fp16 = (
+                os.environ.get("AIPC_COSYVOICE_FP16", "").strip() == "1"
+                or (
+                    os.environ.get("AIPC_COSYVOICE_FP16", "").strip() == ""
+                    and DEVICE != "cpu"
+                )
             )
-            _model_error = None
-            return _model
-        except TypeError:
-            # Older AutoModel signature without load_* kwargs.
-            _model = AutoModel(model_dir=MODEL_DIR)
+            try:
+                import torch  # type: ignore
+                if not torch.cuda.is_available():
+                    use_fp16 = False
+            except Exception:
+                use_fp16 = False
+            try:
+                _model = AutoModel(
+                    model_dir=MODEL_DIR,
+                    load_trt=False,
+                    fp16=use_fp16,
+                )
+            except TypeError:
+                try:
+                    _model = AutoModel(
+                        model_dir=MODEL_DIR,
+                        load_jit=False,
+                        load_trt=False,
+                        fp16=use_fp16,
+                    )
+                except TypeError:
+                    _model = AutoModel(model_dir=MODEL_DIR)
             _model_error = None
             return _model
         except Exception as exc:  # noqa: BLE001
@@ -151,45 +276,216 @@ def _load_model():
             raise RuntimeError(f"CosyVoice3 load failed: {exc}") from exc
 
 
-def synthesize_wav(
+def _load_active_template() -> dict:
+    """Optional overrides written by `aipc-voice-template apply`."""
+    try:
+        if ACTIVE_JSON.is_file():
+            return json.loads(ACTIVE_JSON.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _resolve_transcript(wav_path: str, prompt_text: str | None) -> str:
+    if prompt_text is not None and str(prompt_text).strip():
+        return str(prompt_text).strip()
+    sibling = Path(wav_path).with_suffix(".txt")
+    if sibling.is_file():
+        return sibling.read_text(encoding="utf-8").strip()
+    return (PROMPT_TEXT_DEFAULT or "").strip()
+
+
+def _strip_endofprompt(text: str) -> str:
+    return text.replace("<|endofprompt|>", "").strip()
+
+
+def format_zero_shot_prompt(
+    transcript: str,
+    system: str | None = None,
+) -> str:
+    """CosyVoice3: system <|endofprompt|> audio-transcript."""
+    body = _strip_endofprompt(transcript)
+    # If caller already passed a full CosyVoice3 prompt, keep it.
+    if "<|endofprompt|>" in (transcript or ""):
+        return transcript.strip()
+    sys_txt = _strip_endofprompt(system if system is not None else SYSTEM_PROMPT)
+    if not sys_txt:
+        sys_txt = "You are a helpful assistant."
+    if not body:
+        body = _strip_endofprompt(PROMPT_TEXT_DEFAULT) or "你好。"
+    return f"{sys_txt}<|endofprompt|>{body}"
+
+
+def format_instruct2_prompt(instruct: str | None = None) -> str:
+    raw = (instruct if instruct is not None else INSTRUCT_DEFAULT) or ""
+    raw = raw.strip()
+    if not raw:
+        raw = (
+            "You are a helpful assistant. "
+            "请用台湾国语口音表达，语调自然轻快，不要使用大陆普通话腔调。"
+        )
+    if "<|endofprompt|>" not in raw:
+        raw = f"{raw.rstrip()} <|endofprompt|>"
+    return raw
+
+
+def _resolve_speed(speed: float | None, active: dict) -> float:
+    if speed is not None:
+        try:
+            s = float(speed)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid speed: {speed!r}") from exc
+    else:
+        raw = active.get("speed")
+        if raw is not None and str(raw).strip() != "":
+            try:
+                s = float(raw)
+            except (TypeError, ValueError):
+                s = DEFAULT_SPEED
+        else:
+            s = DEFAULT_SPEED
+    if s < 0.5 or s > 2.0:
+        raise ValueError(f"speed out of range 0.5–2.0: {s}")
+    return s
+
+
+def _synthesize_unlocked(
     text: str,
     prompt_wav: str | None = None,
     prompt_text: str | None = None,
+    mode: str | None = None,
+    instruct: str | None = None,
+    system: str | None = None,
+    speed: float | None = None,
 ) -> bytes:
-    if not text or not str(text).strip():
-        raise ValueError("empty text")
+    """Run Cosy inference. Caller must hold _gpu_lock."""
     wav_path = prompt_wav or CLONE_WAV
     if not Path(wav_path).is_file():
         raise FileNotFoundError(f"prompt_wav not found: {wav_path}")
     model = _load_model()
-    ptext = prompt_text if prompt_text is not None else PROMPT_TEXT_DEFAULT
-    if "<|endofprompt|>" not in ptext:
-        ptext = f"{ptext.rstrip()} <|endofprompt|>"
+    active = _load_active_template()
+    use_mode = (
+        mode
+        or active.get("mode")
+        or INFER_MODE
+        or "zero_shot"
+    )
+    use_mode = str(use_mode).strip().lower()
+    if use_mode not in ("zero_shot", "instruct2"):
+        raise ValueError(f"unsupported mode: {use_mode}")
+    # Empty active system/instruct → fall back to env defaults (TW flat).
+    use_system = system if system is not None else active.get("system")
+    if use_system is not None and not str(use_system).strip():
+        use_system = None
+    if use_system is None:
+        use_system = SYSTEM_PROMPT
+    use_instruct = instruct if instruct is not None else active.get("instruct")
+    if use_instruct is not None and not str(use_instruct).strip():
+        use_instruct = None
+    use_speed = _resolve_speed(speed, active)
 
     import torch  # type: ignore
     import torchaudio  # type: ignore
 
     chunks: list = []
-    for item in model.inference_zero_shot(
-        str(text),
-        ptext,
-        wav_path,
-        stream=False,
-    ):
-        speech = item.get("tts_speech") if isinstance(item, dict) else item
-        if speech is None:
-            continue
-        chunks.append(speech)
+    if use_mode == "instruct2":
+        itext = format_instruct2_prompt(
+            str(use_instruct) if use_instruct else None
+        )
+        for item in model.inference_instruct2(
+            str(text),
+            itext,
+            wav_path,
+            stream=False,
+            speed=use_speed,
+        ):
+            speech = item.get("tts_speech") if isinstance(item, dict) else item
+            if speech is None:
+                continue
+            chunks.append(speech)
+    else:
+        transcript = _resolve_transcript(wav_path, prompt_text)
+        ptext = format_zero_shot_prompt(
+            transcript,
+            system=str(use_system) if use_system is not None else None,
+        )
+        for item in model.inference_zero_shot(
+            str(text),
+            ptext,
+            wav_path,
+            stream=False,
+            speed=use_speed,
+        ):
+            speech = item.get("tts_speech") if isinstance(item, dict) else item
+            if speech is None:
+                continue
+            chunks.append(speech)
     if not chunks:
         raise RuntimeError("CosyVoice returned no audio")
     audio = torch.cat(chunks, dim=-1) if len(chunks) > 1 else chunks[0]
     sample_rate = getattr(model, "sample_rate", 24000)
     buf = io.BytesIO()
-    # torchaudio expects (channels, samples)
     if audio.dim() == 1:
         audio = audio.unsqueeze(0)
     torchaudio.save(buf, audio.cpu(), sample_rate, format="wav")
     return buf.getvalue()
+
+
+def synthesize_wav(
+    text: str,
+    prompt_wav: str | None = None,
+    prompt_text: str | None = None,
+    mode: str | None = None,
+    instruct: str | None = None,
+    system: str | None = None,
+    speed: float | None = None,
+) -> bytes:
+    global _inflight, _busy_rejects
+    if not text or not str(text).strip():
+        raise ValueError("empty text")
+    t = str(text).strip()
+    if len(t) > MAX_CHARS:
+        raise ValueError(f"text too long ({len(t)} > {MAX_CHARS} chars)")
+
+    with _queue_lock:
+        if _inflight >= MAX_INFLIGHT:
+            _busy_rejects += 1
+            raise BusyError(
+                f"cosyvoice busy (queue full inflight={_inflight}/{MAX_INFLIGHT})"
+            )
+        _inflight += 1
+        depth = _inflight
+    print(
+        f"aipc-tts-cosyvoice: queue enter inflight={depth}/{MAX_INFLIGHT}",
+        flush=True,
+    )
+    try:
+        if not _gpu_lock.acquire(timeout=max(0.1, QUEUE_WAIT_S)):
+            with _queue_lock:
+                _busy_rejects += 1
+            raise BusyError(
+                f"cosyvoice busy (queue wait >{QUEUE_WAIT_S:.0f}s)"
+            )
+        try:
+            return _synthesize_unlocked(
+                t,
+                prompt_wav=prompt_wav,
+                prompt_text=prompt_text,
+                mode=mode,
+                instruct=instruct,
+                system=system,
+                speed=speed,
+            )
+        finally:
+            _gpu_lock.release()
+    finally:
+        with _queue_lock:
+            _inflight = max(0, _inflight - 1)
+            left = _inflight
+        print(
+            f"aipc-tts-cosyvoice: queue leave inflight={left}/{MAX_INFLIGHT}",
+            flush=True,
+        )
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -221,6 +517,7 @@ class Handler(BaseHTTPRequestHandler):
                 # once first /tts succeeds; report degraded until then only if
                 # a previous load failed.
                 status = "degraded" if _model_error else "ok"
+            q = _queue_snapshot()
             self._send_json(
                 200,
                 {
@@ -231,7 +528,11 @@ class Handler(BaseHTTPRequestHandler):
                     "model_present": _model_present(),
                     "checkout_present": _checkout_present(),
                     "device": DEVICE,
+                    "mode": (_load_active_template().get("mode") or INFER_MODE),
+                    "template": _load_active_template().get("template"),
+                    "speed": DEFAULT_SPEED,
                     "error": _model_error,
+                    "queue": q,
                 },
             )
             return
@@ -252,6 +553,10 @@ class Handler(BaseHTTPRequestHandler):
         text = payload.get("text") or payload.get("input") or ""
         prompt_wav = payload.get("prompt_wav") or None
         prompt_text = payload.get("prompt_text")
+        mode = payload.get("mode")
+        instruct = payload.get("instruct")
+        system = payload.get("system")
+        speed = payload.get("speed")
         if not backend_ready() and not _checkout_present():
             self._send_json(
                 503,
@@ -279,7 +584,17 @@ class Handler(BaseHTTPRequestHandler):
                 str(text),
                 prompt_wav=str(prompt_wav) if prompt_wav else None,
                 prompt_text=str(prompt_text) if prompt_text is not None else None,
+                mode=str(mode) if mode is not None else None,
+                instruct=str(instruct) if instruct is not None else None,
+                system=str(system) if system is not None else None,
+                speed=float(speed) if speed is not None and str(speed) != "" else None,
             )
+        except BusyError as exc:
+            self._send_json(
+                503,
+                {"detail": str(exc), "retryable": True, "queue": _queue_snapshot()},
+            )
+            return
         except FileNotFoundError as exc:
             self._send_json(400, {"detail": str(exc)})
             return
@@ -301,9 +616,17 @@ def main() -> None:
     print(
         f"aipc-tts-cosyvoice listening on http://{HOST}:{PORT} "
         f"(clone={_clone_present()} model={_model_present()} "
-        f"checkout={_checkout_present()})",
+        f"checkout={_checkout_present()} speed={DEFAULT_SPEED} "
+        f"preload={PRELOAD})",
         flush=True,
     )
+    if PRELOAD and _checkout_present() and _model_present():
+        try:
+            print("aipc-tts-cosyvoice: preloading model…", flush=True)
+            _load_model()
+            print("aipc-tts-cosyvoice: model ready", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"aipc-tts-cosyvoice: preload failed (lazy later): {exc}", flush=True)
     httpd.serve_forever()
 
 

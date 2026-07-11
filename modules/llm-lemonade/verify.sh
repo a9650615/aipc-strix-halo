@@ -47,8 +47,14 @@ podman exec lemonade test -x /root/.cache/lemonade/bin/llamacpp/vulkan/llama-ser
 # applies — on a fresh first boot the file may not exist until lemond's
 # first run, in which case this fails once and clears on the next restart.
 config_json=$(podman exec lemonade cat /root/.cache/lemonade/config.json 2>/dev/null || echo '{}')
-printf '%s' "$config_json" | grep -q '"max_loaded_models": *2' \
-  || fail "llm-lemonade: config.json max_loaded_models != 2 — restart lemonade.service to reapply, or check jq is installed"
+# Expect a generous slot budget (memory-rich box keeps multiple LLMs resident).
+printf '%s' "$config_json" | grep -qE '"max_loaded_models": *([3-9]|[1-9][0-9]+)' \
+  || fail "llm-lemonade: config.json max_loaded_models too low — restart lemonade.service to reapply"
+# ensure-resident-small must be installed (pin path for always-on FLM)
+[ -x /usr/lib/aipc/llm-lemonade/ensure-resident-small.sh ] \
+  || [ -x /etc/aipc/llm-lemonade/ensure-resident-small.sh ] \
+  || [ -x /var/lib/aipc-lemonade/ensure-resident-small.sh ] \
+  || fail "llm-lemonade: ensure-resident-small.sh missing"
 printf '%s' "$config_json" | grep -q '"enable_dgpu_gtt": *true' \
   || fail "llm-lemonade: config.json enable_dgpu_gtt != true — restart lemonade.service to reapply, or check jq is installed"
 

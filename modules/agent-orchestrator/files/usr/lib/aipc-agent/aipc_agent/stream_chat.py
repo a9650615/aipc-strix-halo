@@ -66,9 +66,10 @@ def _messages_for_voice(text: str, session_id: str) -> list[dict[str, str]]:
 
 
 def _max_tokens(session_id: str) -> int:
+    # Do not cap worker output for TTS length — spoken_summary is separate.
     voice = _is_voice_session(session_id)
     if voice:
-        return 96 if SUPERVISOR_MODEL == "resident-small" else 256
+        return 256 if SUPERVISOR_MODEL == "resident-small" else 512
     return 512 if SUPERVISOR_MODEL == "resident-small" else 2048
 
 

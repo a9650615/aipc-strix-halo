@@ -380,7 +380,12 @@ def chat(text, session_id):
         raise
     data = json.loads(body.decode() or "{}")
     if isinstance(data, dict):
-        return str(data.get("text") or ""), bool(data.get("end_session")), str(data.get("session_id") or session_id)
+        # Prefer full text for HUD; spoken_summary is for TTS only (single owner)
+        full = str(data.get("text") or "")
+        spoken = str(data.get("spoken_summary") or "").strip()
+        # stash for show() via attribute on str? return full; speak uses spoken if set
+        chat._last_spoken = spoken  # type: ignore[attr-defined]
+        return full, bool(data.get("end_session")), str(data.get("session_id") or session_id)
     return str(data), False, session_id
 
 
@@ -478,12 +483,14 @@ def _long_wait_watchdog(detail: str = "", delay_s: float | None = None):
 
     First ping after delay_s (default 8s), then every interval_s (default 45s).
     """
+    # Agent/Hermes already drives the glass HUD. This watchdog only helps when
+    # the agent is silent for a long time — never flash every few seconds.
     if delay_s is None:
-        delay_s = float(os.environ.get("AIPC_VOICE_LONG_WAIT_S", "8"))
+        delay_s = float(os.environ.get("AIPC_VOICE_LONG_WAIT_S", "20"))
     try:
-        interval_s = float(os.environ.get("AIPC_VOICE_LONG_WAIT_INTERVAL_S", "45"))
+        interval_s = float(os.environ.get("AIPC_VOICE_LONG_WAIT_INTERVAL_S", "90"))
     except ValueError:
-        interval_s = 45.0
+        interval_s = 90.0
     if delay_s <= 0 or os.environ.get("AIPC_VOICE_UX_NOTIFY", "auto") in (
         "0",
         "off",
@@ -506,13 +513,16 @@ def _long_wait_watchdog(detail: str = "", delay_s: float | None = None):
             n += 1
             elapsed = time.monotonic() - t0
             body = (detail or "仍在處理，請稍候…")[:80]
-            body = f"{body}（已 {elapsed:.0f}s）"
-            _reply_notify("AIPC · 還在處理", body, timeout_ms=4000)
+            body = f"{body} · {elapsed:.0f}s"
+            # Prefer overlay only; skip native bubble when HUD is up
+            if not _overlay_active():
+                _reply_notify("AIPC · 還在處理", body, timeout_ms=4000)
             print(
-                f"aipc-voice-once: long-wait notify #{n} after {elapsed:.0f}s",
+                f"aipc-voice-once: long-wait #{n} after {elapsed:.0f}s",
                 file=sys.stderr,
             )
-            _ux("working", body[:60], force=True)
+            # Soft update — do not force=True (fights agent working state)
+            _ux("working", body[:80])
             if interval_s <= 0 or done.wait(interval_s):
                 return
 
@@ -525,9 +535,58 @@ def _long_wait_watchdog(detail: str = "", delay_s: float | None = None):
     return _Watch()
 
 
+def _answer_for_overlay(reply: str) -> str:
+    """Keep full answer + media list for HUD (not speech-length cut)."""
+    s = (reply or "").strip()
+    if not s:
+        return "完成"
+    try:
+        lim = int(os.environ.get("AIPC_OVERLAY_BODY_CHARS", "2500"))
+    except ValueError:
+        lim = 2500
+    if len(s) <= lim:
+        return s
+    # Prefer keeping a trailing media block when truncating
+    media_i = s.find("（相關媒體）")
+    if media_i < 0:
+        media_i = s.find("(相關媒體)")
+    if media_i > 0 and media_i < lim:
+        head = s[:media_i].rstrip()
+        media = s[media_i:]
+        budget = max(200, lim - len(media) - 8)
+        if len(head) > budget:
+            head = head[: budget - 1] + "…"
+        return (head + "\n\n" + media)[: lim + 200]
+    return s[: lim - 1] + "…"
+
+
 def show(reply):
-    """Speak reply via TTS; status goes to overlay. Native notify only as fallback."""
-    _ux("speaking", (reply or "")[:80], force=True)
+    """Show full answer on HUD first, then best-effort TTS (never block on done).
+
+    Voice-once is the sole TTS owner for voice sessions — agent must not speak.
+    """
+    body = _answer_for_overlay(reply)
+    cue = "\n\n（不对？说「不对」可反馈）"
+    if "不对" in body or "不對" in body:
+        done_body = body
+    else:
+        done_body = body + cue
+        try:
+            lim = int(os.environ.get("AIPC_OVERLAY_BODY_CHARS", "2500"))
+        except ValueError:
+            lim = 2500
+        if len(done_body) > lim + 80:
+            done_body = body[: lim - 1] + "…" + cue
+    try:
+        hold = float(os.environ.get("AIPC_VOICE_DONE_HOLD_S", "75"))
+    except ValueError:
+        hold = 75.0
+    # CRITICAL: paint done BEFORE TTS. If speak hangs, user still sees the answer.
+    try:
+        _ux("done", done_body, force=True, ttl_s=hold)
+    except TypeError:
+        _ux("done", done_body, force=True)
+
     spoke = False
     if os.environ.get("AIPC_VOICE_TTS", "1") == "0":
         print("aipc-voice-once: TTS skipped (AIPC_VOICE_TTS=0)", file=sys.stderr)
@@ -539,21 +598,89 @@ def show(reply):
         )
     else:
         try:
-            spoke = bool(aipc_voice_tts.speak(compress_for_speech(reply)))
+            # CosyVoice CPU often needs 40–90s; 35s made long CJK replies silent.
+            tts_wall = float(os.environ.get("AIPC_VOICE_TTS_TIMEOUT_S", "90"))
+        except ValueError:
+            tts_wall = 90.0
+        # Prefer server spoken_summary; never use TTS length to drop full HUD body
+        spoken = ""
+        try:
+            spoken = str(getattr(chat, "_last_spoken", "") or "").strip()
+        except Exception:
+            spoken = ""
+        speech = spoken or compress_for_speech(reply)
+        try:
+            import concurrent.futures
+
+            # Stop any orphan aipc-tts before we own the speakers
+            try:
+                if hasattr(aipc_voice_tts, "stop_active_tts"):
+                    aipc_voice_tts.stop_active_tts()
+            except Exception:
+                pass
+
+            def _speak_once() -> bool:
+                return bool(aipc_voice_tts.speak(speech))
+
+            def _speak_kokoro_fallback() -> bool:
+                # Fast path when CosyVoice hangs / exceeds wall clock.
+                prev = os.environ.get("AIPC_PREFER_COSYVOICE")
+                os.environ["AIPC_PREFER_COSYVOICE"] = "0"
+                try:
+                    try:
+                        if hasattr(aipc_voice_tts, "stop_active_tts"):
+                            aipc_voice_tts.stop_active_tts()
+                    except Exception:
+                        pass
+                    return bool(aipc_voice_tts.speak(speech))
+                finally:
+                    if prev is None:
+                        os.environ.pop("AIPC_PREFER_COSYVOICE", None)
+                    else:
+                        os.environ["AIPC_PREFER_COSYVOICE"] = prev
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(_speak_once)
+                try:
+                    spoke = bool(fut.result(timeout=max(5.0, tts_wall)))
+                except concurrent.futures.TimeoutError:
+                    print(
+                        f"aipc-voice-once: TTS timeout after {tts_wall:.0f}s "
+                        "— falling back to Kokoro",
+                        file=sys.stderr,
+                    )
+                    try:
+                        if hasattr(aipc_voice_tts, "stop_active_tts"):
+                            aipc_voice_tts.stop_active_tts()
+                    except Exception:
+                        pass
+                    try:
+                        spoke = bool(_speak_kokoro_fallback())
+                    except Exception as exc2:  # noqa: BLE001
+                        print(
+                            f"aipc-voice-once: Kokoro fallback error: {exc2}",
+                            file=sys.stderr,
+                        )
+                        spoke = False
         except Exception as exc:  # noqa: BLE001 — never fail the round trip on TTS
             print(f"aipc-voice-once: TTS error: {exc}", file=sys.stderr)
     if spoke:
         print("aipc-voice-once: spoke reply via TTS")
     else:
         print("aipc-voice-once: TTS did not play (text-only this turn)", file=sys.stderr)
+    # Re-assert done after TTS so a mid-speak UX write cannot leave 回答中 forever
+    try:
+        _ux("done", done_body, force=True, ttl_s=hold)
+    except TypeError:
+        _ux("done", done_body, force=True)
     # Default: no desktop bubble (overlay is the HUD). Notify only when:
     # - AIPC_VOICE_REPLY_NOTIFY=1/force, or
     # - TTS failed AND overlay is not running (user would otherwise see nothing).
     mode = (os.environ.get("AIPC_VOICE_REPLY_NOTIFY") or "auto").strip().lower()
     if mode in ("1", "on", "true", "yes", "force", "always"):
-        _reply_notify("AIPC Assistant", reply or "")
+        _reply_notify("AIPC Assistant", reply or "", timeout_ms=15000)
     elif mode not in ("0", "off", "false", "no") and not spoke and not _overlay_active():
-        _reply_notify("AIPC Assistant", reply or "")
+        _reply_notify("AIPC Assistant", reply or "", timeout_ms=15000)
     elif not spoke and not _overlay_active():
         print(f"aipc-voice-once: reply (no TTS/overlay): {reply}")
 
@@ -689,24 +816,33 @@ def usable_transcript(text: str) -> bool:
     return True
 
 
-def compress_for_speech(text: str, max_chars: int = 80) -> str:
-    """Keep TTS short and speakable; full text still goes to notify."""
+def compress_for_speech(text: str, max_chars: int = 160) -> str:
+    """Keep TTS speakable; prefer sentence ends (was 80 → cut mid Hermes answer)."""
     if not text:
         return ""
+    try:
+        max_chars = int(os.environ.get("AIPC_VOICE_TTS_CHARS", str(max_chars)))
+    except ValueError:
+        pass
     s = re.sub(r"[`*_#>]+", "", text)
     s = re.sub(r"\s+", " ", s).strip()
     # Prefer first 1–2 sentences
     parts = re.split(r"(?<=[。！？.!?])\s*", s)
     parts = [p for p in parts if p.strip()]
     out = ""
-    for p in parts[:2]:
+    for p in parts[:3]:
         if len(out) + len(p) > max_chars and out:
             break
         out = (out + p).strip()
     if not out:
         out = s
     if len(out) > max_chars:
-        out = out[: max_chars - 1].rstrip("，,、;； ") + "。"
+        cut = out[: max_chars - 1]
+        for sep in ("。", "！", "？", ".", "!", "?", "，", ","):
+            i = cut.rfind(sep)
+            if i >= max(20, max_chars // 3):
+                return cut[: i + 1]
+        out = cut.rstrip("，,、;； ") + "。"
     return out
 
 
@@ -870,11 +1006,12 @@ def main(argv=None):
     # end_session=2 → wake closes 接话 + overlay; 0 → may open follow-up
     if end_session:
         print("aipc-voice-once: end_session → dismiss multi-turn", flush=True)
-        _ux("done", "会话结束", force=True)
+        # Keep farewell text; do not blank the card
+        _ux("done", _answer_for_overlay(reply or "会话结束"), force=True)
         return 2
-    # Wake opens followup after process exit; skip done flash that hides overlay mid multi-turn.
-    if os.environ.get("AIPC_VOICE_SKIP_DONE", "0") != "1":
-        _ux("done", force=True)
+    # show() already set done with full answer + feedback cue. Do NOT
+    # blank-overwrite with _ux("done") — that made the panel vanish in ~4s
+    # and blocked「不对」feedback.
     return 0
 
 

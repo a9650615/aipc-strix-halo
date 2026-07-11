@@ -328,7 +328,7 @@ def try_direct_tool(text: str) -> str | None:
     return None
 
 
-def _memory_messages(state: DailyAssistantState) -> list[SystemMessage]:
+def _memory_parts(state: DailyAssistantState) -> list[str]:
     # Isolated lane: daily tools never see coder/hermes memories
     remembered = memory.recall(
         state["text"], state["session_id"], agent=memory.AGENT_DAILY
@@ -344,16 +344,46 @@ def _memory_messages(state: DailyAssistantState) -> list[SystemMessage]:
             parts.append(f"Recent daily-agent turns:\n{hist}")
     except Exception:
         pass
+    return parts
+
+
+def _memory_messages(state: DailyAssistantState) -> list[SystemMessage]:
+    parts = _memory_parts(state)
     if not parts:
         return []
     return [SystemMessage(content="\n\n".join(parts))]
 
 
+def _flatten_for_chat_template(messages: list) -> list:
+    """coder-agentic / Qwen templates require a single leading system message.
+
+    Multiple role=system blocks → 400 "System message must be at the beginning".
+    Merge all system content into one head SystemMessage; keep other roles.
+    """
+    sys_parts: list[str] = []
+    rest: list = []
+    for m in messages or []:
+        role = getattr(m, "type", None) or getattr(m, "role", None)
+        # LangChain: SystemMessage.type == "system"
+        if role == "system" or m.__class__.__name__ == "SystemMessage":
+            chunk = text_of(getattr(m, "content", m)).strip()
+            if chunk:
+                sys_parts.append(chunk)
+        else:
+            rest.append(m)
+    out: list = []
+    if sys_parts:
+        out.append(SystemMessage(content="\n\n".join(sys_parts)))
+    out.extend(rest)
+    return out
+
+
 def _seed(state: DailyAssistantState) -> dict:
+    # One system only — required by coder-agentic chat template
+    sys_parts = [SYSTEM_PROMPT, *_memory_parts(state)]
     return {
         "messages": [
-            SystemMessage(content=SYSTEM_PROMPT),
-            *_memory_messages(state),
+            SystemMessage(content="\n\n".join(p for p in sys_parts if p)),
             HumanMessage(content=state["text"]),
         ]
     }
@@ -375,13 +405,14 @@ def _job_progress(detail: str, *, thinking: str = "") -> None:
 def _agent(state: DailyAssistantState) -> dict:
     _job_progress("日曆/工具助手思考中…", thinking="决定下一步工具")
     try:
-        reply = _chat_model().invoke(state["messages"])
+        msgs = _flatten_for_chat_template(list(state.get("messages") or []))
+        reply = _chat_model().invoke(msgs)
     except Exception as exc:  # noqa: BLE001
         print(f"aipc-agent: daily LLM fail: {exc}", flush=True)
         from langchain_core.messages import AIMessage
 
         msg = AIMessage(
-            content="本地工具模型暂时连不上，请稍后再试（检查 LiteLLM / ornith-35b）。"
+            content="本地工具模型暂时连不上，请稍后再试（检查 LiteLLM / 工具模型）。"
         )
         return {"messages": [msg]}
     # ornith-35b (a reasoning model) returns content as a block list

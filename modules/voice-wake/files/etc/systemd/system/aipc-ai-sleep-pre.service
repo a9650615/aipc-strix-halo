@@ -1,0 +1,13 @@
+[Unit]
+Description=AIPC AI voice stack — prepare for system sleep
+DefaultDependencies=no
+Before=sleep.target
+Conflicts=umount.target
+
+[Service]
+Type=oneshot
+ExecStart=/var/lib/aipc-voice/bin/aipc-ai-stack-sleep pre suspend
+TimeoutStartSec=15
+
+[Install]
+WantedBy=sleep.target

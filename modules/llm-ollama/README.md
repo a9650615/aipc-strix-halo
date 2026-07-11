@@ -20,61 +20,20 @@ gfx1151 iGPU via ROCm 7.
 Not called directly by applications. All AI consumers route through
 `llm-litellm`, which forwards to Ollama by model name. See `CLAUDE.md §7`.
 
-**Active again (as of 2026-07-07+)** for the giant `qwen35-122b-q3` alias
-(`qwen3.5:122b-aipc` optimized tag). Smaller agent models live on Lemonade
-Vulkan; 122B stays on Ollama Vulkan because Lemonade's multi-model slot
-router crashed with this weight + `max_loaded_models=2`.
+**Retired giant path (2026-07-11):** `qwen35-122b-q3` / `qwen3.5:122b-aipc`
+(~81GB) is no longer in `models.yaml` or LiteLLM. Weights were deleted
+from `~/aipc-models/blobs`. Agent/coding models live on Lemonade Vulkan;
+Ollama remains available as infrastructure if a future exclusive giant
+is re-added (one backend only — do not dual-host the same weights).
 
-### `qwen3.5:122b-aipc` (2026-07-09)
-
-Same Q4_K_M weights as library `qwen3.5:122b` (~81GB), plus:
-
-| Parameter | Value | Why |
-|---|---|---|
-| `num_ctx` | 65536 | Stock 262k inflates KV on 128GB UMA |
-| `temperature` | 0.6 | Coding band |
-| `num_predict` | 8192 | Cap runaway agent max_tokens |
-| `num_batch` | 512 | Larger micro-batch for prefill |
-| LiteLLM `keep_alive` | 15m | Was `0m` → full reload every request |
-
-Hardware smoke 2026-07-09 (Lemonade LLMs unloaded first): cold
-load+short chat ~48s wall; warm short chat ~1s wall; `api/ps` shows
-`context_length: 65536`.
-
-**Before loading 122B**, unload Lemonade Vulkan LLMs (~20–40GB each) or
-the machine only has ~30GB free and thrashing/load failure follows.
-One-shot preset switch (preferred):
+Role presets (no 122b):
 
 ```sh
-aipc models use 122b          # unload Lemonade Vulkan LLMs, warm 122B
-aipc models use agent         # unload 122B, warm hermes brain / agent
+aipc models use agent         # warm hermes brain / agent
 aipc models use free          # unload heavy models, keep NPU resident-small
-aipc models use 122b --no-warm   # unload only (faster return)
+aipc models use voice         # same unloads as free; Cosy/APU priority
 aipc models use --list
 ```
-
-### Temporarily disable 122B (keep closed loop)
-
-When UMA is tight or you only want the voice baseline, **stop Ollama**
-(the 122B host) without masking it (masking breaks LiteLLM if the unit
-still `Requires=ollama` on older images):
-
-```sh
-sudo systemctl stop ollama.service
-sudo systemctl disable ollama.service   # no auto-start on boot
-# marker (optional): /etc/aipc/models/122b.disabled
-```
-
-Re-enable later:
-
-```sh
-sudo systemctl enable --now ollama.service
-aipc models use 122b
-```
-
-Do **not** `systemctl mask ollama` unless you also drop LiteLLM’s hard
-`Requires=ollama` (fixed in this module’s sibling `llm-litellm` quadlet:
-`Wants`/`After` only).
 
 ## Runtime requirements
 

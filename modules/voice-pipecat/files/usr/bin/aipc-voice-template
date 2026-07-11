@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""List / apply / save CosyVoice voice-assistant templates."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# Prefer live lib, then image path.
+for _p in (
+    Path("/var/lib/aipc-voice/lib"),
+    Path("/usr/lib/aipc-voice"),
+):
+    if (_p / "aipc_voice_templates.py").is_file():
+        sys.path.insert(0, str(_p))
+        break
+
+from aipc_voice_templates import (  # noqa: E402
+    ACTIVE,
+    CLONE_WAV,
+    TEMPLATES,
+    apply_template,
+    current,
+    list_templates,
+    load_manifest,
+    save_template,
+    template_dir,
+)
+
+
+def cmd_list(_: argparse.Namespace) -> int:
+    rows = list_templates()
+    cur = current() or {}
+    active_id = cur.get("template")
+    if not rows:
+        print(f"(no templates under {TEMPLATES})")
+        return 0
+    for man in rows:
+        tid = man.get("id", "?")
+        mark = "*" if tid == active_id else " "
+        tags = ",".join(man.get("tags") or []) or "-"
+        wav = "wav" if man.get("_has_wav") else "NO-WAV"
+        print(
+            f"{mark} {tid:20s}  {man.get('name', tid):24s}  "
+            f"[{tags}]  {wav}  {man.get('description', '')}"
+        )
+    if active_id:
+        print(f"\nactive: {active_id}  ({ACTIVE})")
+    else:
+        print(f"\nactive: (none)  — apply with: aipc-voice-template apply <id>")
+    return 0
+
+
+def cmd_show(args: argparse.Namespace) -> int:
+    man = load_manifest(args.id)
+    d = template_dir(args.id)
+    print(json.dumps(man, ensure_ascii=False, indent=2))
+    print(f"path: {d}")
+    print(f"clone.wav: {(d / 'clone.wav').is_file()}  clone.txt: {(d / 'clone.txt').is_file()}")
+    return 0
+
+
+def cmd_current(_: argparse.Namespace) -> int:
+    cur = current()
+    if not cur:
+        print("no active template")
+        print(f"clone.wav present: {CLONE_WAV.is_file()} ({CLONE_WAV})")
+        return 1
+    print(json.dumps(cur, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_apply(args: argparse.Namespace) -> int:
+    active = apply_template(args.id)
+    print(f"applied: {active['template']} ({active.get('name')})")
+    print(f"  clone → {active['clone_wav']}")
+    print(f"  mode={active.get('mode')} system={active.get('system')!r}")
+    print("  CosyVoice re-reads clone.wav / active.json on next /tts (no restart needed)")
+    return 0
+
+
+def cmd_save(args: argparse.Namespace) -> int:
+    tags = [t.strip() for t in (args.tags or "").split(",") if t.strip()]
+    d = save_template(
+        args.id,
+        wav=Path(args.wav) if args.wav else None,
+        transcript=args.transcript,
+        name=args.name,
+        description=args.description or "",
+        tags=tags,
+        system=args.system,
+        mode=args.mode,
+        tts_prefer=args.tts_prefer,
+        instruct=args.instruct or "",
+        kokoro_voice_zh=args.kokoro_zh or "",
+        kokoro_voice_en=args.kokoro_en or "",
+        notes=args.notes or "",
+        from_current=args.from_current,
+    )
+    print(f"saved template {args.id} → {d}")
+    if args.apply:
+        apply_template(args.id)
+        print(f"applied {args.id}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="aipc-voice-template",
+        description="Voice assistant template packs (apply by situation)",
+    )
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("list", help="list templates (* = active)")
+    p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("show", help="show one template manifest")
+    p.add_argument("id")
+    p.set_defaults(func=cmd_show)
+
+    p = sub.add_parser("current", help="show active template")
+    p.set_defaults(func=cmd_current)
+
+    p = sub.add_parser("apply", help="apply template to live clone + active.json")
+    p.add_argument("id")
+    p.set_defaults(func=cmd_apply)
+
+    p = sub.add_parser("save", help="save a new template from wav or current clone")
+    p.add_argument("id")
+    p.add_argument("--from-current", action="store_true", help="use live clone.wav/txt")
+    p.add_argument("--wav", help="source wav path")
+    p.add_argument("--transcript", help="prompt transcript text")
+    p.add_argument("--name", help="display name")
+    p.add_argument("--description", default="")
+    p.add_argument("--tags", default="", help="comma-separated tags")
+    p.add_argument("--system", default=None, help="CosyVoice3 system prompt")
+    p.add_argument("--mode", default="zero_shot", choices=["zero_shot", "instruct2"])
+    p.add_argument("--tts-prefer", default="cosyvoice", choices=["cosyvoice", "kokoro"])
+    p.add_argument("--instruct", default="")
+    p.add_argument("--kokoro-zh", default="")
+    p.add_argument("--kokoro-en", default="")
+    p.add_argument("--notes", default="")
+    p.add_argument("--apply", action="store_true", help="apply immediately after save")
+    p.set_defaults(func=cmd_save)
+
+    args = ap.parse_args()
+    try:
+        return int(args.func(args))
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

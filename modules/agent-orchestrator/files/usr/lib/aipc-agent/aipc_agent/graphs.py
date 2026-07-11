@@ -66,10 +66,18 @@ SUPERVISOR_SYSTEM_PROMPT = (
     "request yourself, answer directly and helpfully in the user's language. "
     "Do not moralize, do not invent corporate content-policy refusals, and do "
     "not lecture. Prefer usefulness. "
-    "If the user needs coding, shell, live web browsing, multi-step tools, or "
-    "lookups that require a tool agent, they can say 用 Hermes / 写代码 / 查… "
-    "and Hermes (uncensored tool agent) runs — you cannot browse or run tools yourself. "
-    "Local memory (mem0) may inject remembered facts — use them when present. "
+    "CRITICAL — no invented catalog facts: when the user asks about a product "
+    "code (like ABC-123), title, cast, or watch link, you do NOT have a live "
+    "database. Never invent titles, actress names, or plot summaries. "
+    "If no web search hits appear in this context, say you cannot verify yet "
+    "and that a Hermes/tool lookup is needed — do not guess. "
+    "When web search hits are provided in context, use them: state the concrete "
+    "title, key details (cast etc.), and at least one item URL — not only "
+    "generic search tips or store homepages. "
+    "If the user needs coding, shell, multi-step tools, or deeper browsing, they "
+    "can say 用 Hermes / 写代码 — Hermes runs with tools. "
+    "Local memory (mem0) may inject remembered facts — use them when present, "
+    "but discard memories that look like unverified invents. "
     "Voice stack: SenseVoice STT, Kokoro TTS, mem0. "
     "Local voice intents (outside you): portal/panel, time/date, mute, volume, "
     "browser/terminal, status. "
@@ -81,7 +89,8 @@ SUPERVISOR_SYSTEM_PROMPT = (
 # Appended when session_id looks like voice (aipc-voice-once / wake pipeline).
 VOICE_SYSTEM_PROMPT_EXTRA = (
     "VOICE MODE: The user is speaking and will hear your reply via TTS. "
-    "Reply in at most TWO short spoken sentences (ideally one). "
+    "Reply in at most THREE short sentences. "
+    "For lookups you may include one concrete URL. "
     "No markdown, no bullet lists, no code fences, no English filler. "
     "Match the user's language (Chinese if they spoke Chinese). "
     "You may receive recent dialogue turns — use them for short-term context "
@@ -223,6 +232,36 @@ _HERMES_WEB_TASKS = (
     "查股价",
     "查股價",
     "查股票",
+    # Live web facts — do not leave on pure-chat (it only promises Hermes)
+    "台风",
+    "颱風",
+    "台风路径",
+    "颱風路徑",
+    "天气",
+    "天氣",
+    "预报",
+    "預報",
+    "最新",
+    "实时",
+    "即時",
+    "官网",
+    "官網",
+    "网址",
+    "網址",
+    "链接",
+    "鏈接",
+    "预览",
+    "預覽",
+    "打开网站",
+    "打開網站",
+    "帮我查",
+    "幫我查",
+    "帮我搜",
+    "幫我搜",
+    "网上查",
+    "網上查",
+    # Note: bare 查一下/搜一下 also match daily (用量/日历) — not listed here
+    # so oneshot/coding signal does not steal daily tools to Hermes.
 )
 _HERMES_CODING = (
     "写代码",
@@ -271,6 +310,7 @@ _HERMES_EN_RES = (
 class SupervisorState(TypedDict, total=False):
     text: str
     session_id: str
+    source: str  # voice|api|krunner|…
     # Filled by plan_dispatch: which worker + short|long flow
     target: str
     mode: str
@@ -282,6 +322,14 @@ class SupervisorState(TypedDict, total=False):
     force_text: str  # canned reply (cancel etc.)
     # Conversation lifecycle (voice multi-turn): True → hide overlay / no follow-up
     end_session: bool
+    # Hermes tool/URL footprint for async skill learn (not spoken)
+    learn_trail: str
+    spoken_summary: str  # short TTS line; full text stays in `text`
+    required: list  # capability list from router
+    freshness: str
+    paid_allowed: bool
+    delegation_cwd: str
+    grant_id: str
 
 
 # Bound LLM waits so a dead backend cannot mystery-hang /chat until client timeout.
@@ -362,6 +410,24 @@ def _is_voice_session(session_id: str) -> bool:
     return any(k in s for k in ("voice", "wake", "ptt", "aipc-voice"))
 
 
+def _client_owns_tts(session_id: str, source: str = "") -> bool:
+    """True when the HTTP client will speak the /chat reply itself.
+
+    voice-once / wake / PTT and krunner both call aipc_voice_tts after /chat.
+    Agent-side Hermes TTS on those sessions double-plays (overlap).
+    """
+    try:
+        from aipc_agent.router.tts_owner import speak_owner_for
+
+        owner = speak_owner_for(source, session_id)
+        return owner in ("voice_client", "krunner")
+    except Exception:
+        if _is_voice_session(session_id):
+            return True
+        s = (session_id or "").lower().strip()
+        return s in ("krunner", "spotlight", "desktop")
+
+
 def _memory_messages(state: SupervisorState) -> list[SystemMessage]:
     remembered = memory.recall(
         state["text"], state["session_id"], agent=memory.AGENT_CHAT
@@ -439,8 +505,20 @@ def _respond(state: SupervisorState) -> SupervisorState:
     user_text = state.get("text") or ""
 
     if state.get("force_text"):
+        ft = str(state["force_text"])
+        try:
+            from aipc_agent import activity
+
+            # Feedback ack: done (not stuck speaking), no nested feedback cue
+            activity.complete_notify(sid, "AIPC · 反馈", ft, feedback_hint=False)
+        except Exception:
+            pass
+        try:
+            _speak_best_effort(ft, session_id=sid)
+        except Exception:
+            pass
         return {
-            "text": str(state["force_text"]),
+            "text": ft,
             "session_id": sid,
             "end_session": False,
         }
@@ -456,12 +534,22 @@ def _respond(state: SupervisorState) -> SupervisorState:
         reply = "好的，有需要再叫我。"
         if _compact_utt(user_text) in ("再见", "再見", "bye", "拜拜", "晚安"):
             reply = "再见。"
-        ux_bridge.progress(reply, state="speaking", source="supervisor")
+        try:
+            from aipc_agent import activity
+
+            activity.complete_notify(sid, "AIPC", reply, feedback_hint=False)
+        except Exception:
+            ux_bridge.finish_answer(reply, source="supervisor", hold_s=20.0)
         return {"text": reply, "session_id": sid, "end_session": True}
 
     canned = _canned_greet(user_text)
     if canned:
-        ux_bridge.progress(canned[:80], state="speaking", source="supervisor")
+        try:
+            from aipc_agent import activity
+
+            activity.complete_notify(sid, "AIPC", canned, feedback_hint=False)
+        except Exception:
+            ux_bridge.finish_answer(canned, source="supervisor", hold_s=20.0)
         end = _is_session_end(user_text) or _compact_utt(user_text) in (
             "再见", "再見", "bye", "拜拜",
         )
@@ -501,13 +589,16 @@ def _respond(state: SupervisorState) -> SupervisorState:
         sys_parts.append(
             "Recent dialogue (short-term memory, most recent last):\n" + hist
         )
+    # No keyword-gated web_hint inject here. Lookups that need live pages
+    # are model-routed to Hermes + browser sandbox; respond stays pure chat.
     oai_messages: list[dict] = [
         {"role": "system", "content": "\n\n".join(sys_parts)},
         {"role": "user", "content": user_text},
     ]
     wall = LLM_VOICE_TIMEOUT if voice else LLM_REQUEST_TIMEOUT
-    max_tokens = 96 if (voice and SUPERVISOR_MODEL == "resident-small") else (
-        256 if voice else (512 if SUPERVISOR_MODEL == "resident-small" else 2048)
+    # Full result is not capped for TTS — voice client speaks spoken_summary only.
+    max_tokens = 256 if voice else (
+        512 if SUPERVISOR_MODEL == "resident-small" else 2048
     )
     box: dict = {"text": None, "err": None}
 
@@ -534,7 +625,7 @@ def _respond(state: SupervisorState) -> SupervisorState:
             )
             text = (
                 f"本地小模型这会儿还在加载或排队（等了约 {wall:.0f} 秒）。"
-                "请稍后再试，或先说「查用量」「用 Hermes 写代码」走工具路径。"
+                "请稍后再试，或直接说要查的内容／写代码任务（系统会自动走工具）。"
             )
         elif box["err"] is not None:
             print(f"aipc-agent: supervisor LLM fail: {box['err']}", flush=True)
@@ -542,15 +633,64 @@ def _respond(state: SupervisorState) -> SupervisorState:
             text = f"本地模型调用失败：{err_s}。请稍后再试，或检查 LiteLLM / Lemonade。"
         else:
             text = "本地模型没有返回内容，请再说一次。"
-        ux_bridge.progress(text[:80], state="error", source="supervisor")
+        try:
+            from aipc_agent import activity
+
+            activity.complete_notify(sid, "AIPC · 出错", text, feedback_hint=False)
+        except Exception:
+            ux_bridge.progress(text[:80], state="error", source="supervisor")
         return {"text": text, "session_id": sid, "end_session": False}
     text = str(box["text"])
+    # Guard: if chat still invents product-code facts (route miss), rewrite fail
+    try:
+        from aipc_agent.grounding import is_ungrounded_lookup
+
+        if is_ungrounded_lookup(user_text, text, trail=""):
+            text = (
+                "我这边没有可核实的网页结果，不能瞎编片名或演员。"
+                "请再说一次，系统会走工具查询。"
+            )
+            print("aipc-agent: respond blocked ungrounded product-code invent", flush=True)
+    except Exception:
+        pass
+    # Structural quality when router required live/search but still landed on chat
+    try:
+        req = list(state.get("required") or [])
+        fresh = str(state.get("freshness") or "none")
+        if not req:
+            from aipc_agent.router.analyze import analyze
+            from aipc_agent.router.envelope import build_envelope
+
+            a = analyze(build_envelope(user_text, session_id=sid, source=str(state.get("source") or "api")))
+            req = list(a.get("required") or [])
+            fresh = str(a.get("freshness") or fresh)
+        if fresh in ("live", "recent") or "grounding" in req or "web_search" in req:
+            from aipc_agent.router.quality import maybe_mark_incomplete, structural_gate
+            from aipc_agent.router.spoken import package_result
+
+            gate = structural_gate(reply=text, required=req, freshness=fresh, trail="")
+            text = maybe_mark_incomplete(text, gate)
+            packaged = package_result(text)
+            # attach spoken for /chat
+            state_spoken = packaged.get("spoken_summary")
+        else:
+            state_spoken = None
+    except Exception:
+        state_spoken = None
     # Short-term buffer (multi-turn voice / text)
     agent_context.append_turn(sid, memory.AGENT_CHAT, "user", user_text)
     agent_context.append_turn(sid, memory.AGENT_CHAT, "assistant", text)
     # Continuous internalization → mem0 facts (async, never blocks TTS)
-    memory.internalize(user_text, text, sid, agent=memory.AGENT_CHAT, kind="respond")
-    # Lookup-style successful answers may become local skills (model-judged)
+    # Skip invent-style product lookups so mem0 does not store fake titles.
+    try:
+        from aipc_agent.grounding import is_ungrounded_lookup
+
+        ungrounded = is_ungrounded_lookup(user_text, text, trail="")
+    except Exception:
+        ungrounded = False
+    if not ungrounded:
+        memory.internalize(user_text, text, sid, agent=memory.AGENT_CHAT, kind="respond")
+    # respond path never skill-learns product-code turns (see grounding.should_learn)
     try:
         from aipc_agent.skill_learn import maybe_learn_async
 
@@ -559,7 +699,27 @@ def _respond(state: SupervisorState) -> SupervisorState:
         )
     except Exception:
         pass
-    return {"text": text, "session_id": sid, "end_session": False}
+    # Always leave 回答中 — chat used to return text without finishing HUD
+    try:
+        from aipc_agent import activity
+
+        activity.complete_notify(sid, "AIPC", text, feedback_hint=False)
+    except Exception:
+        try:
+            ux_bridge.finish_answer(text, source="supervisor", hold_s=30.0)
+        except Exception:
+            pass
+    out: SupervisorState = {"text": text, "session_id": sid, "end_session": False}
+    if state_spoken:
+        out["spoken_summary"] = str(state_spoken)
+    else:
+        try:
+            from aipc_agent.router.spoken import spoken_summary
+
+            out["spoken_summary"] = spoken_summary(text)
+        except Exception:
+            pass
+    return out
 
 
 
@@ -594,7 +754,22 @@ def _daily_assistant_node(state: SupervisorState) -> SupervisorState:
         direct = None
     if direct:
         print("aipc-agent: daily direct-tool hit", flush=True)
-        ux_bridge.progress("工具结果已出", state="speaking", source="daily-direct")
+        try:
+            from aipc_agent import activity
+
+            activity.complete_notify(
+                sid, "AIPC · 工具", str(direct), feedback_hint=True
+            )
+        except Exception:
+            ux_bridge.finish_answer(str(direct), source="daily-direct", hold_s=45.0)
+        try:
+            from aipc_agent import feedback as fb
+
+            fb.remember_result(
+                sid, user=str(text_in), reply=str(direct), target="daily", ok=True
+            )
+        except Exception:
+            pass
         return {"text": direct, "session_id": sid}
 
     def _run() -> dict:
@@ -617,7 +792,27 @@ def _daily_assistant_node(state: SupervisorState) -> SupervisorState:
 
     ux_bridge.progress("日曆/搜尋/用量助手啟動…", source="daily-assistant")
     result = _run()
-    return {"text": result["text"], "session_id": sid}
+    text_out = str(result.get("text") or "").strip() or "工具助手没有返回内容。"
+    try:
+        from aipc_agent import activity
+
+        activity.complete_notify(
+            sid, "AIPC · 工具", text_out, feedback_hint=True
+        )
+    except Exception:
+        try:
+            ux_bridge.finish_answer(text_out, source="daily-assistant", hold_s=45.0)
+        except Exception:
+            pass
+    try:
+        from aipc_agent import feedback as fb
+
+        fb.remember_result(
+            sid, user=str(text_in), reply=text_out, target="daily", ok=True
+        )
+    except Exception:
+        pass
+    return {"text": text_out, "session_id": sid}
 
 
 def _hermes_node(state: SupervisorState) -> SupervisorState:
@@ -661,6 +856,7 @@ def _hermes_node(state: SupervisorState) -> SupervisorState:
         pass
     result = _run()
     text = str(result.get("text") or "").strip() or "Hermes 没有返回内容。"
+    trail = str(result.get("trail") or "").strip()
     ok = result.get("status") == "ok" and bool(text)
     if ok:
         try:
@@ -674,39 +870,127 @@ def _hermes_node(state: SupervisorState) -> SupervisorState:
         memory.internalize(
             text_in, text[:800], sid, agent=memory.AGENT_HERMES, kind="hermes"
         )
-        # Grow local skill tree (on-box folders) when a reusable procedure worked
+        # Grow local skill tree (on-box folders) when a reusable procedure worked.
+        # Pass Hermes tool/URL trail so mentor extracts PATH from footprints.
         try:
             from aipc_agent.skill_learn import maybe_learn_async
 
             maybe_learn_async(
-                text_in, text, session_id=sid, kind="hermes", agent="hermes"
+                text_in,
+                text,
+                session_id=sid,
+                kind="hermes",
+                agent="hermes",
+                trail=trail,
             )
         except Exception:
             pass
+    # Quality + multi-media promote MUST run before complete_notify (HUD)
+    packaged: dict = {"text": text, "spoken_summary": text, "full_text": text}
+    try:
+        from aipc_agent.router.quality import maybe_mark_incomplete, structural_gate
+        from aipc_agent.router.spoken import package_result
+        from aipc_agent.media_present import promote_media_from_trail
+
+        req = list(state.get("required") or [])
+        fresh = str(state.get("freshness") or "none")
+        if not req or fresh == "none":
+            try:
+                from aipc_agent.router.analyze import analyze
+                from aipc_agent.router.envelope import build_envelope
+
+                a = analyze(
+                    build_envelope(
+                        text_in,
+                        session_id=sid,
+                        source=str(state.get("source") or "api"),
+                    )
+                )
+                if not req:
+                    req = list(a.get("required") or [])
+                if fresh == "none":
+                    fresh = str(a.get("freshness") or "none")
+            except Exception:
+                pass
+        gate_trail = (trail or "") + "\nuser:" + (text_in or "")[:200]
+        gate = structural_gate(
+            reply=text,
+            required=req,
+            freshness=fresh,
+            trail=gate_trail,
+        )
+        gate["trail"] = gate_trail
+        if text:
+            text = maybe_mark_incomplete(text, gate)
+        if trail and text:
+            text = promote_media_from_trail(text, trail)
+            print(
+                f"aipc-agent hermes: media promote reply_chars={len(text)} "
+                f"trail_chars={len(trail)}",
+                flush=True,
+            )
+        packaged = package_result(text)
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent hermes: media/quality skip: {exc}", flush=True)
+        packaged = {"text": text, "spoken_summary": text, "full_text": text}
+
     try:
         from aipc_agent import agent_context
 
         agent_context.append_turn(sid, memory.AGENT_HERMES, "user", text_in)
         agent_context.append_turn(sid, memory.AGENT_HERMES, "assistant", text)
-        # also chat short-term so multi-turn voice can refer to tool results
         agent_context.append_turn(sid, memory.AGENT_CHAT, "user", text_in)
-        agent_context.append_turn(sid, memory.AGENT_CHAT, "assistant", text[:500])
+        agent_context.append_turn(sid, memory.AGENT_CHAT, "assistant", text[:800])
     except Exception:
         pass
     try:
         from aipc_agent import activity, session_registry
 
         session_registry.touch(
-            sid, status="active", activity=(text or "")[:80], clear_job=True
+            sid,
+            status="active",
+            activity=(packaged.get("spoken_summary") or text or "")[:120],
+            clear_job=True,
         )
+        # Full text (with media list) to glass HUD — not the pre-promote stub
         activity.complete_notify(
             sid,
             "AIPC · Hermes 完成" if result.get("status") == "ok" else "AIPC · Hermes 结束",
-            (text or "")[:160],
+            text or "",
+            feedback_hint=bool(ok and text),
+        )
+        s = session_registry.get(sid) or {}
+        if isinstance(s, dict):
+            s["last_result"] = packaged
+    except Exception:
+        pass
+    try:
+        from aipc_agent import feedback as fb
+
+        fb.remember_result(
+            sid, user=text_in, reply=text, target="hermes", trail=trail, ok=ok
         )
     except Exception:
         pass
-    return {"text": text, "session_id": sid}
+
+    if ok and text:
+        try:
+            # Speak summary only; full media stays on HUD
+            _speak_best_effort(
+                str(packaged.get("spoken_summary") or text),
+                session_id=sid,
+            )
+        except Exception:
+            pass
+    out: SupervisorState = {
+        "text": text,
+        "session_id": sid,
+        "target": "hermes",
+        "spoken_summary": str(packaged.get("spoken_summary") or text or ""),
+    }
+    if trail:
+        out["learn_trail"] = trail
+    return out
 
 
 def _coder_node(state: SupervisorState) -> SupervisorState:
@@ -742,9 +1026,14 @@ def _coder_node(state: SupervisorState) -> SupervisorState:
             extras.append(SystemMessage(content=f"Recent coding turns:\n{hist}"))
     except Exception:
         pass
+    # Single leading system — coder-agentic chat template rejects multi-system
+    sys_parts = [system]
+    for m in extras:
+        chunk = text_of(getattr(m, "content", "")).strip()
+        if chunk:
+            sys_parts.append(chunk)
     messages = [
-        SystemMessage(content=system),
-        *extras,
+        SystemMessage(content="\n\n".join(sys_parts)),
         HumanMessage(content=text_in),
     ]
     wall = LLM_VOICE_TIMEOUT if voice else LLM_REQUEST_TIMEOUT
@@ -775,7 +1064,12 @@ def _coder_node(state: SupervisorState) -> SupervisorState:
         elif box["err"] is not None:
             print(f"aipc-agent: coder LLM fail: {box['err']}", flush=True)
         text = f"编码模型 {agent} 暂时连不上，可改口说「用 Hermes」走工具代理。"
-        ux_bridge.progress(text[:80], state="error", source="coder")
+        try:
+            from aipc_agent import activity
+
+            activity.complete_notify(sid, "AIPC · 编码", text, feedback_hint=False)
+        except Exception:
+            ux_bridge.progress(text[:80], state="error", source="coder")
         return {"text": text, "session_id": sid}
     text = str(box["text"])
     memory.internalize(
@@ -788,32 +1082,67 @@ def _coder_node(state: SupervisorState) -> SupervisorState:
         agent_context.append_turn(sid, memory.AGENT_CODER, "assistant", text)
     except Exception:
         pass
+    try:
+        from aipc_agent import activity
+
+        activity.complete_notify(sid, "AIPC · 编码", text, feedback_hint=False)
+    except Exception:
+        try:
+            ux_bridge.finish_answer(text, source="coder", hold_s=45.0)
+        except Exception:
+            pass
     return {"text": text, "session_id": sid}
 
 
 def _clarify_node(state: SupervisorState) -> SupervisorState:
     """Ask a secondary question; do not start the heavy worker yet."""
+    sid = state.get("session_id") or "default"
     if state.get("force_text"):
-        return {"text": str(state["force_text"]), "session_id": state["session_id"]}
+        ft = str(state["force_text"])
+        try:
+            from aipc_agent import activity
+
+            activity.complete_notify(sid, "AIPC", ft, feedback_hint=False)
+        except Exception:
+            pass
+        return {"text": ft, "session_id": sid}
     q = (state.get("clarify_question") or "").strip() or session_pending.coding_agent_question()
-    ux_bridge.progress(q[:80], state="thinking", source="clarify")
-    return {"text": q, "session_id": state["session_id"]}
+    try:
+        from aipc_agent import activity
+
+        # Clarify is a finished turn (awaiting user reply), not stuck thinking
+        activity.complete_notify(sid, "AIPC · 需要确认", q, feedback_hint=False)
+    except Exception:
+        ux_bridge.progress(q[:80], state="thinking", source="clarify")
+    return {"text": q, "session_id": sid}
 
 
 def _job_status_node(state: SupervisorState) -> SupervisorState:
+    sid = state.get("session_id") or "default"
     ux_bridge.progress("查询任务进度…", state="thinking", source="job-status")
     text = task_jobs.format_status_speech(limit=5)
+    try:
+        from aipc_agent import activity
+
+        activity.complete_notify(sid, "AIPC · 任务", text, feedback_hint=False)
+    except Exception:
+        try:
+            ux_bridge.finish_answer(text, source="job-status", hold_s=20.0)
+        except Exception:
+            pass
     return {
         "text": text,
-        "session_id": state["session_id"],
+        "session_id": sid,
     }
 
 
 def _screen_see_node(state: SupervisorState) -> SupervisorState:
     """Screenshot + vlm-screen describe (read-only, no gate / no input)."""
+    sid = state.get("session_id") or "default"
+    text_in = (state.get("text") or "").strip()
     ux_bridge.progress("正在看桌面…", state="thinking", source="screen-see")
     try:
-        result = screen_see.describe_desktop(state.get("text") or "")
+        result = screen_see.describe_desktop(text_in)
         if result.get("status") == "ok":
             text = str(result.get("description") or "").strip()
             if not text:
@@ -821,14 +1150,11 @@ def _screen_see_node(state: SupervisorState) -> SupervisorState:
         else:
             detail = str(result.get("detail") or "unknown")
             text = f"看桌面失败：{detail}"
-            ux_bridge.progress(text[:80], state="error", source="screen-see")
     except Exception as exc:  # noqa: BLE001 — never crash the graph mid-turn
         text = f"看桌面失败：{exc}"
-        ux_bridge.progress(text[:80], state="error", source="screen-see")
-    # Short memory only
     try:
         memory.internalize(
-            text_in if "text_in" in dir() else state.get("text",""),
+            text_in,
             text[:800],
             sid,
             agent=memory.AGENT_SCREEN,
@@ -836,7 +1162,16 @@ def _screen_see_node(state: SupervisorState) -> SupervisorState:
         )
     except Exception:
         pass
-    return {"text": text, "session_id": state["session_id"]}
+    try:
+        from aipc_agent import activity
+
+        activity.complete_notify(sid, "AIPC · 桌面", text, feedback_hint=False)
+    except Exception:
+        try:
+            ux_bridge.finish_answer(text, source="screen-see", hold_s=30.0)
+        except Exception:
+            pass
+    return {"text": text, "session_id": sid}
 
 
 def wants_hermes(text: str) -> bool:
@@ -916,6 +1251,37 @@ def _keyword_target(text: str) -> str:
     # Stock / live price → Hermes (daily search often broken: searxng down).
     if HERMES_ROUTE and session_pending.looks_like_stock_query(text):
         return "hermes"
+    # Product-style codes (ABC-123) need tools — never pure-chat invent.
+    if HERMES_ROUTE:
+        try:
+            from aipc_agent.grounding import needs_tool_lookup
+
+            if needs_tool_lookup(text):
+                return "hermes"
+        except Exception:
+            pass
+    # Daily first for usage/calendar (otherwise 查一下* steals to Hermes)
+    if wants_daily_assistant(text) and not any(
+        k in (text or "") for k in ("台风", "颱風", "股价", "股價", "股票", "番号", "番號")
+    ):
+        # pure daily (用量/日历/邮件) — not live-web research
+        daily_only = any(
+            k in (text or "")
+            for k in (
+                "用量",
+                "额度",
+                "額度",
+                "日历",
+                "日曆",
+                "邮件",
+                "郵件",
+                "日程",
+                "会议",
+                "會議",
+            )
+        )
+        if daily_only:
+            return "daily_assistant"
     # Route to hermes when keywords match even if binary missing — node fail-softs.
     if HERMES_ROUTE and wants_hermes(text):
         return "hermes"
@@ -935,19 +1301,19 @@ def _keyword_mode(text: str, target: str) -> str:
     return "short"
 
 
-def plan_dispatch(text: str, session_id: str = "") -> dict:
-    """Front-door plan: STT repair → pending → one-shot → classify → rare clarify.
+def plan_dispatch(text: str, session_id: str = "", source: str = "") -> dict:
+    """Front-door plan: STT repair → pending → one-shot → capability router.
 
-    Preferred voice UX: say everything once
-      「用 Hermes 帮我写快速排序」
-      「提示词：简洁。任务：实现登录」
+    Preferred voice UX: natural language once — no need to say worker names.
+    Explicit provider names remain overrides under policy.
     Secondary ask only for bare「帮我写代码」with no agent and no task body.
 
-    Speed path: rules / oneshot return in ms; model classifier only on ambiguous
-    text under AIPC_CLASSIFIER_TIMEOUT hard wall.
+    Speed path: rules / oneshot return in ms; authoritative router or classifier
+    for the remainder.
     """
     sid = session_id or ""
     raw = text or ""
+    src_in = (source or "").strip() or ("voice" if _is_voice_session(sid) else "api")
     t0 = time.monotonic()
     # 0) STT slip repair so one wrong char doesn't miss intent/agent keywords
     rep = transcript_repair.repair(raw)
@@ -971,6 +1337,27 @@ def plan_dispatch(text: str, session_id: str = "") -> dict:
             "raw_text": raw,
             "plan_ms": f"{(time.monotonic() - t0) * 1000:.0f}",
         }
+
+    # 0c) Negative feedback on last Hermes/tool answer (不对 / 乱答 / wrong)
+    try:
+        from aipc_agent import feedback as fb
+
+        if fb.is_negative_feedback(text):
+            ack = fb.apply_negative_feedback(sid, text)
+            return {
+                "target": "respond",
+                "mode": "short",
+                "reason": "user-feedback-negative",
+                "source": "rules",
+                "agent": "",
+                "original_text": text,
+                "force_text": ack,
+                "clarify_question": "",
+                "raw_text": raw,
+                "plan_ms": f"{(time.monotonic() - t0) * 1000:.0f}",
+            }
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent: feedback check fail: {exc}", flush=True)
 
     # 1) Resume pending secondary question (repair applied)
     resolved = session_pending.try_resolve(sid, text)
@@ -1018,12 +1405,36 @@ def plan_dispatch(text: str, session_id: str = "") -> dict:
         out["plan_ms"] = f"{(time.monotonic() - t0) * 1000:.0f}"
         return out
 
-    # 3) Fast classify (rules → optional model ≤1–2s → keyword fallback)
-    plan = intent_classifier.classify(text, session_id=sid)
-    target = plan.get("target") or "respond"
-    mode = plan.get("mode") or "short"
-    source = plan.get("source") or ""
-    reason = plan.get("reason") or source or "classifier"
+    # 3) Capability router (authoritative) or legacy classifier
+    try:
+        from aipc_agent.router.decide import is_authoritative, plan_authoritative
+
+        use_router = is_authoritative()
+    except Exception:
+        use_router = False
+
+    if use_router:
+        try:
+            rplan = plan_authoritative(text, session_id=sid, source=src_in)
+            target = rplan.get("target") or "respond"
+            mode = rplan.get("mode") or "short"
+            source = "router"
+            reason = rplan.get("reason") or "router"
+            agent_hint = str(rplan.get("agent") or "")
+            router_dec = rplan.get("router_decision") or {}
+        except Exception as exc:  # noqa: BLE001
+            print(f"aipc-agent: router authoritative fail → classifier: {exc}", flush=True)
+            use_router = False
+            target = mode = source = reason = agent_hint = ""
+            router_dec = {}
+    if not use_router:
+        plan = intent_classifier.classify(text, session_id=sid)
+        target = plan.get("target") or "respond"
+        mode = plan.get("mode") or "short"
+        source = plan.get("source") or ""
+        reason = plan.get("reason") or source or "classifier"
+        agent_hint = ""
+        router_dec = {}
 
     # 4) Coding: only clarify when incomplete (auto mode)
     if target == "hermes" and session_pending.needs_coding_agent_clarify(text):
@@ -1053,26 +1464,215 @@ def plan_dispatch(text: str, session_id: str = "") -> dict:
                 "plan_ms": plan_ms,
             }
 
+    # 4c) Product codes must not stay on respond (chat invents titles/cast)
+    if HERMES_ROUTE and target == "respond":
+        try:
+            from aipc_agent.grounding import needs_tool_lookup
+
+            if needs_tool_lookup(text):
+                target = "hermes"
+                reason = reason or "rules:catalog-code"
+                source = source or "rules"
+        except Exception:
+            pass
+
+    # 4d) Explicit subscription provider → confirm this task before dispatch.
+    if target == "subscription" or agent_hint in (
+        "codex-subscription",
+        "claude-subscription",
+        "grok-subscription",
+    ):
+        prov = agent_hint or "codex-subscription"
+        try:
+            from aipc_agent.router import subscription as sub
+
+            if not sub.session_grant_ok(sid, prov.split("-")[0]):
+                plan_ms = f"{(time.monotonic() - t0) * 1000:.0f}"
+                return {
+                    "target": "respond",
+                    "mode": "short",
+                    "reason": "subscription-task-confirmation",
+                    "source": "router",
+                    "agent": "",
+                    "original_text": text,
+                    "force_text": sub.request_confirmation(
+                        sid,
+                        prov,
+                        text,
+                        __import__("os").environ.get("AIPC_DELEGATION_CWD")
+                        or __import__("os").getcwd(),
+                    ),
+                    "raw_text": raw,
+                    "plan_ms": plan_ms,
+                    "tts_owner": (router_dec or {}).get("tts_owner") or "",
+                }
+        except Exception:
+            pass
+
     # 5) Coding with full task but no agent → already handled by oneshot default hermes
     plan_ms = f"{(time.monotonic() - t0) * 1000:.0f}"
+    ag = ""
+    if target in ("hermes", "coder"):
+        ag = agent_hint if agent_hint in ("hermes", "coder", "coder-agentic") else (
+            "hermes" if target == "hermes" else "coder-agentic"
+        )
+    elif target == "subscription":
+        ag = agent_hint or "codex-subscription"
+    req_list = list((router_dec or {}).get("required") or [])
+    fresh_v = str((router_dec or {}).get("freshness") or "none")
+    paid_v = bool((router_dec or {}).get("paid_allowed"))
     return {
         "target": target,
         "mode": mode,
         "reason": reason,
         "source": source,
-        "agent": "",
+        "agent": ag,
+        "required": req_list,
+        "freshness": fresh_v,
+        "tts_owner": (router_dec or {}).get("tts_owner") or "",
+        "request_class": (router_dec or {}).get("class") or "",
+        "paid_allowed": paid_v,
         "original_text": text,  # repaired
         "raw_text": raw,
         "plan_ms": plan_ms,
     }
 
 
+def _speak_best_effort(text: str, session_id: str = "") -> None:
+    """Speak reply via user-session TTS (Kokoro/CosyVoice). Never raise.
+
+    Runs in a daemon thread so /chat returns immediately; UX is already set
+    to done by complete_notify (not stuck on 回答中 waiting for TTS).
+
+    Skipped when the client owns TTS (voice-once / krunner) to avoid dual paplay.
+    """
+    if os.environ.get("AIPC_HERMES_TTS", "1") in ("0", "false", "no", "off"):
+        return
+    if _client_owns_tts(session_id):
+        print(
+            f"aipc-agent: hermes TTS skip (client owns TTS sid={session_id!r})",
+            flush=True,
+        )
+        return
+    s = (text or "").strip()
+    if len(s) < 2:
+        return
+    # Keep speech short; full text is in notify / overlay done state
+    try:
+        import re
+
+        parts = re.split(r"(?<=[。！？.!?])\s*", s)
+        spoken = ""
+        for p in parts:
+            if not p.strip():
+                continue
+            if len(spoken) + len(p) > 160 and spoken:
+                break
+            spoken += p
+        if not spoken:
+            spoken = s[:160]
+    except Exception:
+        spoken = s[:160]
+    user = os.environ.get("AIPC_PRIMARY_USER") or os.environ.get("AIPC_HERMES_USER") or "birdyo"
+
+    def _run() -> None:
+        try:
+            import pwd
+            import subprocess
+
+            uid = pwd.getpwnam(user).pw_uid
+            env = os.environ.copy()
+            env["HOME"] = pwd.getpwnam(user).pw_dir
+            env["USER"] = user
+            env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+            env.setdefault(
+                "DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus"
+            )
+            code = (
+                "import sys; sys.path[:0]=['/var/lib/aipc-voice/lib','/usr/lib/aipc-voice'];\n"
+                "from aipc_voice_tts import speak;\n"
+                f"raise SystemExit(0 if speak({spoken!r}) else 1)\n"
+            )
+            argv = ["python3", "-c", code]
+            if os.geteuid() == 0:
+                argv = ["runuser", "-u", user, "--", *argv]
+            # Block this thread only (not the /chat response)
+            r = subprocess.run(
+                argv,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+            print(
+                f"aipc-agent: hermes TTS done rc={r.returncode} chars={len(spoken)}",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"aipc-agent: hermes TTS skip: {exc}", flush=True)
+
+    import threading
+
+    threading.Thread(target=_run, name="aipc-hermes-tts", daemon=True).start()
+    print(f"aipc-agent: hermes TTS thread chars={len(spoken)}", flush=True)
+
+
 def _plan_node(state: SupervisorState) -> dict:
     text = state.get("text") or ""
     sid = state.get("session_id") or ""
+    try:
+        from aipc_agent.router import subscription as sub
+
+        confirmed = sub.consume_confirmation(sid, text)
+    except Exception:
+        confirmed = None
+    if confirmed:
+        status = confirmed.get("status")
+        if status == "approved":
+            return {
+                "target": "subscription",
+                "mode": "long",
+                "dispatch_reason": "subscription-task-confirmed",
+                "agent": confirmed.get("provider") or "codex-subscription",
+                "original_text": confirmed.get("prompt") or "",
+                "clarify_question": "",
+                "force_text": "",
+                "required": ["repo_write"],
+                "freshness": "none",
+                "paid_allowed": True,
+                "delegation_cwd": confirmed.get("cwd") or "",
+                "grant_id": confirmed.get("grant_id") or "",
+            }
+        msg = "已取消派工。" if status == "denied" else "权限闸门不可用，未执行派工。"
+        return {
+            "target": "clarify",
+            "mode": "short",
+            "dispatch_reason": f"subscription-confirm-{status}",
+            "agent": "",
+            "original_text": text,
+            "clarify_question": "",
+            "force_text": msg,
+            "required": [],
+            "freshness": "none",
+            "paid_allowed": False,
+        }
     # Instant overlay feedback before any LLM (rules path is ms)
     ux_bridge.progress("理解指令…", state="thinking", source="plan", priority=96)
-    plan = plan_dispatch(text, sid)
+    plan_src = str(state.get("source") or ("voice" if _is_voice_session(sid) else "api"))
+    plan = plan_dispatch(text, sid, source=plan_src)
+    # Observe/shadow trace (authoritative path still logs compare when live differs)
+    try:
+        from aipc_agent.router import observe_and_trace
+
+        observe_and_trace(
+            text,
+            session_id=sid,
+            source=plan_src,
+            live_plan=plan,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent: router observe skip: {exc}", flush=True)
     src = plan.get("source") or "?"
     agent = plan.get("agent") or ""
     plan_ms = plan.get("plan_ms") or "?"
@@ -1098,6 +1698,80 @@ def _plan_node(state: SupervisorState) -> dict:
         "original_text": plan.get("original_text") or text,
         "clarify_question": plan.get("clarify_question") or "",
         "force_text": plan.get("force_text") or "",
+        "required": list(plan.get("required") or []),
+        "freshness": plan.get("freshness") or "none",
+        "paid_allowed": bool(plan.get("paid_allowed")),
+        "delegation_cwd": plan.get("delegation_cwd") or "",
+        "grant_id": plan.get("grant_id") or "",
+    }
+
+
+def _subscription_node(state: SupervisorState) -> SupervisorState:
+    """Codex/Claude subscription CLI worker (canary; requires grant + paid policy)."""
+    from aipc_agent.router import subscription as sub
+    from aipc_agent.router.spoken import package_result
+
+    text_in = (state.get("original_text") or state.get("text") or "").strip()
+    sid = state.get("session_id") or "default"
+    agent = str(state.get("agent") or "codex-subscription")
+    prov_key = "claude" if "claude" in agent else "grok" if "grok" in agent else "codex"
+    ux_bridge.progress(f"订阅助手 {prov_key}…", source="subscription")
+    if not sub.session_grant_ok(sid, prov_key):
+        cwd = str(state.get("delegation_cwd") or __import__("os").getcwd())
+        msg = sub.request_confirmation(sid, agent, text_in, cwd)
+        try:
+            from aipc_agent import activity
+
+            activity.complete_notify(sid, "AIPC · 需要授权", msg, feedback_hint=False)
+        except Exception:
+            pass
+        return {
+            "text": msg,
+            "session_id": sid,
+            "target": "subscription",
+            "spoken_summary": msg,
+        }
+    dry = __import__("os").environ.get("AIPC_SUBSCRIPTION_DRY_RUN", "0") == "1"
+    cwd = str(
+        state.get("delegation_cwd")
+        or __import__("os").environ.get("AIPC_DELEGATION_CWD")
+        or __import__("os").getcwd()
+    )
+    if "claude" in agent:
+        events = list(sub.run_claude_print(text_in, cwd=cwd, dry_run=dry))
+    elif "grok" in agent:
+        events = list(sub.run_grok_cli(text_in, cwd=cwd, dry_run=dry))
+    else:
+        events = list(sub.run_codex_exec(text_in, cwd=cwd, dry_run=dry))
+    collected = sub.collect_result(iter(events))
+    sub.revoke_grant(str(state.get("grant_id") or ""))
+    text = str(collected.get("text") or "")
+    ok = bool(collected.get("ok"))
+    packaged = package_result(text)
+    try:
+        from aipc_agent import activity, feedback as fb
+
+        activity.complete_notify(
+            sid,
+            "AIPC · 订阅完成" if ok else "AIPC · 订阅结束",
+            text,
+            feedback_hint=ok and bool(text),
+        )
+        fb.remember_result(
+            sid, user=text_in, reply=text, target="subscription", ok=ok
+        )
+    except Exception:
+        pass
+    if ok and text:
+        try:
+            _speak_best_effort(text, session_id=sid)
+        except Exception:
+            pass
+    return {
+        "text": text,
+        "session_id": sid,
+        "target": "subscription",
+        "spoken_summary": str(packaged.get("spoken_summary") or text),
     }
 
 
@@ -1111,6 +1785,7 @@ def _route_after_plan(state: SupervisorState) -> str:
         "clarify",
         "job_status",
         "screen_see",
+        "subscription",
     ):
         return t
     return "respond"
@@ -1132,6 +1807,7 @@ def supervisor():
     graph.add_node("clarify", _clarify_node)
     graph.add_node("job_status", _job_status_node)
     graph.add_node("screen_see", _screen_see_node)
+    graph.add_node("subscription", _subscription_node)
     graph.set_entry_point("plan")
     graph.add_conditional_edges(
         "plan",
@@ -1144,6 +1820,7 @@ def supervisor():
             "clarify": "clarify",
             "job_status": "job_status",
             "screen_see": "screen_see",
+            "subscription": "subscription",
         },
     )
     graph.add_edge("respond", END)
@@ -1153,6 +1830,7 @@ def supervisor():
     graph.add_edge("clarify", END)
     graph.add_edge("job_status", END)
     graph.add_edge("screen_see", END)
+    graph.add_edge("subscription", END)
     return graph.compile()
 
 

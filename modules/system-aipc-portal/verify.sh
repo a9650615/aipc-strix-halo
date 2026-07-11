@@ -8,6 +8,8 @@ fail() { echo "aipc-portal: $*" >&2; exit 1; }
 pkg_dir="$this_dir/files/usr/lib/aipc-portal"
 [ -f "$pkg_dir/aipc_portal/server.py" ] || fail "server.py missing"
 [ -f "$pkg_dir/aipc_portal/registry.py" ] || fail "registry.py missing"
+[ -f "$pkg_dir/aipc_portal/dashboard.py" ] || fail "dashboard API missing"
+[ -f "$pkg_dir/static/index.html" ] || fail "SPA index missing"
 [ -f "$this_dir/files/etc/aipc/portal/services/aipc-portal.yaml" ] || fail "self metadata missing"
 [ -f "$this_dir/files/etc/systemd/system/aipc-portal.service" ] || fail "unit missing"
 [ -f "$this_dir/env/endpoint" ] || fail "env/endpoint missing"
@@ -16,6 +18,8 @@ python3 -c "import ast; ast.parse(open('$pkg_dir/aipc_portal/server.py').read())
   || fail "syntax error in server.py"
 python3 -c "import ast; ast.parse(open('$pkg_dir/aipc_portal/registry.py').read())" \
   || fail "syntax error in registry.py"
+python3 -c "import ast; ast.parse(open('$pkg_dir/aipc_portal/dashboard.py').read())" \
+  || fail "syntax error in dashboard.py"
 
 grep -q '127.0.0.1' "$this_dir/files/etc/systemd/system/aipc-portal.service" \
   || grep -q '127.0.0.1' "$pkg_dir/aipc_portal/__init__.py" \
@@ -29,4 +33,5 @@ fi
 
 curl -sf http://127.0.0.1:7080/healthz >/dev/null || fail "GET /healthz failed"
 curl -sf http://127.0.0.1:7080/ >/dev/null || fail "GET / failed"
+curl -sf http://127.0.0.1:7080/api/v1/dashboard >/dev/null || fail "GET dashboard API failed"
 echo "aipc-portal: static + hardware OK"

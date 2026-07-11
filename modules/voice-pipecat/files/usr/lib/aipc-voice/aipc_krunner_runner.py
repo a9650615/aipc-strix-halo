@@ -74,8 +74,11 @@ def _strip_trigger(query: str) -> str | None:
     return None
 
 
-def _chat(text: str, timeout: float = 45.0) -> str:
-    payload = json.dumps({"text": text, "session_id": "krunner"}).encode()
+def _chat(text: str, timeout: float = 45.0) -> tuple[str, str]:
+    """Return (full_text, spoken_summary). KRunner owns TTS when it speaks."""
+    payload = json.dumps(
+        {"text": text, "session_id": "krunner", "source": "krunner"}
+    ).encode()
     req = urllib.request.Request(
         CHAT_URL,
         data=payload,
@@ -84,13 +87,62 @@ def _chat(text: str, timeout: float = 45.0) -> str:
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = json.loads(resp.read().decode())
-    return str(data.get("text") or "").strip()
+    full = str(data.get("text") or "").strip()
+    spoken = str(data.get("spoken_summary") or "").strip()
+    return full, spoken
+
+
+def _overlay_present(title: str, body: str, *, state: str = "done") -> bool:
+    """Prefer glass HUD over native notify-send for full answers."""
+    import json
+    import socket
+    import time
+    from pathlib import Path
+
+    xdg = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    detail = (body or "")[:2500]
+    payload = {
+        "state": state,
+        "detail": detail,
+        "partial": detail,
+        "label": (title or "AIPC · 已回答")[:40],
+        "hint": "可滾動閱讀 · 說「不对」可反饋" if state == "done" else "",
+        "source": "krunner",
+        "priority": 95,
+        "ttl_s": 90.0 if state == "done" else 12.0,
+        "ts": time.time(),
+    }
+    try:
+        sp = Path(xdg) / "aipc-voice-state.json"
+        sp.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    sock_path = Path(xdg) / "aipc-overlay.sock"
+    if not sock_path.exists():
+        return False
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(0.6)
+        s.connect(str(sock_path))
+        req = {"cmd": "set", **payload}
+        s.sendall((json.dumps(req, ensure_ascii=False) + "\n").encode("utf-8"))
+        s.recv(2048)
+        s.close()
+        return True
+    except OSError:
+        return False
 
 
 def _notify(title: str, body: str) -> None:
+    """HUD first; native notify-send only if overlay is unavailable."""
+    if _overlay_present(title, body):
+        return
+    mode = (os.environ.get("AIPC_DESKTOP_NOTIFY") or "auto").strip().lower()
+    if mode in ("0", "off", "false", "no", "never"):
+        return
     if shutil.which("notify-send"):
         subprocess.run(
-            ["notify-send", "-a", "AIPC", title, body[:500]],
+            ["notify-send", "-a", "AIPC", title, (body or "")[:400]],
             check=False,
             timeout=5,
         )
@@ -249,17 +301,18 @@ class Runner(dbus.service.Object):
                     _notify("AIPC", "Opening dashboard")
                     return
             try:
-                answer = _chat(question)
+                answer, spoken = _chat(question)
             except Exception as exc:  # noqa: BLE001
                 _notify("AIPC error", str(exc)[:300])
                 return
             if not answer:
                 _notify("AIPC", "(empty reply)")
                 return
+            # HUD/notify: full result; TTS: spoken_summary only (single owner=krunner)
             _notify("AIPC", answer)
+            speech = spoken or answer
             if action_id == "speak" or os.environ.get("AIPC_KRUNNER_SPEAK", "1") == "1":
-                # Default: also speak for Siri-like feel (does not change volume).
-                GLib.idle_add(lambda: (_speak(answer), False)[1])
+                GLib.idle_add(lambda s=speech: (_speak(s), False)[1])
             if action_id == "copy" and shutil.which("wl-copy"):
                 subprocess.run(["wl-copy", answer], check=False)
             elif action_id == "copy" and shutil.which("xclip"):

@@ -31,19 +31,40 @@ class ChatResponse(BaseModel):
     end_session: bool = False
     session_id: str = ""
     session_status: str = ""
+    spoken_summary: str = ""
 
 
 @app.get("/healthz")
 def healthz() -> dict:
     from aipc_agent import session_registry
+    from aipc_agent.router import ensure_background_refresh, health_snapshot, load_policy
 
+    ensure_background_refresh()
     open_n = len(session_registry.list_sessions(include_done=False, limit=50))
+    pol = load_policy()
     return {
         "status": "ok",
         "service": "aipc-agent-orchestrator",
         "stream": True,
         "long_tasks": True,
         "sessions_open": open_n,
+        "router": {
+            "authoritative": bool(pol.get("authoritative")),
+            "paid_enabled": bool(pol.get("paid_enabled")),
+            "metered_enabled": bool(pol.get("metered_enabled")),
+            "health": health_snapshot(),
+        },
+    }
+
+
+@app.get("/router/stats")
+def router_stats(limit: int = 200) -> dict:
+    """Doctor/portal: redaction-safe route-trace summary (no full user text)."""
+    from aipc_agent.router import health_snapshot, summarize_traces
+
+    return {
+        "traces": summarize_traces(limit=limit),
+        "health": health_snapshot(),
     }
 
 
@@ -62,6 +83,23 @@ def jobs_get(job_id: str):
     if not job:
         return JSONResponse(status_code=404, content={"error": "job not found"})
     return job
+
+
+@app.get("/automation", response_model=None)
+def automation_list(include_finished: bool = True):
+    from aipc_agent.router import subscription
+
+    return {"automation": subscription.automation_snapshot(include_finished=include_finished)}
+
+
+@app.post("/automation/{task_id}/cancel", response_model=None)
+def automation_cancel(task_id: str):
+    from aipc_agent.router import subscription
+
+    result = subscription.cancel(task_id)
+    if result.get("type") == "error":
+        return JSONResponse(status_code=404, content=result)
+    return result
 
 
 @app.get("/sessions", response_model=None)
@@ -114,7 +152,9 @@ def chat(req: ChatRequest) -> ChatResponse | JSONResponse:
     )
 
     try:
-        result = _graph.invoke({"text": req.text, "session_id": sid})
+        result = _graph.invoke(
+            {"text": req.text, "session_id": sid, "source": source}
+        )
     except TimeoutError as exc:
         session_registry.touch(sid, status="failed", activity=f"超時：{exc}")
         episode_log.append(
@@ -220,6 +260,9 @@ def chat(req: ChatRequest) -> ChatResponse | JSONResponse:
                 clear_job=True,
             )
 
+    trail = ""
+    if isinstance(result, dict):
+        trail = str(result.get("learn_trail") or result.get("trail") or "")[:2000]
     episode_log.append(
         {
             "task_id": task_id,
@@ -230,8 +273,20 @@ def chat(req: ChatRequest) -> ChatResponse | JSONResponse:
             "outcome": "ok",
             "latency_s": round(time.time() - t0, 3),
             "target": (result.get("target") if isinstance(result, dict) else None),
+            "learn_trail": trail or None,
         }
     )
+
+    spoken = ""
+    if isinstance(result, dict):
+        spoken = str(result.get("spoken_summary") or "").strip()
+    if not spoken and text:
+        try:
+            from aipc_agent.router.spoken import spoken_summary
+
+            spoken = spoken_summary(str(text))
+        except Exception:
+            spoken = ""
 
     return ChatResponse(
         text=str(text),
@@ -239,6 +294,7 @@ def chat(req: ChatRequest) -> ChatResponse | JSONResponse:
         end_session=end_session,
         session_id=sid,
         session_status=st,
+        spoken_summary=spoken,
     )
 
 

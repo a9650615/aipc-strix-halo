@@ -70,6 +70,27 @@ def _primary_user_home() -> tuple[str, str]:
 
 
 def _notify_desktop(title: str, body: str) -> None:
+    """Native notify-send fallback. Prefer glass overlay when alive.
+
+    Callers should already gate on AIPC_DESKTOP_NOTIFY / overlay_alive; this
+    is a last-resort bubble for when the HUD is not running.
+    """
+    try:
+        from aipc_agent import ux_bridge
+
+        if ux_bridge.overlay_alive():
+            # Still push text to HUD if caller only used this helper
+            try:
+                ux_bridge.finish_answer(
+                    (body or "")[:2500],
+                    source="desktop-notify-fallback",
+                    hold_s=60.0,
+                )
+            except Exception:
+                pass
+            return
+    except Exception:
+        pass
     try:
         user, home = _primary_user_home()
         env = os.environ.copy()
@@ -85,7 +106,15 @@ def _notify_desktop(title: str, body: str) -> None:
                 env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={xdg}/bus")
         except (KeyError, ImportError):
             pass
-        argv = ["notify-send", "--app-name=AIPC", "-t", "12000", title, (body or "")[:200]]
+        lim = int(os.environ.get("AIPC_NOTIFY_BODY_CHARS", "320"))
+        argv = [
+            "notify-send",
+            "--app-name=AIPC",
+            "-t",
+            "12000",
+            title,
+            (body or "")[: max(80, lim)],
+        ]
         if os.geteuid() == 0 and user and user != "root":
             argv = ["runuser", "-u", user, "--", *argv]
         subprocess.run(argv, env=env, capture_output=True, timeout=5, check=False)
@@ -191,13 +220,14 @@ def job_update(
                 session_registry.touch(
                     sid, status="working", activity=line, job_id=jid
                 )
+                # Overlay already updated via ux_bridge; never spam native notify
                 activity.publish(
                     sid,
                     line,
                     state=state,
                     phase=detail_s[:40],
                     job_id=jid,
-                    notify=True,
+                    notify=False,
                 )
         except Exception:
             pass
@@ -353,24 +383,28 @@ def submit(
                 "progress": prog[-_PROGRESS_MAX:],
                 "plan_summary": prev.get("plan_summary") or "",
             }
-        try:
-            from aipc_agent import ux_bridge
-
-            st = "error" if status != "ok" else "speaking"
-            ux_bridge.progress(
-                f"[{wlabel}] {answer[:70]}", state=st, source=f"job-{worker}"
-            )
-        except Exception:
-            pass
         title = "AIPC · 长任务完成" if status == "ok" else "AIPC · 长任务结束"
-        _notify_desktop(title, f"[{wlabel}] {answer}")
         try:
             from aipc_agent import activity
 
-            # Job done → session back to active (user may follow up), not session-end
-            activity.complete_notify(session_id, title, f"[{wlabel}] {answer}")
+            # Glass HUD full answer; native notify only if overlay down
+            activity.complete_notify(
+                session_id,
+                title,
+                f"[{wlabel}] {answer}",
+                feedback_hint=(status == "ok" and bool(answer)),
+            )
         except Exception:
-            pass
+            try:
+                from aipc_agent import ux_bridge
+
+                ux_bridge.finish_answer(
+                    f"[{wlabel}] {(answer or '')[:2500]}",
+                    source=f"job-{worker}",
+                    hold_s=75.0,
+                )
+            except Exception:
+                _notify_desktop(title, f"[{wlabel}] {answer}")
         if status == "ok":
             try:
                 from aipc_agent import memory

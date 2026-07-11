@@ -71,8 +71,8 @@ if not _USING_AIPC_LIB:
             "",
         ),
         "done": (
-            "AIPC · 待命",
-            "說完了。再說喚醒詞可繼續",
+            "AIPC · 已回答",
+            "{detail}",
             "low",
             "",
         ),

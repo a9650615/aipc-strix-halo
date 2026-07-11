@@ -7,12 +7,18 @@ profile and never the aipc git tree.
 
 Process only: this module prepares paths + env. Hermes/agent-browser owns
 the actual browser binary.
+
+Policy (no topic / keyword allowlists):
+  AIPC_HERMES_BROWSER=auto  → equip browser toolset on Hermes turns
+                              (classifier already chose Hermes; model
+                              decides whether to *call* the tools)
+  =1|always                 → always equip
+  =0|off                    → never equip
 """
 
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 
 # Isolated profile root (persistent on the machine, not in git)
@@ -20,6 +26,7 @@ SANDBOX_ROOT = Path(
     os.environ.get("AIPC_BROWSER_SANDBOX", "/var/lib/aipc-agent/browser-sandbox")
 )
 
+# Default ON (auto): equip browser toolset on Hermes turns. Model decides use.
 # auto | 1 | always | 0 | off
 MODE = (os.environ.get("AIPC_HERMES_BROWSER", "auto") or "auto").lower()
 
@@ -46,97 +53,64 @@ def ensure_profile() -> Path:
     return SANDBOX_ROOT
 
 
-def needs_browser(text: str, *, long_task: bool = False, force: bool = False) -> bool:
-    """Whether this Hermes turn should enable the browser toolset.
+def needs_browser(text: str = "", *, long_task: bool = False, force: bool = False) -> bool:
+    """Whether this Hermes turn should equip the browser toolset.
 
-    Model-first intent still chooses Hermes; this only decides whether to
-    equip the browser sandbox for that run. No topic allowlists — only
-    task shape (web research / multi-step browse / explicit force).
+    No string/topic matching. Hermes is already model-routed; equip tools by
+    env policy. Pure greet/offline chat never reaches this path (respond node).
+    Chromium starts only when Hermes actually calls a browser tool.
     """
     if MODE in ("0", "false", "no", "off"):
         return False
     if force or MODE in ("1", "true", "on", "always"):
         return True
-    # auto
+    # auto: equip on every Hermes turn (or long_task). Model chooses use.
     if long_task:
         return True
-    raw = (text or "").strip()
-    if not raw:
-        return False
-    low = raw.lower()
-    # Task-shape cues: lookup / browse / open URL / scrape / research page
-    if re.search(r"https?://", raw):
-        return True
-    webish = (
-        "浏览",
-        "瀏覽",
-        "打开网页",
-        "打開網頁",
-        "网站",
-        "網站",
-        "爬",
-        "抓取",
-        "browser",
-        "playwright",
-        "网页",
-        "網頁",
-        "搜一下",
-        "搜尋",
-        "搜索",
-        "查一下",
-        "查找",
-        "番号",  # catalog codes often need site browse
-        "web search",
-        "look up",
-        "lookup",
-        "scrape",
-        "crawl",
-    )
-    if any(k in raw or k in low for k in webish):
-        return True
-    # Local skill body may teach "use browser" — caller can force via env
-    return False
+    return bool((text or "").strip())
 
 
 def hermes_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """Env overlay so agent-browser / Chromium use the sandbox profile."""
     env = dict(base or os.environ)
     root = ensure_profile()
-    # agent-browser / playwright conventions used by Hermes browser_tool
     env.setdefault("AIPC_BROWSER_SANDBOX", str(root))
-    # Common Chromium isolation flags when running headless as service user
     if "AGENT_BROWSER_ARGS" not in env:
         env["AGENT_BROWSER_ARGS"] = (
             "--no-sandbox,--disable-dev-shm-usage,--disable-gpu"
         )
-    # Prefer local engine over cloud Browserbase unless user configured otherwise
-    env.setdefault("AGENT_BROWSER_ENGINE", os.environ.get("AGENT_BROWSER_ENGINE", "local"))
-    # Socket dir for daemon isolation per agent host
+    env.setdefault(
+        "AGENT_BROWSER_ENGINE", os.environ.get("AGENT_BROWSER_ENGINE", "local")
+    )
     sock = root / "sockets"
     try:
         sock.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
     env.setdefault("AGENT_BROWSER_SOCKET_DIR", str(sock))
-    env.setdefault("BROWSER_INACTIVITY_TIMEOUT", os.environ.get("BROWSER_INACTIVITY_TIMEOUT", "120"))
+    env.setdefault(
+        "BROWSER_INACTIVITY_TIMEOUT",
+        os.environ.get("BROWSER_INACTIVITY_TIMEOUT", "120"),
+    )
     return env
 
 
-def hermes_toolsets_extra(text: str, *, long_task: bool = False) -> list[str]:
-    """Toolsets to append when browser sandbox is needed."""
+def hermes_toolsets_extra(text: str = "", *, long_task: bool = False) -> list[str]:
+    """Toolsets to append when browser sandbox is equipped."""
     if not needs_browser(text, long_task=long_task):
         return []
-    # browser toolset includes web_search + navigate/click/snapshot
     return ["browser"]
 
 
 def prompt_hint() -> str:
     return (
-        "Browser sandbox is enabled (isolated profile under "
-        f"{SANDBOX_ROOT}). Discover the lookup path yourself: "
-        "web_search the query/code, open promising result pages with "
-        "browser_navigate + browser_snapshot, extract title/cast/URL. "
-        "Your short final answer must use what tools found (title + URL). "
-        "On-box skill learning will later capture the procedure so next time "
-        "you follow that path faster — not a one-shot memorized answer."
+        "Browser sandbox is available (isolated profile under "
+        f"{SANDBOX_ROOT}). "
+        "When external facts are needed: use web_search and/or open search "
+        "engines in the browser (DuckDuckGo, Brave, Bing, Google, SearXNG). "
+        "Side paths OK (any result site that has the facts). Prefer hosts "
+        "listed in local skills when present — those were learned on this PC. "
+        "browser_navigate → browser_snapshot; do not invent titles or URLs. "
+        "If blocked, try another engine/result. Successful paths are merged "
+        "into the local skill tree after the turn (self-learn)."
     )

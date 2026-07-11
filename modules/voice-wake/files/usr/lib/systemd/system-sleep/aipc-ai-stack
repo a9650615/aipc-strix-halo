@@ -1,0 +1,82 @@
+#!/bin/bash
+# Prepare / recover the always-on AI voice stack around suspend.
+# Installed as /usr/lib/systemd/system-sleep/aipc-ai-stack
+# Args from systemd: pre|post  suspend|hibernate|hybrid-sleep|suspend-then-hibernate
+set -eu
+
+DESKTOP_USER="${AIPC_PRIMARY_USER:-birdyo}"
+UID_NUM="$(id -u "$DESKTOP_USER" 2>/dev/null || echo 1000)"
+XDG="/run/user/${UID_NUM}"
+HOME_DIR="$(getent passwd "$DESKTOP_USER" | cut -d: -f6)"
+export PATH="/usr/bin:/bin"
+
+log() { echo "aipc-ai-stack-sleep: $*" >&2; }
+
+as_desktop() {
+  # PipeWire + user systemd bus for the desktop session
+  runuser -u "$DESKTOP_USER" -- env \
+    HOME="$HOME_DIR" \
+    USER="$DESKTOP_USER" \
+    LOGNAME="$DESKTOP_USER" \
+    XDG_RUNTIME_DIR="$XDG" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG}/bus" \
+    PULSE_SERVER="unix:${XDG}/pulse/native" \
+    PYTHONPATH=/var/lib/aipc-voice/lib \
+    "$@"
+}
+
+case "${1:-}" in
+pre)
+  log "pre ${2:-suspend}: quiet voice stack"
+  # Stop voice-once / TTS so audio+GPU can idle (helps suspend-gpu-guard)
+  pkill -u "$DESKTOP_USER" -f 'aipc-voice-once' 2>/dev/null || true
+  # Only aipc TTS players, not all paplay
+  pkill -u "$DESKTOP_USER" -f 'paplay.*aipc' 2>/dev/null || true
+  # Soft-stop wake (arecord holds PipeWire); restarted on post
+  systemctl stop aipc-voice-wake.service 2>/dev/null || true
+  # Best-effort unduck so other streams restore before sleep
+  as_desktop python3 -c '
+try:
+    from aipc_lib.voice_audio import duck_stop
+    duck_stop(instant=True)
+except Exception:
+    try:
+        import voice_audio
+        voice_audio.duck_stop(instant=True)
+    except Exception:
+        pass
+' 2>/dev/null || true
+  ;;
+post)
+  log "post ${2:-suspend}: restore voice stack"
+  # Give PipeWire / session bus a moment after resume
+  sleep 2
+  if [ ! -d "$XDG" ]; then
+    log "no $XDG yet; skip user-session restore (login later)"
+  else
+    # Rebuild RNNoise chain (modules often die across s2idle)
+    as_desktop python3 -c '
+try:
+    from aipc_lib.voice_audio import ensure_denoise_source, duck_stop
+    duck_stop(instant=True)
+    ensure_denoise_source()
+except Exception:
+    try:
+        import voice_audio
+        voice_audio.duck_stop(instant=True)
+        voice_audio.ensure_denoise_source()
+    except Exception as exc:
+        print("denoise rebuild:", exc)
+' 2>/dev/null || true
+    # Overlay user unit
+    as_desktop systemctl --user restart aipc-voice-overlay.service 2>/dev/null || true
+  fi
+  # System wake unit (reopens arecord)
+  systemctl start aipc-voice-wake.service 2>/dev/null || true
+  # Nudge companions if they died
+  for u in aipc-voice-stt-sensevoice aipc-mem0 aipc-agent-orchestrator; do
+    systemctl is-active --quiet "$u" || systemctl start "$u" 2>/dev/null || true
+  done
+  log "post done"
+  ;;
+esac

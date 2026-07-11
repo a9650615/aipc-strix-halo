@@ -16,9 +16,9 @@ def test_lemonade_unload_resolves_alias_and_posts_model_id(monkeypatch) -> None:
         "load_manifest",
         lambda path: [
             ModelEntry(
-                alias="qwen35-122b-q3",
+                alias="coder-agentic",
                 backend="lemonade",
-                model_id="user.Qwen3.5-122B-A10B-GGUF-Q3_K_XL",
+                model_id="Qwen3.6-35B-A3B-Uncensored-Aggressive-Q4_K_P",
             )
         ],
     )
@@ -29,17 +29,17 @@ def test_lemonade_unload_resolves_alias_and_posts_model_id(monkeypatch) -> None:
         lambda base_url, path, payload: calls.append((base_url, path, payload)),
     )
 
-    result = CliRunner().invoke(cli.main, ["lemonade", "unload", "qwen35-122b-q3"])
+    result = CliRunner().invoke(cli.main, ["lemonade", "unload", "coder-agentic"])
 
     assert result.exit_code == 0
     assert calls == [
         (
             "http://127.0.0.1:8001",
             "/api/v0/unload",
-            {"model_name": "user.Qwen3.5-122B-A10B-GGUF-Q3_K_XL"},
+            {"model_name": "Qwen3.6-35B-A3B-Uncensored-Aggressive-Q4_K_P"},
         )
     ]
-    assert "qwen35-122b-q3 -> user.Qwen3.5-122B-A10B-GGUF-Q3_K_XL" in result.output
+    assert "coder-agentic -> Qwen3.6-35B-A3B-Uncensored-Aggressive-Q4_K_P" in result.output
 
 
 def test_lemonade_unload_accepts_raw_model_id(monkeypatch) -> None:
@@ -60,7 +60,7 @@ def test_lemonade_unload_reports_restart_hint_on_failure(monkeypatch) -> None:
     monkeypatch.setattr(cli.models_mod, "load_manifest", lambda path: [])
     monkeypatch.setattr(cli, "_lemonade_post", fail)
 
-    result = CliRunner().invoke(cli.main, ["lemonade", "unload", "qwen35-122b-q3"])
+    result = CliRunner().invoke(cli.main, ["lemonade", "unload", "coder-agentic"])
 
     assert result.exit_code == 1
     assert "lemonade unload failed" in result.output

@@ -318,6 +318,34 @@ def parse_oneshot(text: str) -> dict[str, Any] | None:
     if not raw:
         return None
 
+    # Daily tools (用量/日历/邮件) must not become Hermes oneshots just because
+    # wants_hermes has broad web keywords (帮我查 / 最新 …).
+    try:
+        from aipc_agent.graphs import wants_daily_assistant
+
+        if wants_daily_assistant(raw):
+            low = raw.lower()
+            named = explicit_coding_agent(raw)
+            coding_kw = any(
+                k in raw or k in low
+                for k in (
+                    "写代码",
+                    "寫代碼",
+                    "改代码",
+                    "debug",
+                    "修bug",
+                    "脚本",
+                    "腳本",
+                    "实现",
+                    "實現",
+                    "refactor",
+                )
+            )
+            if not named and not coding_kw and "hermes" not in low and "赫米斯" not in raw:
+                return None
+    except Exception:
+        pass
+
     pt = parse_prompt_and_task(raw)
     agent = explicit_coding_agent(raw)
 

@@ -32,23 +32,53 @@ depend on heavy Vulkan agent models. Override with env
 - **Internalize** (`memory.internalize`): every successful turn enqueues
   async mem0 `infer=true` (chat-lane mirror for tool agents). Does not
   block TTS.
-- **Episodes**: JSONL under `/var/lib/aipc-agent/episodes/` for
-  self-improvement critique (Phase B timer still optional).
-- **Skill tree (not in this repo):** durable skills live as **modular
-  folders on the machine** (e.g. `~/.hermes/skills/aipc-learned/`,
-  `/var/lib/aipc-agent/skills/`). This module only supplies the
-  **process** (episodes, internalize, skill_learn → local SKILL.md,
-  Hermes inject). Do not commit skill corpora into `modules/**`.
-- **Sandbox browser (when needed):** Hermes can equip `-t browser` with
-  profile under `/var/lib/aipc-agent/browser-sandbox` (isolated from the
-  user's personal browser) so the agent can crawl pages to answer or to
-  learn procedures. Controlled by `AIPC_HERMES_BROWSER=auto|1|0`.
-- **Background learning:** skill extract is enqueued on a **daemon learn
-  queue** (never blocks TTS). Idle batch:
-  `aipc-self-improve.timer` → scans episodes → grows local skills under
-  `/var/lib/aipc-agent/skills/`. Manual:
+- **Episodes**: JSONL under `/var/lib/aipc-agent/episodes/` (ON by default).
+- **Skill tree (two layers):**
+  1. **Process teaching** (in aipc image, read-only):
+     `/usr/share/aipc-agent/skills-process/` — high-level **tool-use**
+     procedures only (how to search/browse/evidence). Maintained in
+     this module under `files/usr/share/aipc-agent/skills-process/`.
+  2. **Machine growth** (writable): `/var/lib/aipc-agent/skills/`,
+     `~/.hermes/skills/aipc-learned/` — path-harvest after *her*
+     grounded successes (hosts/URL patterns). Never commit answer
+     corpora into `modules/**`.
+  **Supervisor rule:** do not seed titles/cast/site answers into either
+  layer. Process skills may teach tools; machine skills accumulate PATH.
+- **Sandbox browser (default ON):** Hermes turns equip `-t browser` with
+  profile under `/var/lib/aipc-agent/browser-sandbox`
+  (`AIPC_HERMES_BROWSER=auto`). Chromium starts only if tools are called.
+  Not topic/keyword gated. Pure greet stays on `respond`.
+- **Background learning (default ON):** `AIPC_SKILL_LEARN=1`,
+  `AIPC_LEARN_BG=1`, mentor `ornith-35b` / fallback `assistant-gemma`.
+  Hermes success turns attach a **tool/URL trail** into the async learn
+  queue (never blocks TTS). Idle batch: **`aipc-self-improve.timer`
+  enabled by post-install** → episodes → local skills.
+  Drop-in: `zzz-skill-learn.conf`. Manual:
   `python -m aipc_agent self-improve --hours 72`.
-  See OpenSpec `assistant-self-improvement` (skill tree + sandbox browser).
+  See OpenSpec `assistant-self-improvement`.
+- **Grounding (anti-invent):** product-style codes (`ABC-123`) force
+  Hermes/tools. Skill learn / Hermes ok require a **non-homepage URL**
+  in trail or reply. Chat invents (fake cast/title + store root only)
+  are rejected and not internalized/learned. See `grounding.py`.
+- **Hermes notify + feedback:** completion notify keeps longer text
+  (sentence-aware clip, default ~480 chars) and appends
+  「不对？下句说『不对』可反馈」. Negative feedback (`不对` / `乱答` / …)
+  records an episode, marks recent path skill as unreliable, does not
+  treat the prior answer as truth. Optional Hermes TTS
+  (`AIPC_HERMES_TTS=1`, default on) speaks a short compress of the reply
+  via user-session CosyVoice/Kokoro — **skipped** when the client owns
+  TTS (`voice-*` / `krunner` session_id) so voice-once and krunner do not
+  double-play (audio overlap).
+- **Multi-engine search (default ON):** Hermes may inject hits from
+  SearXNG / DDG / Brave / Bing (`AIPC_WEB_HINT_HERMES=auto`). Process
+  code has **no per-site catalog hardcodes** — site-specific paths only
+  in local skills after a successful learn.
+- **Self-learn PATH harvest (default ON):** side paths are allowed at
+  runtime (any useful result site). After a **grounded** Hermes success,
+  `path_skill_from_evidence` **merges** new hosts/URL patterns into the
+  local skill `web-lookup-path` (no supervisor answers; mentor optional).
+  Next similar query injects the accumulated skill tree — shorter path
+  without hardcoding sites in process.
 - **Classifier**: daily intents are **model-judged**
   (`AIPC_CLASSIFIER=always`); stock/live price multi-turn routes to
   Hermes tool path, not “没有工具” chat.

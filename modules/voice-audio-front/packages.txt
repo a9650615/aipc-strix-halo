@@ -1,0 +1,2 @@
+# stdlib + system python; uvicorn may already exist from voice-stt / agent
+# No extra packages required for heuristic v1.

@@ -18,14 +18,18 @@ fail-closed checks before anything real happens:
    can't even be determined, that also counts as blacklisted (unknown is
    never treated as safe).
 
-Stays `.disabled` for two reasons, both explained in detail below:
-- **No vision-capable model is registered in LiteLLM.** Task 4.8's VLM
-  bridge is wired correctly but every real call 400s.
-- **`kdotool` (window-class detection) was never hardware-verified.** It's
-  declared in `packages.txt` for the real image build but isn't installed
-  on this dev host, and couldn't be live-installed to test either (see
-  below) — so the blacklist check currently fails closed on *every*
-  window, because it can never determine a window's class at all.
+Stays `.disabled` primarily because:
+- **`kdotool` (window-class detection) was never hardware-verified** on the
+  input path — blacklist fails closed when class is unknown.
+- Module enable still needs a full hardware pass (CLAUDE.md §9) for
+  ydotool injection + grant/revoke sessions.
+
+**VLM alias (2026-07-10):** `vlm-qwen2vl` is registered again in
+`models.yaml` + LiteLLM → Lemonade `Gemma-4-26B-A4B-it-GGUF` + mmproj
+(on-demand). The bridge in `vlm.py` no longer 400s for "unknown model"
+once the live gateway config includes that entry. Screen-control stays
+`.disabled` until the input/blacklist path is hardware-verified; VLM
+describe can be exercised via LiteLLM directly without enabling this module.
 
 ## Files
 - `files/usr/lib/aipc-agent/aipc_agent_screen_control/`

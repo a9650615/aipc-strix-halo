@@ -1,0 +1,16 @@
+[Unit]
+Description=AIPC AI voice stack — recover after system sleep
+DefaultDependencies=no
+After=sleep.target
+Requires=sleep.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Activated when entering sleep (noop); ExecStop runs on resume when sleep.target stops
+ExecStart=/bin/true
+ExecStop=/var/lib/aipc-voice/bin/aipc-ai-stack-sleep post suspend
+TimeoutStopSec=60
+
+[Install]
+WantedBy=sleep.target

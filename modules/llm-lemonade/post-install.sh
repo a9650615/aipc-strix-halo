@@ -13,5 +13,14 @@ mkdir -p /etc/aipc/env.d/llm-lemonade
 printf '8001\n' > /etc/aipc/env.d/llm-lemonade/port
 
 chmod 0755 /usr/lib/aipc/llm-lemonade/configure-lemonade.sh
+chmod 0755 /usr/lib/aipc/llm-lemonade/ensure-resident-small.sh
+# Live path used by aipc-resident-small.service (SELinux-friendly under /etc)
+mkdir -p /etc/aipc/llm-lemonade
+cp -a /usr/lib/aipc/llm-lemonade/ensure-resident-small.sh \
+  /etc/aipc/llm-lemonade/ensure-resident-small.sh
+chmod 0755 /etc/aipc/llm-lemonade/ensure-resident-small.sh
 
 systemctl enable lemonade.service
+# Pin + warm resident-small (FLM) after lemonade so LRU cannot evict the
+# always-on NPU chat model (see ensure-resident-small.sh header).
+systemctl enable aipc-resident-small.service

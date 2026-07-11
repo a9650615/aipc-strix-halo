@@ -9,6 +9,7 @@ No gamepad QuickAccess, no KeyMute, no volume keys.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pwd
 import select
@@ -32,6 +33,22 @@ ONCE = os.environ.get(
 KB_NAMES = (
     "InputPlumber Keyboard",
 )
+STATE_PATH = Path("/run/aipc/command-center.json")
+
+
+def publish_state(availability: str, state: str, detail: str) -> None:
+    data = {
+        "availability": availability,
+        "summary": detail,
+        "button": {"state": state, "updated_at": int(time.time())},
+    }
+    try:
+        STATE_PATH.parent.mkdir(mode=0o755, exist_ok=True)
+        temporary = STATE_PATH.with_suffix(".tmp")
+        temporary.write_text(json.dumps(data), encoding="utf-8")
+        temporary.replace(STATE_PATH)
+    except OSError:
+        pass
 
 
 def find_keyboard() -> str | None:
@@ -101,13 +118,38 @@ def _wake_ptt(env: dict[str, str]) -> bool:
     return False
 
 
+def _wake_sock_present(env: dict[str, str]) -> bool:
+    xdg = env.get("XDG_RUNTIME_DIR", "/run/user/1000")
+    for sp in (
+        Path(xdg) / "aipc-wake.sock",
+        Path(f"/tmp/aipc-wake-{os.geteuid()}.sock"),
+        Path("/tmp/aipc-wake-1000.sock"),
+    ):
+        if sp.exists():
+            return True
+    return False
+
+
 def trigger() -> None:
     env = desktop_env()
     # Prefer wake pipeline (async single-mic); no second arecord.
+    # When wake is up, PTT continues the same multi-turn session — never spawn
+    # a parallel aipc-voice-once (that looked like a brand-new session).
     if _wake_ptt(env):
         return
+    if _wake_sock_present(env):
+        # Sock exists but send failed — retry once, still no spawn-once
+        time.sleep(0.05)
+        if _wake_ptt(env):
+            return
+        print(
+            "aipc-command-center: wake sock present but ptt failed — skip spawn once",
+            flush=True,
+        )
+        return
     cmd = env.pop("AIPC_VOICE_ONCE_RESOLVED", None) or ONCE
-    argv = [cmd, "--vad"]
+    # Keep the same agent session id as wake pipeline when falling back
+    argv = [cmd, "--vad", "--session-id", "voice-assistant"]
     as_user = env.get("AIPC_CC_AS")
     if as_user and os.geteuid() == 0 and as_user != "root":
         argv = ["runuser", "-u", as_user, "--", *argv]
@@ -148,6 +190,7 @@ def loop(path: str) -> int:
                 continue
             last = now
             print(f"aipc-command-center: KEY_PROG3 pressed → voice", flush=True)
+            publish_state("available", "pressed", "Command Center button pressed")
             trigger()
     except KeyboardInterrupt:
         return 0
@@ -165,11 +208,13 @@ def main() -> int:
         return 0
     path = find_keyboard()
     if not path:
+        publish_state("unavailable", "unavailable", "InputPlumber Keyboard not found")
         print(
             "aipc-command-center: InputPlumber Keyboard not found (is inputplumber up?)",
             file=sys.stderr,
         )
         return 2
+    publish_state("available", "idle", "Command Center button ready")
     return loop(path)
 
 

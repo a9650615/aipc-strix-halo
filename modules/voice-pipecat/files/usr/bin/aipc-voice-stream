@@ -1,0 +1,346 @@
+#!/usr/bin/env python3
+"""Streaming voice turn worker (openspec: voice-streaming-turn).
+
+Pipeline (no second mic — wake owns capture):
+  --wav → SenseVoice final STT → local intents → POST /chat/stream
+  → sentence-chunk TTS queue → play
+
+On any stream stage failure: log stream_fallback and invoke batch
+aipc-voice-once --wav (same turn). Default off for wake until
+AIPC_VOICE_STREAM=1 (hardware-gated).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+for _p in (
+    Path("/usr/lib/aipc-voice"),
+    Path("/var/lib/aipc-voice/lib"),
+    Path.home() / ".local/lib/aipc-voice",
+    Path(__file__).resolve().parents[1] / "lib/aipc-voice",
+):
+    if _p.is_dir():
+        sys.path.insert(0, str(_p))
+
+try:
+    import aipc_voice_stream as stream_mod
+except Exception:
+    stream_mod = None
+try:
+    import aipc_voice_tts as tts_mod
+except Exception:
+    tts_mod = None
+try:
+    import aipc_voice_ux as voice_ux
+except Exception:
+    voice_ux = None
+
+STT_URL = os.environ.get("AIPC_VOICE_STT_URL", "http://127.0.0.1:9001/transcribe")
+CHAT_STREAM_URL = os.environ.get(
+    "AIPC_VOICE_CHAT_STREAM_URL", "http://127.0.0.1:4100/chat/stream"
+)
+SESSION_ID = os.environ.get("AIPC_VOICE_SESSION_ID", "voice-stream")
+ONCE_CMD = os.environ.get("AIPC_VOICE_ONCE", "/usr/bin/aipc-voice-once")
+STT_TIMEOUT = float(os.environ.get("AIPC_VOICE_STT_TIMEOUT", "30"))
+
+
+def _ux(state: str, detail: str = "", **kw) -> None:
+    if voice_ux is None:
+        return
+    try:
+        voice_ux.announce(state, detail, **kw)
+    except Exception:
+        pass
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--wav", required=False, help="command WAV from wake (no mic)")
+    ap.add_argument(
+        "--text",
+        default=None,
+        help="skip STT; use this transcript (progressive handoff)",
+    )
+    ap.add_argument("--session-id", default=SESSION_ID)
+    ap.add_argument(
+        "--no-fallback",
+        action="store_true",
+        help="do not fall back to aipc-voice-once on stream failure",
+    )
+    ap.add_argument(
+        "--self-test",
+        action="store_true",
+        help="offline checks only (verify.sh)",
+    )
+    return ap
+
+
+def _parse_text_field(body: bytes) -> str:
+    try:
+        obj = json.loads(body.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError:
+        return ""
+    if isinstance(obj, dict):
+        return str(obj.get("text") or "").strip()
+    return ""
+
+
+def stt_wav(path: str, opener=urllib.request.urlopen) -> str:
+    with open(path, "rb") as f:
+        data = f.read()
+    req = urllib.request.Request(
+        STT_URL,
+        data=data,
+        headers={"Content-Type": "audio/wav"},
+        method="POST",
+    )
+    with opener(req, timeout=STT_TIMEOUT) as resp:
+        return _parse_text_field(resp.read())
+
+
+def _usable(text: str) -> bool:
+    # Prefer shared once logic if available via path import of voice-once helpers.
+    s = (text or "").strip()
+    if len(s) < 2:
+        return False
+    compact = "".join(ch for ch in s if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
+    return len(compact) >= 2
+
+
+def _local_intent(text: str) -> str | None:
+    try:
+        from aipc_lib import voice_intents
+
+        handled, reply = voice_intents.try_handle(text)
+        if handled:
+            return reply or ""
+    except Exception:
+        pass
+    try:
+        from aipc_lib.portal import matches_open_portal_intent
+
+        if matches_open_portal_intent(text):
+            aipc = shutil.which("aipc")
+            if aipc:
+                subprocess.run(
+                    [aipc, "portal", "open"],
+                    capture_output=True,
+                    timeout=20,
+                    check=False,
+                )
+            return "已打开 AIPC 管理面板。"
+    except Exception:
+        pass
+    return None
+
+
+def fallback_once(wav_path: str | None, text: str | None, session_id: str) -> int:
+    print("aipc-voice-stream: stream_fallback → aipc-voice-once", file=sys.stderr, flush=True)
+    cmd = ONCE_CMD
+    if not Path(cmd).is_file():
+        which = shutil.which("aipc-voice-once")
+        if which:
+            cmd = which
+    if not Path(cmd).is_file() and not shutil.which(cmd):
+        print("aipc-voice-stream: once helper missing", file=sys.stderr)
+        return 1
+    argv = [cmd]
+    if wav_path and Path(wav_path).is_file():
+        argv.extend(["--wav", wav_path])
+    if text and text.strip():
+        argv.extend(["--text", text.strip()])
+    argv.extend(["--session-id", session_id])
+    try:
+        return subprocess.call(argv)
+    except OSError as exc:
+        print(f"aipc-voice-stream: once spawn failed: {exc}", file=sys.stderr)
+        return 1
+
+
+def run_stream_turn(
+    *,
+    text: str,
+    session_id: str,
+    speak=None,
+    stream_events=None,
+) -> tuple[bool, str]:
+    """Drive SSE → sentence TTS. Returns (ok, full_reply_or_error)."""
+    if stream_mod is None:
+        return False, "aipc_voice_stream module missing"
+
+    full_parts: list[str] = []
+    buffer = ""
+    saw_done = False
+    error_msg = ""
+
+    def _speak(t: str) -> bool:
+        if speak is not None:
+            return bool(speak(t))
+        if tts_mod is None:
+            return False
+        try:
+            return bool(tts_mod.speak(t))
+        except Exception as exc:
+            print(f"aipc-voice-stream: TTS error: {exc}", file=sys.stderr)
+            return False
+
+    tts_q = stream_mod.TtsChunkQueue(
+        speak=_speak,
+        on_chunk=lambda c: _ux("speaking", c[:80], force=True),
+    )
+    tts_q.start()
+
+    try:
+        events_iter = (
+            stream_events
+            if stream_events is not None
+            else stream_mod.iter_chat_stream_events(
+                text, session_id=session_id, url=CHAT_STREAM_URL
+            )
+        )
+        for ev in events_iter:
+            kind = ev.get("event")
+            if kind == "token":
+                piece = str(ev.get("text") or "")
+                if not piece:
+                    continue
+                full_parts.append(piece)
+                buffer += piece
+                _ux("thinking", "".join(full_parts)[-80:], force=False)
+                chunks, buffer = stream_mod.feed_sentence_chunks(buffer)
+                for ch in chunks:
+                    tts_q.enqueue(ch)
+            elif kind == "error":
+                error_msg = str(ev.get("message") or "upstream_error")
+                tts_q.cancel()
+                return False, error_msg
+            elif kind == "done":
+                saw_done = True
+                final = str(ev.get("text") or "").strip()
+                if final and not full_parts:
+                    full_parts.append(final)
+                    buffer = final
+                chunks, buffer = stream_mod.feed_sentence_chunks(
+                    buffer, flush=True
+                )
+                for ch in chunks:
+                    tts_q.enqueue(ch)
+            elif kind == "session_id":
+                continue
+        tts_q.close()
+        tts_q.join(timeout=float(os.environ.get("AIPC_STREAM_TTS_JOIN", "180")))
+    except Exception as exc:  # noqa: BLE001
+        tts_q.cancel()
+        return False, str(exc)
+
+    if tts_q.cancelled:
+        return False, "cancelled"
+    full = "".join(full_parts).strip() or (error_msg)
+    if not saw_done and not full:
+        return False, "stream ended without done"
+    if tts_q.error_count and not tts_q.played_count:
+        return False, "tts_all_chunks_failed"
+    return True, full
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.self_test:
+        return _self_test()
+
+    wav_path = args.wav
+    if not args.text and not wav_path:
+        print("aipc-voice-stream: need --wav or --text", file=sys.stderr)
+        return 2
+    if wav_path and not Path(wav_path).is_file():
+        print(f"aipc-voice-stream: --wav not found: {wav_path}", file=sys.stderr)
+        return 1
+
+    _ux("thinking", "stream", force=True)
+
+    text = (args.text or "").strip()
+    if not text:
+        try:
+            text = stt_wav(wav_path)
+        except Exception as exc:
+            print(f"aipc-voice-stream: STT failed: {exc}", file=sys.stderr)
+            if args.no_fallback:
+                _ux("error", "stt", force=True)
+                return 1
+            return fallback_once(wav_path, None, args.session_id)
+
+    print(f"aipc-voice-stream: transcript={text[:120]!r}", flush=True)
+    if not _usable(text):
+        reply = "没听清楚，请再说一次。"
+        if tts_mod is not None:
+            try:
+                tts_mod.speak(reply)
+            except Exception:
+                pass
+        _ux("done", reply, force=True)
+        return 0
+
+    local = _local_intent(text)
+    if local is not None:
+        if local and tts_mod is not None:
+            try:
+                tts_mod.speak(local)
+            except Exception:
+                pass
+        _ux("done", (local or "")[:80], force=True)
+        return 0
+
+    ok, detail = run_stream_turn(text=text, session_id=args.session_id)
+    if ok:
+        print(f"aipc-voice-stream: ok reply={detail[:120]!r}", flush=True)
+        _ux("done", detail[:80], force=True)
+        return 0
+
+    print(f"aipc-voice-stream: fail {detail}", file=sys.stderr, flush=True)
+    if args.no_fallback:
+        _ux("error", detail[:80], force=True)
+        return 1
+    return fallback_once(wav_path, text, args.session_id)
+
+
+def _self_test() -> int:
+    assert CHAT_STREAM_URL.endswith("/chat/stream") or "4100" in CHAT_STREAM_URL
+    assert STT_URL.startswith("http://")
+    assert stream_mod is not None, "aipc_voice_stream import failed"
+    assert stream_mod.self_test() == 0
+
+    # Mocked end-to-end without network/TTS hardware
+    events = [
+        {"event": "session_id", "session_id": "t", "task_id": "1"},
+        {"event": "token", "text": "你好。"},
+        {"event": "token", "text": "世界。"},
+        {"event": "done", "text": "你好。世界。", "task_id": "1"},
+    ]
+    spoken: list[str] = []
+
+    ok, full = run_stream_turn(
+        text="hi",
+        session_id="voice-selftest",
+        speak=lambda t: spoken.append(t) or True,
+        stream_events=iter(events),
+    )
+    assert ok, full
+    assert "你好" in full
+    assert spoken, "expected TTS chunks"
+    assert build_parser().parse_args(["--self-test"]).self_test is True
+    print("aipc-voice-stream: self-test OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+# Default ON — skill extract must never block TTS; queue is the default path.
 ENABLED = os.environ.get("AIPC_LEARN_BG", "1") not in ("0", "false", "no", "off")
 MAX_QUEUE = int(os.environ.get("AIPC_LEARN_QUEUE_MAX", "64"))
 
@@ -73,6 +74,7 @@ def enqueue_skill_extract(
     session_id: str = "",
     kind: str = "hermes",
     agent: str = "hermes",
+    trail: str = "",
 ) -> bool:
     return enqueue(
         LearnJob(
@@ -83,6 +85,7 @@ def enqueue_skill_extract(
                 "session_id": session_id,
                 "kind": kind,
                 "agent": agent,
+                "trail": trail or "",
             },
         )
     )
@@ -120,6 +123,7 @@ def _dispatch(job: LearnJob) -> None:
             session_id=str(p.get("session_id") or ""),
             kind=str(p.get("kind") or "hermes"),
             agent=str(p.get("agent") or "hermes"),
+            trail=str(p.get("trail") or ""),
         )
         dt = time.monotonic() - t0
         if meta:

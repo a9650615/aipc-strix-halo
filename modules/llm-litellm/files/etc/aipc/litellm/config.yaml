@@ -131,24 +131,7 @@ model_list:
       max_input_tokens: 131072
       max_output_tokens: 4096
 
-  # Qwen3.5-122B-A10B (optimized tag 2026-07-09). Same Q4_K_M weights as
-  # stock qwen3.5:122b (~81GB) with capped ctx + coding sampling — see
-  # models.yaml. keep_alive 15m: 0m forced a full reload per request and
-  # felt "broken after interrupt". reasoning_effort none → think=false.
-  # Unload Lemonade Vulkan LLMs before first load (81GB + resident Lemonade
-  # models exceeds comfortable UMA headroom on 128GB).
-  - model_name: qwen35-122b-q3
-    litellm_params:
-      model: ollama_chat/qwen3.5:122b-aipc
-      api_base: http://127.0.0.1:11434
-      api_key: none
-      keep_alive: 15m
-      reasoning_effort: "none"
-      timeout: 1800
-      num_retries: 0
-    model_info:
-      max_input_tokens: 65536
-      max_output_tokens: 8192
+  # qwen35-122b-q3 retired 2026-07-11 (weights removed; see models.yaml).
 
   - model_name: main-cloud
     litellm_params:

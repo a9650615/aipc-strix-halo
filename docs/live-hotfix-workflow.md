@@ -12,6 +12,12 @@ Anything hand-patched into `/etc/` or a running unit is lost on `bootc switch` u
 same content also lives in the matching `modules/*/files/...` path in the repo — always
 edit the repo file first, then copy it live, never the other way around.
 
+**Close the layer loop when done.** Live unlock / local `podman build` / buildah work
+that is never cleaned becomes multi-GB disk dirt (pending ostree deploys, buildah
+`*-working-container` Storage leftovers, full aipc/bazzite images in *user* podman).
+Patterns and safe prune commands: **`docs/disk-layer-hygiene.md`** (also
+claude-ops `LESSONS.md` L5).
+
 ## Why `/usr/lib/aipc/...` in the repo often isn't where the live file actually is
 
 This is a bootc/ostree image: `/usr` on the running system is part of a read-only ostree

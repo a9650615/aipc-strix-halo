@@ -1,0 +1,29 @@
+{
+  "id": "web-tool-use",
+  "title": "web-tool-use",
+  "tags": [
+    "process",
+    "tools",
+    "lookup",
+    "web",
+    "browser",
+    "teaching"
+  ],
+  "triggers": [
+    "web search",
+    "look up",
+    "lookup",
+    "browser",
+    "external facts",
+    "product code",
+    "catalog code",
+    "find link",
+    "search"
+  ],
+  "examples": [
+    "look up this product code with tools",
+    "find a reliable link and title from the web"
+  ],
+  "source": "aipc-process-teaching",
+  "readonly": true
+}

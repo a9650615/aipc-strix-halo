@@ -9,6 +9,11 @@
 # other custom systemd units on this image (see llm-lemonade's
 # configure-lemonade.sh for the sibling execute/map version of this).
 #
+# 2026-07-10: mem0 on :7000 is labeled gatekeeper_port_t (not
+# unreserved_port_t). Closed-loop remember/recall from /chat failed soft
+# with EACCES until init_t → gatekeeper_port_t name_connect was granted
+# (ausearch: denied name_connect dest=7000 tcontext=...gatekeeper_port_t).
+#
 # Generated from the real denial via:
 #   sudo ausearch -m avc -ts recent --raw | grep "dest=4000" | audit2allow -M aipc_agent_network
 # then hand-trimmed: the raw audit2allow output also bundled an unrelated
@@ -25,13 +30,16 @@
 # it via `semanage port`, which would be a heavier, more invasive change
 # for one internal gateway port. This is the granularity actually
 # available; revisit if it ever needs tightening.
-module aipc_agent_network 1.0;
+module aipc_agent_network 1.1;
 
 require {
 	type init_t;
 	type unreserved_port_t;
+	type gatekeeper_port_t;
 	class tcp_socket name_connect;
 }
 
 #============= init_t ==============
 allow init_t unreserved_port_t:tcp_socket name_connect;
+# mem0 :7000 (closed-loop remember/recall)
+allow init_t gatekeeper_port_t:tcp_socket name_connect;

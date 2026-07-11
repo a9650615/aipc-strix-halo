@@ -10,7 +10,11 @@ Type=oneshot
 Environment=AIPC_EPISODE_DIR=/var/lib/aipc-agent/episodes
 Environment=AIPC_SKILL_ROOT=/var/lib/aipc-agent/skills
 Environment=AIPC_LEARN_STATE=/var/lib/aipc-agent/learning/self_improve_state.json
+# Learning mentor ON by default (same as orchestrator)
 Environment=AIPC_SKILL_LEARN=1
+Environment=AIPC_SKILL_LEARN_MODEL=ornith-35b
+Environment=AIPC_SKILL_LEARN_FALLBACK_MODEL=assistant-gemma
+Environment=AIPC_SKILL_LEARN_TIMEOUT=120
 Environment=AIPC_SELF_IMPROVE_MAX=15
 Environment=AIPC_LITELLM_URL=http://127.0.0.1:4000
 # Nice/idle-ish: do not contend with voice critical path

@@ -17,7 +17,8 @@ registry=/etc/aipc/models/models.yaml
 python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "${registry}" \
   || fail "llm-models: ${registry} is not valid YAML"
 
-# At minimum, every alias from CLAUDE.md §7 must be present
-for alias in router-1b intent-3b main-70b coder-fast coder-strong coder-thinking embed-bge vlm-qwen2vl; do
+# Standing local + gateway aliases (trimmed set + phase-2 embed + phase-4 VLM).
+# Old qwen2.5 family (router-1b, intent-3b, main-70b, …) was deliberately cut.
+for alias in resident-small coder-agentic ornith-35b embed-bge vlm-qwen2vl; do
   grep -q "alias: ${alias}" "${registry}" || fail "llm-models: missing required alias '${alias}'"
 done

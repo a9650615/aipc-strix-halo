@@ -5,11 +5,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# Last insert(0) wins. Prefer live /var/lib hotfix over ~/.local.
 for _p in (
     Path("/usr/lib/aipc-voice"),
-    Path("/var/lib/aipc-voice/lib"),
     Path.home() / ".local/lib/aipc-voice",
-    Path(__file__).resolve().parents[1] / "lib/aipc-voice",
+    Path("/var/lib/aipc-voice/lib"),
 ):
     if _p.is_dir():
         sys.path.insert(0, str(_p))

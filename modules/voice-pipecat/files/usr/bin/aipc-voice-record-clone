@@ -5,14 +5,19 @@ from __future__ import annotations
 
 import argparse
 import array
+import json
+import re
 import shutil
 import subprocess
 import sys
+import urllib.request
 import wave
 from pathlib import Path
 
 DEFAULT_OUT = Path("/var/lib/aipc-voice/persona/clone.wav")
+PRESETS = DEFAULT_OUT.parent / "presets"
 SAMPLES = Path.home() / "aipc-voice-samples"
+STT_URL = "http://127.0.0.1:9001/transcribe"
 
 
 def _level(path: Path) -> tuple[int, float, int]:
@@ -30,6 +35,17 @@ def _level(path: Path) -> tuple[int, float, int]:
 
 def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
+
+
+def _install_file(src: Path, dest: Path) -> None:
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(src, dest)
+    except PermissionError:
+        subprocess.run(
+            ["sudo", "install", "-D", "-m", "0644", str(src), str(dest)],
+            check=True,
+        )
 
 
 def record(seconds: int, out: Path, mic_percent: int) -> Path:
@@ -55,6 +71,75 @@ def record(seconds: int, out: Path, mic_percent: int) -> Path:
     return raw
 
 
+def monitor_source(sink: str) -> str:
+    sink = sink.strip()
+    if not sink or "\n" in sink:
+        raise ValueError("invalid default sink")
+    return f"{sink}.monitor"
+
+
+def record_desktop(seconds: int) -> Path:
+    SAMPLES.mkdir(parents=True, exist_ok=True)
+    raw = SAMPLES / f"desktop-record-{seconds}s.wav"
+    sink = subprocess.run(
+        ["pactl", "get-default-sink"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    source = monitor_source(sink)
+    print(f"Capturing desktop audio {seconds}s from {source} → {raw}", flush=True)
+    _run(
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "pulse",
+            "-i",
+            source,
+            "-t",
+            str(seconds),
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            str(raw),
+        ]
+    )
+    return raw
+
+
+def transcribe(path: Path) -> str:
+    request = urllib.request.Request(
+        STT_URL,
+        data=path.read_bytes(),
+        headers={"Content-Type": "audio/wav"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        text = str(json.load(response).get("text", "")).strip()
+    if not text:
+        raise RuntimeError("SenseVoice returned an empty transcript")
+    return text
+
+
+def preset_paths(name: str) -> tuple[Path, Path]:
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        raise ValueError("preset name may contain only letters, digits, dot, underscore, and dash")
+    wav = PRESETS / f"{name}.wav"
+    return wav, wav.with_suffix(".txt")
+
+
+def activate(wav: Path, transcript: Path) -> None:
+    for src, dest in ((wav, DEFAULT_OUT), (transcript, DEFAULT_OUT.with_suffix(".txt"))):
+        _install_file(src, dest)
+
+
 def clean(src: Path, dest: Path) -> Path:
     """Mild denoise + loudnorm for clone reference (keeps timbre for CosyVoice)."""
     SAMPLES.mkdir(parents=True, exist_ok=True)
@@ -64,6 +149,9 @@ def clean(src: Path, dest: Path) -> Path:
             [
                 "ffmpeg",
                 "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
                 "-i",
                 str(src),
                 "-ac",
@@ -79,13 +167,7 @@ def clean(src: Path, dest: Path) -> Path:
         )
     else:
         shutil.copy(src, tmp)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    # may need root for /var/lib path
-    try:
-        shutil.copy(tmp, dest)
-    except PermissionError:
-        subprocess.run(["sudo", "cp", str(tmp), str(dest)], check=True)
-        subprocess.run(["sudo", "chmod", "644", str(dest)], check=False)
+    _install_file(tmp, dest)
     peak, rms, clipped = _level(dest if dest.is_file() else tmp)
     print(f"staged {dest} peak={peak} rms={rms:.1f} clipped={clipped}")
     return dest
@@ -121,10 +203,40 @@ def main() -> int:
     ap.add_argument("--from-video", type=Path, default=None)
     ap.add_argument("--from-wav", type=Path, default=None)
     ap.add_argument("--clean-only", type=Path, default=None, help="clean existing wav into --out")
+    ap.add_argument("--desktop", action="store_true", help="capture the default desktop output monitor")
+    ap.add_argument("--preset", help="save desktop capture as a named CosyVoice preset")
+    ap.add_argument("--prompt-text", help="override automatic SenseVoice transcript")
+    ap.add_argument("--activate", action="store_true", help="activate the named preset as clone.wav")
     ap.add_argument("--play", action="store_true")
+    ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
 
-    if args.clean_only:
+    if args.self_test:
+        assert monitor_source("sink") == "sink.monitor"
+        assert preset_paths("voice-1")[0] == PRESETS / "voice-1.wav"
+        return 0
+
+    if args.desktop and not args.preset:
+        ap.error("--desktop requires --preset NAME")
+    if args.activate and not args.preset:
+        ap.error("--activate requires --preset NAME")
+
+    transcript_path = None
+    if args.desktop:
+        if not all(shutil.which(cmd) for cmd in ("ffmpeg", "pactl")):
+            print("desktop capture requires ffmpeg and pactl", file=sys.stderr)
+            return 1
+        path, transcript_path = preset_paths(args.preset)
+        path = clean(record_desktop(args.seconds), path)
+        text = args.prompt_text.strip() if args.prompt_text is not None else transcribe(path)
+        if not text:
+            ap.error("--prompt-text must not be empty")
+        local_transcript = SAMPLES / transcript_path.name
+        local_transcript.write_text(text + "\n", encoding="utf-8")
+        _install_file(local_transcript, transcript_path)
+        print(f"transcript: {text}")
+        print(f"preset: {path} + {transcript_path}")
+    elif args.clean_only:
         path = clean(args.clean_only, args.out)
     elif args.from_video:
         path = extract_video(args.from_video, args.out)
@@ -136,6 +248,10 @@ def main() -> int:
             return 1
         raw = record(args.seconds, args.out, args.mic_percent)
         path = clean(raw, args.out)
+
+    if args.activate and transcript_path:
+        activate(path, transcript_path)
+        print(f"activated: {DEFAULT_OUT} + {DEFAULT_OUT.with_suffix('.txt')}")
 
     if args.play and shutil.which("paplay"):
         subprocess.run(["paplay", str(path)], check=False)

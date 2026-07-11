@@ -110,8 +110,32 @@ def _agent_chat(text: str, session_id: str | None, cfg: dict[str, Any]) -> str:
     return str(data)
 
 
+def _needs_agent_capabilities(text: str) -> bool:
+    """True when a small NPU chat reply must not terminate routing (tools/live).
+
+    Mirrors assistant-intelligence-routing capability signals — not topic censor.
+    """
+    import re
+
+    t = text or ""
+    if re.search(
+        r"(?i)(用量|额度|額度|quota|usage|日历|日曆|邮件|郵件|股价|股價|"
+        r"台风|颱風|查一下|搜一下|搜索|写代码|寫代碼|实现|實現|屏幕|螢幕|"
+        r"hermes|codex|claude|live\b|stock\b|weather)",
+        t,
+    ):
+        return True
+    if re.search(r"(?<![A-Za-z0-9])([A-Za-z]{2,8})[-_ ]?(\d{2,5})(?![A-Za-z0-9])", t):
+        return True
+    return False
+
+
 def chat(text: str, session_id: str | None = None) -> str:
-    """Fulfill local turn. Default: NPU resident-small via LiteLLM."""
+    """Fulfill local turn.
+
+    Default NPU resident-small for pure chat; tool/live-shaped turns go to
+    agent-orchestrator so a small-model reply cannot stop routing early.
+    """
     rt = _load_runtime()
     lb = rt.get("local_backend") or {}
     if not isinstance(lb, dict):
@@ -153,6 +177,25 @@ def chat(text: str, session_id: str | None = None) -> str:
     if mode == "agent":
         return _agent_or_raise()
 
+    # Capability-first: never let NPU-only text terminate tool-shaped turns
+    if _needs_agent_capabilities(text):
+        try:
+            return _agent_or_raise()
+        except Exception as agent_exc:
+            if mode == "npu":
+                # last resort chat if agent down
+                try:
+                    return _npu_or_raise()
+                except Exception:
+                    raise agent_exc from agent_exc
+            # auto: try npu only as degraded fallback
+            try:
+                return _npu_or_raise()
+            except Exception as npu_err:
+                raise RuntimeError(
+                    f"agent and npu failed for tool-shaped turn: agent={agent_exc}; npu={npu_err}"
+                ) from agent_exc
+
     if mode == "auto":
         npu_err: Exception | None = None
         try:
@@ -166,7 +209,7 @@ def chat(text: str, session_id: str | None = None) -> str:
                 f"npu and agent local backends failed: npu={npu_err}; agent={agent_exc}"
             ) from agent_exc
 
-    # default npu
+    # default npu for pure chat
     return _npu_or_raise()
 
 

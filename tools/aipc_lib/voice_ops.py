@@ -1,7 +1,7 @@
 """Always-on voice + memory baseline management for the aipc CLI.
 
 Standing decision (2026-07-10): resident-small + SenseVoice + Kokoro + mem0
-stay up unless a better combo is hardware-proven. Role presets (agent/122b)
+stay up unless a better combo is hardware-proven. Role presets (agent/voice/free)
 only move heavy LLMs — never these services.
 
 Install path remains modules/ (bootc / ansible). This module is the runtime
@@ -31,11 +31,14 @@ KOKORO_CONTAINER = "aipc-kokoro"
 
 HELPERS: dict[str, str] = {
     "once": "aipc-voice-once",
+    "say": "aipc-voice-say",
+    "stream": "aipc-voice-stream",
     "bind-hotkey": "aipc-voice-bind-hotkey",
     "record-clone": "aipc-voice-record-clone",
     "status-script": "aipc-voice-status",
     "krunner-install": "aipc-krunner-install",
     "overlay": "aipc-voice-overlay",
+    "template": "aipc-voice-template",
 }
 
 
@@ -198,6 +201,24 @@ def collect_baseline_status(
             rows.append(Probe(name, detail, ok))
     except Exception as exc:  # noqa: BLE001
         rows.append(Probe("ux-state", f"unavailable: {exc}", True))
+
+    # Streaming turn flag (default off until hardware-verified TTFA).
+    import os
+
+    stream_on = os.environ.get("AIPC_VOICE_STREAM", "0") not in ("0", "false", "no", "")
+    stream_helper = resolve_helper("stream")
+    stream_ok = True  # advisory: missing binary only fails when flag is on
+    if stream_on and stream_helper is None:
+        stream_ok = False
+    rows.append(
+        Probe(
+            "voice-stream",
+            f"AIPC_VOICE_STREAM={'1' if stream_on else '0'}; "
+            f"helper={'present' if stream_helper else 'missing'}; "
+            f"chat_stream=http://127.0.0.1:4100/chat/stream",
+            stream_ok,
+        )
+    )
 
     return rows
 

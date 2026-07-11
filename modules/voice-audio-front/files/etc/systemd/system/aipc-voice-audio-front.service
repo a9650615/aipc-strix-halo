@@ -1,0 +1,18 @@
+[Unit]
+Description=aipc voice audio front gate (heuristic / future multimodal)
+After=network-online.target
+# Optional peer of STT; wake can fail-soft if this is down
+
+[Service]
+Type=simple
+User=birdyo
+Group=birdyo
+Environment=HOME=/var/home/birdyo
+Environment=PYTHONPATH=/var/lib/aipc-voice/lib
+# Prefer live hotfix path; image path after bootc: /usr/lib/aipc-voice
+ExecStart=/usr/bin/python3 -m uvicorn aipc_audio_front.server:app --host 127.0.0.1 --port 9010
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

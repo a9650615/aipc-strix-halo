@@ -1,0 +1,16 @@
+[Unit]
+Description=AIPC: keep resident-small (gemma4-it-e4b-FLM) loaded and pinned on Lemonade
+Documentation=file:///usr/lib/aipc/llm-lemonade/ensure-resident-small.sh
+After=lemonade.service
+Requires=lemonade.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Live path /etc/aipc (SELinux etc_t); image path under /usr/lib/aipc/... after bootc.
+ExecStart=/etc/aipc/llm-lemonade/ensure-resident-small.sh
+TimeoutStartSec=300
+
+[Install]
+WantedBy=lemonade.service
+WantedBy=multi-user.target

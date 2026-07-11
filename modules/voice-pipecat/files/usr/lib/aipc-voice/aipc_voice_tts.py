@@ -328,6 +328,33 @@ def _wav_duration_sec(path: str) -> float | None:
         return None
 
 
+def stop_active_tts() -> None:
+    """Stop other aipc-tts players so only one voice speaks (anti-overlap).
+
+    Safe best-effort: only matches temp files / props we create (prefix aipc-tts-).
+    Does not touch unrelated paplay (music, system sounds).
+    """
+    try:
+        uid = os.getuid()
+    except Exception:
+        return
+    # paplay/ffplay of /tmp/aipc-tts-* or similar tempfile names
+    for pat in (
+        "paplay.*aipc-tts-",
+        "ffplay.*aipc-tts-",
+        "pw-play.*aipc-tts-",
+    ):
+        try:
+            subprocess.run(
+                ["pkill", "-u", str(uid), "-f", pat],
+                check=False,
+                capture_output=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
 def _play_audio_bytes(audio: bytes, suffix: str = ".wav") -> bool:
     if not audio:
         return False
@@ -341,6 +368,9 @@ def _play_audio_bytes(audio: bytes, suffix: str = ".wav") -> bool:
         if suffix == ".wav":
             print("aipc-voice-tts: refusing play (not RIFF)", file=sys.stderr, flush=True)
             return False
+
+    # Single-flight: drop any still-playing prior aipc-tts stream
+    stop_active_tts()
 
     env = _audio_env()
     # Isolate from WirePlumber "paplay" stream restore (was stuck L=21% R=0%).

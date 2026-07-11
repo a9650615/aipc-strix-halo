@@ -35,3 +35,9 @@ build/
 **/.local/share/aipc-web/
 **/aipc-chatgpt/profile/
 **/storage_state.json
+/var/lib/
+/work/
+**/.astro/
+modules/system-aipc-portal/web/node_modules/
+modules/system-aipc-portal/web/.astro/
+modules/system-aipc-portal/web/dist/

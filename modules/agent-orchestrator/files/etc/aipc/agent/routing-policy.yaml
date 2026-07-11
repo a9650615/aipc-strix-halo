@@ -1,0 +1,22 @@
+# Assistant intelligence routing policy (Slice B — confirmed CLI delegation).
+# Model IDs and provider URLs stay out of routing code; metered APIs stay off.
+#
+# User policy (2026-07-10):
+#   - Subscription CLI (Codex / Claude Code / Grok): confirm every delegated task
+#   - Metered API tokens: disabled — subscription only on this machine
+
+policy_version: air-1
+slice: B
+# Local unification: router owns target when authoritative=true (kill-switch: false)
+authoritative: true
+paid_enabled: true
+auto_subscription: false          # explicit provider/task only; never auto-escalate
+interactive_paid: ask
+subscription_ask_scope: task      # every delegated coding task
+unattended_paid: deny
+metered_enabled: false            # no API-token / metered path
+metered_hard_cap: null
+default_data_scopes:
+  - prompt
+shadow: true
+trace: true

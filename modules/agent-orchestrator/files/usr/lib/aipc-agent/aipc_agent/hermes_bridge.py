@@ -136,15 +136,29 @@ def _is_unusable_answer(text: str) -> bool:
 def _build_query(text: str, session_id: str, *, browser: bool = False) -> str:
     parts = [
         "You are helping via the aipc voice assistant. "
-        "Discover facts yourself with tools — do not invent titles or URLs. "
+        "Discover facts yourself with tools and search engines — "
+        "do not invent titles, cast, or URLs. "
         "Do the task with tools if needed, then stop. "
         "FINAL OUTPUT RULES (critical): "
-        "print ONLY the spoken answer — 2 to 4 short sentences in the user's language; "
-        "NO tool logs, NO thinking, NO markdown tables, NO 'Response truncated' errors. "
-        "For lookup requests: ALWAYS include (1) the work title found via tools, "
-        "(2) key cast/details when available, (3) at least one concrete URL from tools. "
-        "Prefer specific facts over generic 'how to search' advice. "
-        "If tools fail, say one short failure sentence.",
+        "Primary spoken answer: 2 to 5 short sentences in the user's language. "
+        "NO tool logs, NO chain-of-thought, NO markdown tables, NO 'Response truncated'. "
+        "MULTI-MEDIA: when tools return or open images, maps, charts, video, PDF, or "
+        "media-heavy product pages, after the short status list 2+ items (if available), "
+        "each line: short label + full https://… so the HUD can show a composite set. "
+        "Any topic — not limited to weather. Only URLs from tool output. "
+        "For external lookups (codes, titles, live links, product ids, …): "
+        "(1) Prefer local skills first when injected — those hosts already worked "
+        "on this machine (skill-tree side paths she learned herself). "
+        "(2) Use web_search and/or browser search engines "
+        "(DuckDuckGo / Bing / Brave / Google / local SearXNG). "
+        "(3) Side paths are allowed: follow any useful result site, not only "
+        "official storefronts; open 1–2 pages and extract fields from the page. "
+        "(4) Only state facts that appear in tool output or provided search hits. "
+        "Never invent titles, people, or URLs from memory. "
+        "Never answer with only a bare store homepage. "
+        "If one path is blocked, try another engine or result site. "
+        "If all tools fail, say you could not verify — one short sentence — do not guess. "
+        "Successful tool paths are learned into the local skill tree for next time.",
         "",
         f"User request:\n{text.strip()}",
     ]
@@ -159,8 +173,8 @@ def _build_query(text: str, session_id: str, *, browser: bool = False) -> str:
             parts.insert(
                 1,
                 skill_blob
-                + "\nFollow these local procedures to find the answer with tools; "
-                "do not rely on prior memorized answers alone.\n",
+                + "\nFollow these local procedures with tools; side-path sites "
+                "and search engines are OK. Do not invent answers.\n",
             )
     except Exception:
         pass
@@ -168,41 +182,53 @@ def _build_query(text: str, session_id: str, *, browser: bool = False) -> str:
         try:
             from aipc_agent.browser_sandbox import prompt_hint
 
-            parts.insert(
-                1,
-                prompt_hint()
-                + "\nYou MUST use web_search and/or browser_navigate to obtain "
-                "title and URL before answering. The sandbox is for discovering "
-                "the lookup path, not for guessing.\n",
-            )
+            parts.insert(1, prompt_hint() + "\n")
         except Exception:
             parts.insert(
                 1,
-                "Browser tools available: you MUST use web_search / browser_navigate "
-                "to discover title and URL; do not invent them.\n",
+                "Browser + search available: web_search, or navigate to "
+                "duckduckgo/bing/brave with the query; open any useful result URL.\n",
             )
-    # Optional web_hint: only when no local skill yet (cold start assist).
-    # Disabled by default for Hermes when browser is on — she should learn paths.
-    # Set AIPC_WEB_HINT_HERMES=1 to re-enable inject for debugging.
+    # Multi-engine cold-start (default auto ON). Side paths welcome.
     try:
         from aipc_agent import web_hint
 
-        hermes_hint = os.environ.get("AIPC_WEB_HINT_HERMES", "0") not in (
-            "0",
-            "false",
-            "no",
-            "off",
-        )
-        if hermes_hint and (web_hint.lookup_wants_web(text) or browser) and not has_skill:
-            hints = web_hint.hints_for(text, limit=5)
+        if browser and web_hint.hermes_hint_enabled(has_skill=has_skill, text=text):
+            hints = web_hint.hints_for(text, limit=6)
             if hints:
                 parts.insert(1, hints + "\n")
                 print(
-                    f"aipc-agent hermes: web_hint cold-start chars={len(hints)}",
+                    f"aipc-agent hermes: web_hint multi-engine chars={len(hints)}",
                     flush=True,
                 )
+            else:
+                # Even with empty hits, give explicit engine URLs to open
+                import urllib.parse as _up
+
+                q = _up.quote_plus(text.strip()[:120])
+                parts.insert(
+                    1,
+                    "Search engines (open with browser if web_search empty):\n"
+                    f"- https://duckduckgo.com/?q={q}\n"
+                    f"- https://search.brave.com/search?q={q}\n"
+                    f"- https://www.bing.com/search?q={q}\n"
+                    "Open any useful item page from results. "
+                    "Prefer local skills for site-specific paths already learned "
+                    "on this machine — do not invent titles/cast.\n",
+                )
+                print("aipc-agent hermes: web_hint empty — injected generic engine URLs", flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"aipc-agent hermes: web_hint skip: {exc}", flush=True)
+    # Always teach multi-media listing when tools find images/maps/video/PDF
+    try:
+        from aipc_agent.media_present import presentation_procedure
+
+        tip = presentation_procedure()
+        if tip:
+            parts.insert(1, tip)
+            print("aipc-agent hermes: multi-media presentation injected", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent hermes: media_present skip: {exc}", flush=True)
     if HERMES_USE_MEM0:
         try:
             facts = memory.recall(
@@ -253,6 +279,212 @@ _SESSION_RE = re.compile(
 def _extract_session_id(blob: str) -> str | None:
     m = _SESSION_RE.search(blob or "")
     return m.group(1) if m else None
+
+
+# Capture procedure footprints for async skill learning (not spoken to user).
+_URL_RE = re.compile(r"https?://[^\s\]\)\"'`<>，。、]+", re.I)
+_TRAIL_HINT = re.compile(
+    r"(web_search|browser_|navigate|snapshot|tool[_ ]?call|calling\s+\w+"
+    r"|search(ing)?|fetch|open(ed)?\s+http|goto|click|type\s|playwright"
+    r"|agent-browser|ddg|duckduckgo|google\.|bing\.|curl\s|wget\s)",
+    re.I,
+)
+
+
+def _extract_trail(
+    stdout: str = "",
+    stderr: str = "",
+    *,
+    max_chars: int = 1600,
+    max_urls: int = 12,
+    max_lines: int = 24,
+) -> str:
+    """Compact tool/URL footprint from Hermes logs for skill_learn (async).
+
+    Learning mentor needs *how* the answer was found, not only the spoken
+    reply. No topic keyword gates — only tool/URL shaped lines.
+    """
+    blob = f"{stdout or ''}\n{stderr or ''}"
+    if not blob.strip():
+        return ""
+    urls: list[str] = []
+    seen_u: set[str] = set()
+    def _clean_url(u: str) -> str:
+        return (u or "").rstrip(".,;:)\\\"'")
+
+    for m in _URL_RE.finditer(blob):
+        u = _clean_url(m.group(0))
+        if u in seen_u or not u.startswith("http"):
+            continue
+        seen_u.add(u)
+        urls.append(u)
+        if len(urls) >= max_urls:
+            break
+    lines_out: list[str] = []
+    seen_l: set[str] = set()
+    for raw in blob.splitlines():
+        line = raw.strip()
+        if len(line) < 6 or len(line) > 220:
+            continue
+        low = line.lower()
+        if low.startswith("session id") or low.startswith("session:"):
+            continue
+        if line.startswith("──") or line.startswith("---"):
+            continue
+        if not (_TRAIL_HINT.search(line) or _URL_RE.search(line)):
+            continue
+        key = re.sub(r"\s+", " ", line)[:160]
+        if key in seen_l:
+            continue
+        seen_l.add(key)
+        lines_out.append(key)
+        if len(lines_out) >= max_lines:
+            break
+    parts: list[str] = []
+    if urls:
+        parts.append("URLS:\n" + "\n".join(f"- {u}" for u in urls))
+    if lines_out:
+        parts.append("TOOL_LOG:\n" + "\n".join(f"- {ln}" for ln in lines_out))
+    out = "\n".join(parts).strip()
+    if len(out) > max_chars:
+        out = out[: max_chars - 1] + "…"
+    return out
+
+
+def _merge_trails(*chunks: str, max_chars: int = 2000) -> str:
+    """Merge trail blobs (stdout + session DB + agent.log)."""
+    urls: list[str] = []
+    tools: list[str] = []
+    seen_u: set[str] = set()
+    seen_t: set[str] = set()
+    for ch in chunks:
+        if not (ch or "").strip():
+            continue
+        for m in _URL_RE.finditer(ch):
+            u = m.group(0).rstrip(".,;:)\\\"'")
+            if u not in seen_u and u.startswith("http"):
+                seen_u.add(u)
+                urls.append(u)
+        for raw in ch.splitlines():
+            line = raw.strip().lstrip("- ")
+            if not line or line.upper().startswith("URLS") or line.upper().startswith(
+                "TOOL_LOG"
+            ):
+                continue
+            if _URL_RE.search(line) and line.startswith("http"):
+                continue
+            if _TRAIL_HINT.search(line) or line.startswith("tool "):
+                key = re.sub(r"\s+", " ", line)[:160]
+                if key not in seen_t:
+                    seen_t.add(key)
+                    tools.append(key)
+    parts: list[str] = []
+    if urls:
+        parts.append("URLS:\n" + "\n".join(f"- {u}" for u in urls[:16]))
+    if tools:
+        parts.append("TOOL_LOG:\n" + "\n".join(f"- {t}" for t in tools[:32]))
+    out = "\n".join(parts).strip()
+    if len(out) > max_chars:
+        out = out[: max_chars - 1] + "…"
+    return out
+
+
+def _trail_from_session_db(home: str, session_id: str) -> str:
+    """Read tool calls/results from Hermes state.db before session delete.
+
+    Quiet mode (-Q) suppresses tool previews on stdout; the durable trail for
+    grounding/learn lives in ~/.hermes/state.db messages.
+    """
+    if not session_id:
+        return ""
+    db = Path(home) / ".hermes" / "state.db"
+    if not db.is_file():
+        return ""
+    try:
+        import sqlite3
+
+        uri = f"file:{db}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=3.0)
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent hermes: state.db open fail: {exc}", flush=True)
+        return ""
+    try:
+        rows = conn.execute(
+            "SELECT role, tool_name, tool_calls, content FROM messages "
+            "WHERE session_id = ? ORDER BY id ASC",
+            (session_id,),
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent hermes: state.db query fail: {exc}", flush=True)
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return ""
+    try:
+        conn.close()
+    except Exception:
+        pass
+    blobs: list[str] = []
+    for role, tool_name, tool_calls, content in rows:
+        if tool_name:
+            blobs.append(f"tool {tool_name}")
+        for field in (tool_calls, content):
+            if field:
+                blobs.append(str(field)[:2000])
+    return _extract_trail("\n".join(blobs), "")
+
+
+def _trail_from_agent_log(home: str, session_id: str, *, max_lines: int = 40) -> str:
+    """Fallback: tool lines from ~/.hermes/logs/agent.log for this session id."""
+    if not session_id:
+        return ""
+    log = Path(home) / ".hermes" / "logs" / "agent.log"
+    if not log.is_file():
+        return ""
+    needle = f"[{session_id}]"
+    lines: list[str] = []
+    try:
+        # Read tail only (log can be large)
+        with log.open("rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 400_000))
+            chunk = f.read().decode("utf-8", "replace")
+    except OSError as exc:
+        print(f"aipc-agent hermes: agent.log read fail: {exc}", flush=True)
+        return ""
+    for raw in chunk.splitlines():
+        if needle not in raw:
+            continue
+        # strip timestamp prefix for trail matcher
+        if "] " in raw:
+            body = raw.split("] ", 1)[-1]
+        else:
+            body = raw
+        if _TRAIL_HINT.search(body) or "tool " in body.lower() or _URL_RE.search(body):
+            lines.append(body.strip()[:200])
+            if len(lines) >= max_lines:
+                break
+    return _extract_trail("\n".join(lines), "")
+
+
+def _collect_trail(
+    home: str,
+    *,
+    stdout: str,
+    stderr: str,
+    session_id: str | None,
+) -> str:
+    """Prefer stdout; always merge session DB + agent.log when quiet hides tools."""
+    parts = [
+        _extract_trail(stdout or "", stderr or ""),
+    ]
+    if session_id:
+        parts.append(_trail_from_session_db(home, session_id))
+        parts.append(_trail_from_agent_log(home, session_id))
+    trail = _merge_trails(*parts)
+    return trail
 
 
 def _extract_answer(stdout: str) -> str:
@@ -400,10 +632,14 @@ def run(
     except Exception:
         _task_jobs = None  # type: ignore
 
-    def _push_progress(msg: str, *, thinking: str = "") -> None:
-        msg = (msg or "").strip()[:120]
+    # Stable phase labels — do not rotate every few seconds (causes HUD flash).
+    _phase = {"msg": "Hermes 工具執行中…"}
+
+    def _push_progress(msg: str, *, thinking: str = "", force: bool = False) -> None:
+        msg = (msg or "").strip()[:100]
         if not msg:
             return
+        _phase["msg"] = msg
         if _task_jobs is not None and _task_jobs.current_job_id():
             try:
                 _task_jobs.job_update(msg, thinking=thinking or msg)
@@ -413,32 +649,24 @@ def run(
         if ux_bridge is not None:
             try:
                 elapsed_i = time.monotonic() - t0
-                ux_bridge.progress(f"{msg}（{elapsed_i:.0f}s）", source="hermes")
+                # Fixed prefix + slow-updating elapsed; throttle lives in ux_bridge
+                ux_bridge.progress(
+                    f"{msg} · {elapsed_i:.0f}s",
+                    source="hermes",
+                    force=force,
+                )
             except Exception:
                 pass
 
     stop_tick = threading.Event()
     out_lines: list[str] = []
     err_lines: list[str] = []
-    _push_progress("Hermes 啟動中…", thinking="准备工具与上下文")
+    _push_progress("Hermes 工具執行中…", thinking="准备工具与上下文", force=True)
 
     def _ticker() -> None:
-        phases = (
-            "Hermes 思考中…",
-            "工具執行中…",
-            "還在處理，請稍候…",
-            "整理結果中…",
-        )
-        n = 0
-        while not stop_tick.wait(2.5):
-            n += 1
-            msg = phases[min(n, len(phases) - 1)]
-            # Prefer last interesting log line if we saw one
-            if out_lines:
-                tail = out_lines[-1].strip()
-                if 4 < len(tail) < 80 and not tail.lower().startswith("session"):
-                    msg = tail[:80]
-            _push_progress(msg, thinking=msg)
+        # Slow heartbeat only (elapsed). Real phase changes come from tool lines.
+        while not stop_tick.wait(8.0):
+            _push_progress(_phase["msg"], thinking=_phase["msg"])
 
     tick_thread = threading.Thread(target=_ticker, name="hermes-ux", daemon=True)
     tick_thread.start()
@@ -481,9 +709,19 @@ def run(
                         )
                     )
                     if interesting:
-                        snippet = line.strip()[:80]
-                        if snippet:
-                            _push_progress(snippet, thinking=snippet)
+                        # Human-readable short phase, not raw log spam
+                        low2 = line.lower()
+                        if "browser" in low2 or "navigate" in low2:
+                            snippet = "瀏覽網頁中…"
+                        elif "search" in low2:
+                            snippet = "搜尋中…"
+                        elif "tool" in low2 and "complet" in low2:
+                            snippet = "工具完成，整理中…"
+                        elif "error" in low2:
+                            snippet = "工具出錯，重試中…"
+                        else:
+                            snippet = "工具執行中…"
+                        _push_progress(snippet, thinking=snippet)
             except Exception:
                 pass
 
@@ -532,6 +770,25 @@ def run(
     elapsed = time.monotonic() - t0
     combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
     sid = _extract_session_id(combined)
+    # Collect trail BEFORE ephemeral session delete (quiet mode has no tool stdout)
+    trail = _collect_trail(
+        home,
+        stdout=proc.stdout or "",
+        stderr=proc.stderr or "",
+        session_id=sid,
+    )
+    if trail:
+        print(
+            f"aipc-agent hermes: trail_chars={len(trail)} "
+            f"urls={trail.count('http')} sid={sid!r}",
+            flush=True,
+        )
+    else:
+        print(
+            f"aipc-agent hermes: trail empty sid={sid!r} "
+            f"(quiet stdout has no tools; state.db/agent.log also empty)",
+            flush=True,
+        )
     if HERMES_EPHEMERAL and sid:
         _delete_session(hermes, sid, env, argv_prefix)
 
@@ -544,16 +801,30 @@ def run(
         # Sometimes quiet mode still prints answer on partial failure
         answer = _extract_answer(proc.stdout or "")
         if answer and len(answer) > 8:
+            try:
+                from aipc_agent.grounding import is_ungrounded_lookup
+
+                if is_ungrounded_lookup(text, answer, trail=trail):
+                    return {
+                        "status": "error",
+                        "text": "这次没从网页查到可核实的片名或链接，请稍后再试。",
+                        "detail": f"ungrounded_rc={proc.returncode}",
+                        "trail": trail,
+                    }
+            except Exception:
+                pass
             return {
                 "status": "ok",
                 "text": answer,
                 "detail": f"rc={proc.returncode}",
                 "ephemeral": HERMES_EPHEMERAL,
+                "trail": trail,
             }
         return {
             "status": "error",
             "text": "Hermes 执行失败，请改用文字终端重试。",
             "detail": err[:300],
+            "trail": trail,
         }
 
     answer = _extract_answer(proc.stdout or "")
@@ -571,10 +842,31 @@ def run(
             "detail": f"unusable_answer:{answer[:120]}",
             "ephemeral": HERMES_EPHEMERAL,
             "session_id": sid or "",
+            "trail": trail,
         }
+    # Block invents: product-code questions need trail or item URL evidence
+    try:
+        from aipc_agent.grounding import is_ungrounded_lookup
+
+        if is_ungrounded_lookup(text, answer, trail=trail):
+            print(
+                f"aipc-agent hermes: ungrounded lookup trail={len(trail)} "
+                f"preview={answer[:80]!r}",
+                flush=True,
+            )
+            return {
+                "status": "error",
+                "text": "这次没从网页查到可核实的片名或链接，请稍后再试。",
+                "detail": "ungrounded_lookup",
+                "ephemeral": HERMES_EPHEMERAL,
+                "session_id": sid or "",
+                "trail": trail,
+            }
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent hermes: grounding skip: {exc}", flush=True)
     print(
         f"aipc-agent hermes: ok {elapsed:.1f}s ephemeral={HERMES_EPHEMERAL} "
-        f"sid={sid!r} chars={len(answer)}",
+        f"sid={sid!r} chars={len(answer)} trail={len(trail)}",
         flush=True,
     )
     return {
@@ -583,12 +875,29 @@ def run(
         "detail": f"{elapsed:.1f}s",
         "ephemeral": HERMES_EPHEMERAL,
         "session_id": sid or "",
+        "trail": trail,
     }
 
 
 def self_test() -> None:
     assert _extract_answer("hello\n\nSession ID: abc123xyz") == "hello"
     assert _extract_session_id("Session ID: abc123xyz") == "abc123xyz"
+    sample = (
+        "Calling web_search with query ABC-99\n"
+        "browser_navigate https://example.com/item/ABC-99\n"
+        "Session ID: abc123xyz\n"
+        "Title found; cast listed.\n"
+    )
+    tr = _extract_trail(sample)
+    assert "example.com" in tr
+    assert "web_search" in tr.lower() or "browser_navigate" in tr
+    merged = _merge_trails(
+        "URLS:\n- https://a.example/x\n",
+        "TOOL_LOG:\n- tool browser_navigate\n",
+        "browser_navigate https://b.example/y\n",
+    )
+    assert "a.example" in merged and "b.example" in merged
+    assert _trail_from_session_db("/nonexistent", "nope") == ""
     assert HERMES_VOICE_TIMEOUT < float(os.environ.get("AIPC_VOICE_CHAT_TIMEOUT", "780"))
     assert HERMES_LONG_TIMEOUT >= HERMES_VOICE_TIMEOUT
     print("hermes_bridge self_test: OK")

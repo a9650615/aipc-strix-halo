@@ -67,14 +67,31 @@ def _find_codexbar() -> Optional[str]:
     which = shutil.which("codexbar")
     if which:
         return which
-    home = os.path.expanduser("~")
-    for p in (
-        f"{home}/.local/bin/codexbar",
-        f"{home}/.local/opt/codexbar/CodexBarCLI",
-        "/usr/bin/codexbar",
+    homes = [os.path.expanduser("~")]
+    # Orchestrator often runs as root; look under the desktop user's home.
+    for key in ("AIPC_HERMES_HOME", "AIPC_PRIMARY_HOME"):
+        h = os.environ.get(key) or ""
+        if h and h not in homes:
+            homes.append(h)
+    for u in (
+        os.environ.get("AIPC_PRIMARY_USER"),
+        os.environ.get("AIPC_HERMES_USER"),
+        "birdyo",
     ):
-        if os.path.isfile(p):
-            return p
+        if not u:
+            continue
+        for base in (f"/home/{u}", f"/var/home/{u}"):
+            if base not in homes:
+                homes.append(base)
+    for home in homes:
+        for p in (
+            f"{home}/.local/bin/codexbar",
+            f"{home}/.local/opt/codexbar/CodexBarCLI",
+        ):
+            if os.path.isfile(p):
+                return p
+    if os.path.isfile("/usr/bin/codexbar"):
+        return "/usr/bin/codexbar"
     return None
 
 
@@ -97,6 +114,51 @@ def _cli_provider_ids(ids: Optional[list[str]]) -> Optional[list[str]]:
     return [env] if env else ["codex"]
 
 
+def _desktop_env() -> dict[str, str]:
+    """Env for codexbar when orchestrator runs as root (oauth lives in user home)."""
+    env = os.environ.copy()
+    home = (
+        os.environ.get("AIPC_HERMES_HOME")
+        or os.environ.get("AIPC_PRIMARY_HOME")
+        or ""
+    )
+    user = (
+        os.environ.get("AIPC_PRIMARY_USER")
+        or os.environ.get("AIPC_HERMES_USER")
+        or ""
+    )
+    if not home:
+        for u in (user, "birdyo"):
+            if not u:
+                continue
+            for base in (f"/home/{u}", f"/var/home/{u}"):
+                if os.path.isdir(base):
+                    home = base
+                    user = user or u
+                    break
+            if home:
+                break
+    if home:
+        env["HOME"] = home
+        env["USER"] = user or env.get("USER") or "birdyo"
+        env["LOGNAME"] = env["USER"]
+        # Prefer user local bin for nested tools
+        local_bin = f"{home}/.local/bin"
+        path = env.get("PATH", "/usr/bin")
+        if local_bin not in path.split(":"):
+            env["PATH"] = f"{local_bin}:{path}"
+        try:
+            import pwd
+
+            uid = pwd.getpwnam(env["USER"]).pw_uid
+            xdg = f"/run/user/{uid}"
+            if os.path.isdir(xdg):
+                env["XDG_RUNTIME_DIR"] = xdg
+        except (KeyError, ImportError):
+            pass
+    return env
+
+
 def _from_official_cli(ids: Optional[list[str]]) -> Optional[list]:
     binary = _find_codexbar()
     if not binary:
@@ -113,6 +175,11 @@ def _from_official_cli(ids: Optional[list[str]]) -> Optional[list]:
     ]
     if scope and len(scope) == 1:
         cmd.extend(["--provider", scope[0]])
+    env = _desktop_env()
+    # systemd/root often cannot exec user-home binaries (SELinux); drop privileges.
+    user = env.get("USER") or os.environ.get("AIPC_PRIMARY_USER") or "birdyo"
+    if os.geteuid() == 0 and user and user != "root" and shutil.which("runuser"):
+        cmd = ["runuser", "-u", user, "--", *cmd]
     try:
         proc = subprocess.run(
             cmd,
@@ -120,6 +187,7 @@ def _from_official_cli(ids: Optional[list[str]]) -> Optional[list]:
             text=True,
             timeout=TIMEOUT + 5.0,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

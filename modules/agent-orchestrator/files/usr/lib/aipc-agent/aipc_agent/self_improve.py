@@ -116,6 +116,7 @@ def run_episode_backfill(*, max_items: int = 0, hours: float = 48.0) -> int:
             session_id=str(ep.get("session_id") or ""),
             kind=kind if kind != "daily_assistant" else "daily",
             agent=kind,
+            trail=str(ep.get("learn_trail") or ep.get("trail") or ""),
         )
         seen.add(key)
         if meta:

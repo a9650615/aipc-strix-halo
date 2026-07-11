@@ -52,6 +52,12 @@ STATES: dict[str, tuple[str, str, str, str]] = {
         "low",
         "",
     ),
+    "working": (
+        "AIPC · 工具執行中",
+        "{detail}",
+        "normal",
+        "",
+    ),
     "speaking": (
         "AIPC · 回答中",
         "{detail}",
@@ -59,9 +65,15 @@ STATES: dict[str, tuple[str, str, str, str]] = {
         "",
     ),
     "done": (
-        "AIPC · 待命",
-        "說完了。再說喚醒詞可繼續",
+        "AIPC · 已回答",
+        "{detail}",
         "low",
+        "",
+    ),
+    "followup": (
+        "AIPC · 可接話",
+        "直接說下一句，無需喚醒詞。{detail}",
+        "normal",
         "",
     ),
     "no_speech": (
@@ -104,10 +116,11 @@ _last_ts = 0.0
 _last_notify_key = ""
 _last_notify_ts = 0.0
 # Only these states may raise a native notification bubble.
-# Overlay owns the continuous UX; notify is for rare/urgent only.
-_NOTIFY_ALLOW = frozenset({"error", "no_speech"})
-# When overlay is down, also allow a single "session start" cue.
-_NOTIFY_ALLOW_NO_OVERLAY = frozenset({"error", "no_speech", "wake"})
+# Overlay owns continuous UX; bubbles only for hard failures (not every turn).
+# Long-wait "still thinking" is handled by aipc-voice-once, not per-state spam.
+_NOTIFY_ALLOW = frozenset({"error"})
+# When overlay is down, allow error + no_speech so silent fails aren't invisible.
+_NOTIFY_ALLOW_NO_OVERLAY = frozenset({"error", "no_speech"})
 
 
 @dataclass(frozen=True)
@@ -167,8 +180,16 @@ def write_status(
     *,
     partial: str = "",
     path: Path | None = None,
+    source: str = "voice",
+    priority: int | None = None,
+    label: str = "",
+    hint: str = "",
 ) -> Path:
-    """Write status JSON for overlay + aipc voice status."""
+    """Write status JSON for overlay + aipc voice status.
+
+    `source` / `priority` let multiple widgets share one HUD without fighting
+    forever (see aipc_lib.overlay_api). Voice defaults to high priority.
+    """
     if state not in KNOWN_STATES:
         # allow extension but tag label
         title, body_t = f"AIPC · {state}", "{detail}"
@@ -177,13 +198,19 @@ def write_status(
     p = path or status_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     body = body_t.format(detail=detail or "…") if "{detail}" in body_t else body_t
+    if priority is None:
+        from aipc_lib.overlay_api import DEFAULT_PRIORITY, VOICE_PRIORITY
+
+        priority = VOICE_PRIORITY if source in ("voice", "voice-wake", "voice-once", "") else DEFAULT_PRIORITY
     payload: dict[str, Any] = {
         "state": state,
         "detail": detail,
         "partial": partial or detail,
         "ts": time.time(),
-        "label": title,
-        "hint": body,
+        "label": label or title,
+        "hint": hint or body,
+        "source": source or "voice",
+        "priority": int(priority),
     }
     p.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
     return p
@@ -405,6 +432,56 @@ def overlay_control(action: str, runner=subprocess.run) -> tuple[int, str]:
     )
     msg = (proc.stderr or proc.stdout or "").strip()
     return proc.returncode, msg or action
+
+
+def overlay_api_ping(timeout: float = 1.0) -> tuple[bool, dict]:
+    """Ping live overlay control socket (widget API)."""
+    try:
+        from aipc_lib import overlay_api
+
+        resp = overlay_api.ping(timeout=timeout)
+        return bool(resp.get("ok")), resp
+    except OSError as exc:
+        return False, {"ok": False, "error": str(exc)}
+
+
+def overlay_api_set(
+    state: str,
+    detail: str = "",
+    *,
+    source: str = "widget",
+    priority: int | None = None,
+    partial: str = "",
+    label: str = "",
+) -> tuple[bool, dict]:
+    """Set HUD via overlay RPC; falls back to status file if socket down."""
+    try:
+        from aipc_lib import overlay_api
+
+        pri = priority if priority is not None else overlay_api.DEFAULT_PRIORITY
+        resp = overlay_api.set_status(
+            state,
+            detail,
+            source=source,
+            priority=pri,
+            partial=partial,
+            label=label,
+        )
+        if resp.get("ok"):
+            return True, resp
+        # preempted etc. — still return response
+        return False, resp
+    except OSError:
+        # Fallback: file protocol only
+        write_status(
+            state,
+            detail,
+            partial=partial,
+            source=source,
+            priority=priority,
+            label=label,
+        )
+        return True, {"ok": True, "fallback": "status-file", "state": state}
 
 
 def format_ux_line(st: VoiceStatus | None = None) -> str:

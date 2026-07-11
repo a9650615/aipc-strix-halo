@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Speak text only — CosyVoice/Kokoro TTS path, no mic / STT / LLM.
+
+Sibling of aipc-voice-once for “just say this”:
+  aipc-voice-say '你好，我是語音助手。'
+  echo '任意句子' | aipc-voice-say
+  aipc-voice-say --file note.txt
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+for _p in (
+    Path("/var/lib/aipc-voice/lib"),
+    Path("/usr/lib/aipc-voice"),
+    Path.home() / ".local/lib/aipc-voice",
+):
+    if _p.is_dir():
+        sys.path.insert(0, str(_p))
+
+try:
+    import aipc_voice_tts
+except Exception:  # noqa: BLE001
+    aipc_voice_tts = None
+
+
+def _read_text(args: argparse.Namespace) -> str:
+    if args.file:
+        return Path(args.file).read_text(encoding="utf-8")
+    if args.text is not None:
+        return args.text
+    if args.words:
+        return " ".join(args.words)
+    # Only use pipe when no argv text was given.
+    if not sys.stdin.isatty():
+        return sys.stdin.read()
+    return ""
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="aipc-voice-say",
+        description="TTS only (no think): speak text via CosyVoice clone / Kokoro",
+    )
+    ap.add_argument(
+        "words",
+        nargs="*",
+        help="text to speak (or use --text / --file / stdin)",
+    )
+    ap.add_argument("-t", "--text", default=None, help="text to speak")
+    ap.add_argument("-f", "--file", default=None, help="read text from file")
+    ap.add_argument(
+        "--kokoro",
+        action="store_true",
+        help="force Kokoro (skip CosyVoice clone)",
+    )
+    ap.add_argument(
+        "--cosy",
+        action="store_true",
+        help="force CosyVoice first (default for CJK when prefer-cosyvoice=1)",
+    )
+    ap.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="less stderr",
+    )
+    args = ap.parse_args()
+
+    text = _read_text(args).strip()
+    if not text:
+        print("aipc-voice-say: empty text", file=sys.stderr)
+        return 2
+
+    if aipc_voice_tts is None:
+        print(
+            "aipc-voice-say: aipc_voice_tts missing "
+            "(need /var/lib/aipc-voice/lib or /usr/lib/aipc-voice)",
+            file=sys.stderr,
+        )
+        return 1
+
+    prev_prefer = os.environ.get("AIPC_PREFER_COSYVOICE")
+    prev_force = os.environ.get("AIPC_TTS_FORCE_COSYVOICE")
+    try:
+        if args.kokoro:
+            os.environ["AIPC_PREFER_COSYVOICE"] = "0"
+        elif args.cosy:
+            os.environ["AIPC_PREFER_COSYVOICE"] = "1"
+            # force Cosy even for non-CJK if user asked
+            os.environ["AIPC_TTS_FORCE_COSYVOICE"] = "1"
+
+        if not args.quiet:
+            print(f"aipc-voice-say: speaking ({len(text)} chars)…", flush=True)
+        ok = bool(aipc_voice_tts.speak(text))
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-voice-say: error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if prev_prefer is None:
+            os.environ.pop("AIPC_PREFER_COSYVOICE", None)
+        else:
+            os.environ["AIPC_PREFER_COSYVOICE"] = prev_prefer
+        if prev_force is None:
+            os.environ.pop("AIPC_TTS_FORCE_COSYVOICE", None)
+        else:
+            os.environ["AIPC_TTS_FORCE_COSYVOICE"] = prev_force
+
+    if not ok:
+        print("aipc-voice-say: TTS did not play", file=sys.stderr)
+        return 1
+    if not args.quiet:
+        print("aipc-voice-say: ok", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

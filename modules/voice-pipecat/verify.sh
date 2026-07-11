@@ -19,7 +19,7 @@ check_script() {
     }
 }
 
-for script in aipc-voice-once aipc-voice-bind-hotkey; do
+for script in aipc-voice-once aipc-voice-bind-hotkey aipc-voice-stream; do
     check_script "$script"
 done
 
@@ -54,6 +54,16 @@ python3 -c "import ast; ast.parse(open('$tts').read())" || {
 }
 python3 "$tts" >/dev/null || {
     echo "voice-pipecat: aipc_voice_tts self-test failed" >&2
+    exit 1
+}
+
+stream_lib="$this_dir/files/usr/lib/aipc-voice/aipc_voice_stream.py"
+python3 -c "import ast; ast.parse(open('$stream_lib').read())" || {
+    echo "voice-pipecat: aipc_voice_stream syntax error" >&2
+    exit 1
+}
+python3 "$stream_lib" >/dev/null || {
+    echo "voice-pipecat: aipc_voice_stream self-test failed" >&2
     exit 1
 }
 

@@ -1,9 +1,13 @@
-"""On-box modular skill tree — never under the aipc git checkout.
+"""On-box modular skill tree — machine growth never under the aipc git checkout.
 
-Skills live as folders with SKILL.md + meta.json under configurable roots
-(default: /var/lib/aipc-agent/skills and primary user's ~/.hermes/skills/aipc-learned).
+Roots (default order):
+  1. Writable machine root — path-harvest / self-learn (e.g. /var/lib/aipc-agent/skills)
+  2. Optional user Hermes learned dir
+  3. Read-only **process teaching** skills shipped by aipc
+     (/usr/share/aipc-agent/skills-process) — tool-use procedures only,
+     never domain answers or catalog site seeds.
 
-The aipc project only provides discovery / write / match process.
+The aipc project may maintain process teaching skills; it must not seed titles/cast.
 """
 
 from __future__ import annotations
@@ -18,7 +22,31 @@ from typing import Any
 # Primary writable root for skills grown by this process (image-persistent var).
 DEFAULT_ROOT = Path(os.environ.get("AIPC_SKILL_ROOT", "/var/lib/aipc-agent/skills"))
 
-# Never treat these as skill roots (repo / image source).
+# Shipped teaching skills (tool procedures only). Image path + var fallback
+# (ostree /usr may be read-only; live hotfix can land under /var/lib).
+_PROCESS_CANDIDATES = (
+    os.environ.get("AIPC_SKILL_PROCESS_ROOT", ""),
+    "/usr/share/aipc-agent/skills-process",
+    "/var/lib/aipc-agent/skills-process",
+)
+
+
+def process_skill_roots() -> list[Path]:
+    out: list[Path] = []
+    seen: set[str] = set()
+    for raw in _PROCESS_CANDIDATES:
+        raw = (raw or "").strip()
+        if not raw:
+            continue
+        p = Path(raw)
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+# Never treat these as skill roots (repo checkout / openspec).
 _FORBIDDEN_MARKERS = (
     "/modules/agent-orchestrator",
     "/openspec/",
@@ -39,7 +67,7 @@ def _primary_home() -> Path:
 
 
 def skill_roots() -> list[Path]:
-    """Ordered roots to scan. First is the preferred write target."""
+    """Ordered roots to scan. First is the preferred write target (machine growth)."""
     raw = (os.environ.get("AIPC_SKILL_ROOTS") or "").strip()
     if raw:
         roots = [Path(p).expanduser() for p in raw.split(":") if p.strip()]
@@ -48,6 +76,7 @@ def skill_roots() -> list[Path]:
         roots = [
             DEFAULT_ROOT,
             home / ".hermes" / "skills" / "aipc-learned",
+            *process_skill_roots(),
         ]
     out: list[Path] = []
     for r in roots:
@@ -60,8 +89,24 @@ def skill_roots() -> list[Path]:
 
 
 def write_root() -> Path:
-    roots = skill_roots()
-    root = roots[0]
+    """Always write machine-grown skills under AIPC_SKILL_ROOT (not process share)."""
+    root = DEFAULT_ROOT
+    # If AIPC_SKILL_ROOTS overrides, first path is still the write target
+    raw = (os.environ.get("AIPC_SKILL_ROOTS") or "").strip()
+    if raw:
+        root = Path(raw.split(":")[0].strip()).expanduser()
+    s = str(root.resolve()) if root.exists() else str(root)
+    if any(m in s for m in _FORBIDDEN_MARKERS):
+        print(f"aipc-agent: skill save refused (source tree): {root}", flush=True)
+        raise OSError(f"skill write root forbidden: {root}")
+    # Never write into process teaching trees
+    try:
+        for pr in process_skill_roots():
+            if pr.exists() and root.resolve() == pr.resolve():
+                root = DEFAULT_ROOT
+                break
+    except OSError:
+        pass
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -109,13 +154,15 @@ def read_skill_body(skill: dict[str, Any]) -> str:
 
 
 def match(query: str, *, limit: int = 3) -> list[dict[str, Any]]:
-    """Cheap lexical match over tags/title/triggers (no model required)."""
+    """Cheap lexical match over tags/title/triggers/body (no model required)."""
     q = (query or "").strip().lower()
     if not q:
         return []
     q_tokens = set(re.findall(r"[\w\u4e00-\u9fff]{2,}", q))
+    has_code = bool(re.search(r"[A-Za-z]{2,8}-?\d{2,5}", query or ""))
     scored: list[tuple[float, dict[str, Any]]] = []
     for sk in list_skills():
+        body_snip = read_skill_body(sk)[:1500].lower()
         bag = " ".join(
             [
                 str(sk.get("id") or ""),
@@ -123,6 +170,7 @@ def match(query: str, *, limit: int = 3) -> list[dict[str, Any]]:
                 " ".join(str(t) for t in (sk.get("tags") or [])),
                 " ".join(str(t) for t in (sk.get("triggers") or [])),
                 " ".join(str(t) for t in (sk.get("examples") or [])[:5]),
+                body_snip,
             ]
         ).lower()
         score = 0.0
@@ -132,10 +180,25 @@ def match(query: str, *, limit: int = 3) -> list[dict[str, Any]]:
         # whole query substring
         if len(q) >= 4 and q in bag:
             score += 2.0
-        # code-like tokens (e.g. FNS-232)
-        for m in re.findall(r"[A-Za-z]{2,5}-?\d{2,5}", query or ""):
+        # code-like tokens (e.g. FNS-232) in meta/examples
+        for m in re.findall(r"[A-Za-z]{2,8}-?\d{2,5}", query or ""):
             if m.lower() in bag or m.upper() in bag:
                 score += 3.0
+        # Product-code questions should recall catalog lookup skills even
+        # without that exact code in examples (learned PATH for next codes).
+        # Product-style codes often need tool lookup skills
+        if has_code:
+            for kw in (
+                "lookup",
+                "web",
+                "tools",
+                "product-code",
+                "web_search",
+                "browser_navigate",
+                "procedure",
+            ):
+                if kw in bag:
+                    score += 1.5
         if score > 0:
             scored.append((score, sk))
     scored.sort(key=lambda x: (-x[0], -float(x[1].get("updated_ts") or 0)))
@@ -174,18 +237,21 @@ def save_skill(
     session_id: str = "",
     skill_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Write a modular skill folder under the primary local root."""
+    """Write a modular skill folder under the machine skill root only."""
     title = (title or "").strip() or "learned-skill"
     body = (body or "").strip()
     if len(body) < 40:
         return None
-    # Refuse writing into source tree even if env mis-set
-    root = write_root()
-    root_s = str(root.resolve()) if root.exists() else str(root)
-    if any(m in root_s for m in _FORBIDDEN_MARKERS):
-        print(f"aipc-agent: skill save refused (source tree): {root}", flush=True)
+    try:
+        root = write_root()
+    except OSError as exc:
+        print(f"aipc-agent: skill save refused: {exc}", flush=True)
         return None
     sid = skill_id or _safe_slug(title)
+    # Never overwrite process teaching skills with harvest
+    if sid == "web-tool-use" or (source or "").startswith("aipc-process"):
+        print(f"aipc-agent: refuse clobber process teaching skill id={sid}", flush=True)
+        return None
     # merge if exists
     dest = root / sid
     dest.mkdir(parents=True, exist_ok=True)

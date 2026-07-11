@@ -2,7 +2,7 @@
 
 ### Requirement: LiteLLM Gateway Is The Single OpenAI-Compatible Endpoint
 
-The LiteLLM container SHALL bind to `127.0.0.1:4000` and expose OpenAI-compatible + Anthropic-compatible surfaces. Every AI consumer (dev tools, agents, voice pipeline, scripts) SHALL address models by alias through this endpoint. Direct calls to vendor endpoints (Anthropic, OpenAI, Google) are permitted ONLY inside `modules/llm-litellm/` itself, where LiteLLM proxies them under the `-cloud`-suffixed aliases defined by this change.
+The LiteLLM container SHALL bind to `127.0.0.1:4000` and expose OpenAI-compatible + Anthropic-compatible surfaces. Every AI consumer (dev tools, agents, voice pipeline, scripts) SHALL address models by alias through this endpoint. Direct calls to vendor endpoints (Anthropic, OpenAI, Google) are permitted ONLY inside `modules/llm-litellm/` itself, where LiteLLM proxies them under the `-cloud`-suffixed aliases defined by this change. Whether assistant traffic automatically selects a cloud alias SHALL remain outside this change's authority (owned by `0002-assistant-intelligence-routing`); this change only provisions cloud aliases and credentials.
 
 The gateway SHALL serve BOTH sets of aliases from the same endpoint:
 

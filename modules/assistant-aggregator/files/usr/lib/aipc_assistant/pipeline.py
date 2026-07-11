@@ -192,7 +192,7 @@ def status_dict() -> dict:
         "ready_online": report.ready_online,
         "npu_first": True,
         "backend_local": {
-            "mode": "auto (NPU resident-small first, agent :4100 fallback)",
+            "mode": "capability-first (tools/live → agent :4100; pure chat → NPU)",
             "npu_ok": npu_ok,
             "npu_detail": npu_detail,
             "agent_url": "http://127.0.0.1:4100/chat (optional, runtime local_backend.mode=agent|auto)",

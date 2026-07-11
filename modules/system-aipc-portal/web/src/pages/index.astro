@@ -1,0 +1,46 @@
+---
+import App from "../layouts/App.astro";
+---
+<App>
+  <section id="home" class="hero"><p class="eyebrow">LOCAL · 127.0.0.1</p><h1>Control Center</h1><p id="summary">Loading current system state…</p><button id="baseline">Start baseline</button></section>
+  <section class="grid" aria-label="System overview">
+    <article id="platform"><p class="eyebrow">AI MAX+ 395</p><h2>Platform</h2><p>Waiting for telemetry</p></article>
+    <article id="device"><p class="eyebrow">Z13 FLOW · LIVE I/O</p><h2>Device</h2><svg viewBox="0 0 320 180" role="img" aria-label="Z13 Flow chassis map"><path d="M66 28h188l24 124H42z"/><circle id="command-button" cx="266" cy="80" r="10"/><circle id="dock" cx="60" cy="118" r="10"/></svg><p>Waiting for device state</p></article>
+    <article id="npu"><p class="eyebrow">XDNA NPU</p><h2>NPU activity</h2><p>Waiting for NPU state</p></article>
+    <article id="ai"><p class="eyebrow">VOICE &amp; AGENT</p><h2>Runtime</h2><p>Waiting for service state</p></article>
+    <article id="services"><p class="eyebrow">SERVICES</p><h2>Managed services</h2><ul></ul></article>
+    <article id="automation"><p class="eyebrow">LIVE WORK</p><h2>Automation</h2><ul></ul></article>
+  </section>
+  <script>
+    const show = (id, text) => document.querySelector(`#${id} p:last-child`).textContent = text;
+    const post = async (path) => { await fetch(path, { method: "POST" }); refresh(); };
+    async function refresh() {
+      try {
+        const data = await fetch("/api/v1/dashboard").then((r) => r.ok ? r.json() : Promise.reject(r.status));
+        show("platform", data.platform?.summary || "Unavailable");
+        const ports = data.device?.io?.ports || [];
+        show("device", `${data.device?.summary || data.device?.detail || "Unavailable"} · ${ports.filter((p) => p.state === "connected").length}/${ports.length} Type-C connected`);
+        show("npu", data.npu?.summary || "Unavailable");
+        show("ai", data.runtime?.summary || "Unavailable");
+        document.querySelector("#services ul").replaceChildren(...(data.services || []).map((s) => {
+          const row = document.createElement("li"); row.textContent = `${s.title}: ${s.state} `;
+          const button = Object.assign(document.createElement("button"), { textContent: "Start" });
+          button.onclick = () => post(`/services/${s.id}/start`); row.append(button); return row;
+        }));
+        document.querySelector("#automation ul").replaceChildren(...(data.automation || []).map((job) => {
+          const row = document.createElement("li"); row.textContent = `${job.provider || "automation"}: ${job.state || "unknown"} `;
+          const button = Object.assign(document.createElement("button"), { textContent: "Cancel" });
+          button.onclick = () => post(`/automation/${job.task_id}/cancel`); row.append(button); return row;
+        }));
+        document.querySelector("#summary").textContent = data.summary || "System state updated";
+      } catch { document.querySelector("#summary").textContent = "Dashboard data unavailable"; }
+    }
+    refresh(); setInterval(refresh, 5000);
+    const events = new EventSource("/api/v1/device/events");
+    events.onmessage = ({ data }) => {
+      const device = JSON.parse(data);
+      show("device", device.summary || device.detail || "Unavailable");
+    };
+    document.querySelector("#baseline").onclick = () => post("/ops/baseline/start");
+  </script>
+</App>

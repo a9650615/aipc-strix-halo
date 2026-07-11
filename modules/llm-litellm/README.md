@@ -12,12 +12,11 @@ agent tools, scripts).
 
 ## Model namespace (public API surface)
 
-`resident-small`, `coder-agentic`, `ornith-35b`, experimental
-`qwen35-122b-q3`, plus the cloud aliases (`main-cloud`, `coder-cloud`,
+`resident-small`, `coder-agentic`, `ornith-35b`, `assistant-gemma`,
+`qwythos-9b`, `vlm-*`, plus the cloud aliases (`main-cloud`, `coder-cloud`,
 `thinking-cloud`, `gpt4o-cloud`, `gemini-cloud`) — see `llm-models`.
-Trimmed 2026-07-04 to a small deliberate set; `qwen35-122b-q3` is a
-2026-07-06 experiment and must prove load, speed, and tool-call behavior
-before it becomes a default.
+`qwen35-122b-q3` was retired 2026-07-11 (weights deleted; too heavy for
+comfortable UMA use; avoid dual-backend giants).
 
 Adding a new logical model = a LiteLLM config entry, nothing else.
 

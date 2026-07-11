@@ -1,0 +1,11 @@
+id: agent-activity
+title: Agent Activity（進行中會話）
+module: agent-orchestrator
+kind: agent
+systemd: aipc-agent-orchestrator.service
+health: http://127.0.0.1:4100/activity
+endpoint: http://127.0.0.1:4100/sessions
+tags:
+  - agent
+  - session
+  - activity

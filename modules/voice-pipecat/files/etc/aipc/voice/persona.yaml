@@ -1,4 +1,7 @@
 name: ""  # set at firstboot
 clone_wav: /var/lib/aipc-voice/persona/clone.wav
+# Active voice pack: aipc-voice-template apply <id>
+# Packs live under /var/lib/aipc-voice/persona/templates/<id>/
+active_template: ""  # mirrored in persona/active.json at runtime
 tts_prefer: cosyvoice  # cosyvoice|kokoro
 kokoro_voice_zh: zf_xiaoyi

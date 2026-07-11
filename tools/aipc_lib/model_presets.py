@@ -10,13 +10,16 @@ docs/voice-pipeline.md and docs/architecture.md Phase 3.
   - mem0            (memory — outside this module)
   - portal          (manage UI — outside this module)
 
-Role layer (heavy, exclusive with each other; optional on top of the loop):
+Role layer (heavy; optional on top of the loop):
   - agent: Lemonade Vulkan agent LLMs (qwythos / coder-agentic / ornith / …)
-  - 122b:  Ollama qwen35-122b-q3 (~81GB) — cannot co-reside with agent Vulkan
+
+The former 122b preset (Ollama Qwen3.5-122B ~81GB) was retired 2026-07-11:
+too hard to run on this UMA box, weights deleted, and we no longer keep
+giant models on a second backend.
 
 Voice-priority coexistence:
-  - voice (and free): unload Vulkan giants + Ollama so Cosy ROCm TTS / UMA
-    stop thrashing with agent LLMs; NPU resident-small + STT/TTS units stay.
+  - voice (and free): unload Vulkan giants so Cosy ROCm TTS / UMA stop
+    thrashing with agent LLMs; NPU resident-small + STT/TTS units stay.
 
 `aipc models use` only plans LLM unload/warm. The closed loop (STT/TTS/
 mem0/portal + NPU resident-small) stays up regardless of preset.
@@ -32,20 +35,15 @@ from aipc_lib.models import ModelEntry
 PRESETS: dict[str, str] = {
     "agent": (
         "Agent hybrid: qwythos-9b chat+classify (small Mythos, no-filter "
-        "routing); coder-agentic uncensored Hermes/tools. Unloads 122B. "
+        "routing); coder-agentic uncensored Hermes/tools. "
         "NPU resident-small optional. SenseVoice+Kokoro+mem0 stay."
     ),
-    "122b": (
-        "Dev/coding role: giant Qwen3.5-122B on Ollama. Unloads Lemonade "
-        "Vulkan agent LLMs; keeps NPU resident-small. Baseline STT/TTS/mem0 "
-        "stay as services."
-    ),
     "free": (
-        "Unload heavy role LLMs (Ollama giants + Lemonade Vulkan). "
+        "Unload heavy role LLMs (any leftover Ollama + Lemonade Vulkan). "
         "Keeps NPU resident-small; baseline voice/mem0 services untouched."
     ),
     "voice": (
-        "Voice-priority: same unloads as free (Vulkan agent + Ollama giants) "
+        "Voice-priority: same unloads as free (Vulkan agent + any Ollama) "
         "so Cosy ROCm/iGPU TTS and UMA are not thrashing with heavy LLMs. "
         "Keeps NPU resident-small; never stops STT/TTS/mem0 services."
     ),
@@ -55,10 +53,12 @@ PRESETS: dict[str, str] = {
 VOICE_SAFE_PRESETS = frozenset({"free", "voice"})
 
 # Aliases treated as "giant" Ollama models for agent/free switches.
-GIANT_OLLAMA_ALIASES = frozenset({"qwen35-122b-q3"})
+# Empty after 2026-07-11 retirement of qwen35-122b-q3; kept as a hook if
+# another exclusive Ollama giant is added later.
+GIANT_OLLAMA_ALIASES = frozenset()
 
 # Lemonade aliases never torn down for role switches (baseline NPU small).
-LEMONADE_KEEP_ON_122B = frozenset({"resident-small"})
+LEMONADE_KEEP = frozenset({"resident-small"})
 
 
 @dataclass(frozen=True)
@@ -86,9 +86,9 @@ class SwitchPlan:
 
 
 def _is_lemonade_keep(entry: ModelEntry) -> bool:
-    if entry.alias in LEMONADE_KEEP_ON_122B:
+    if entry.alias in LEMONADE_KEEP:
         return True
-    # FLM/NPU models must not be torn down for 122B (different backend budget).
+    # FLM/NPU models must not be torn down (different backend budget).
     mid = entry.model_id.lower()
     return "flm" in mid or mid.endswith("-npu")
 
@@ -133,6 +133,11 @@ def plan_switch(
             e = by_alias.get(alias)
             if e is not None:
                 maybe_unload(e)
+        # Also unload any non-giant ollama leftovers so agent role is
+        # Lemonade-only (one backend per heavy model).
+        for e in by_alias.values():
+            if e.backend == "ollama":
+                maybe_unload(e)
         notes.append(
             "Warm qwythos-9b for uncensored chat+classify (~0.2s hot). "
             "Hermes tools: coder-agentic. NPU resident-small still available."
@@ -144,20 +149,6 @@ def plan_switch(
                     alias=agent.alias, backend=agent.backend, model_id=agent.model_id
                 )
                 break
-
-    elif preset == "122b":
-        for e in by_alias.values():
-            if e.backend == "lemonade" and not _is_lemonade_keep(e):
-                maybe_unload(e)
-        # Also unload other ollama models that aren't the giant (rare).
-        giant = by_alias.get("qwen35-122b-q3")
-        for e in by_alias.values():
-            if e.backend == "ollama" and e.alias not in GIANT_OLLAMA_ALIASES:
-                maybe_unload(e)
-        if giant is not None:
-            warm = WarmAction(alias=giant.alias, backend=giant.backend, model_id=giant.model_id)
-        notes.append("Prefer LiteLLM alias qwen35-122b-q3.")
-        notes.append("NPU resident-small is left alone if loaded.")
 
     elif preset in VOICE_SAFE_PRESETS:
         for e in by_alias.values():
@@ -172,7 +163,7 @@ def plan_switch(
         if preset == "voice":
             notes.append(
                 "Voice-priority: frees APU/UMA from Lemonade Vulkan + Ollama "
-                "giants so Cosy ROCm TTS (when DEVICE=cuda) can run without "
+                "so Cosy ROCm TTS (when DEVICE=cuda) can run without "
                 "thrashing agent LLMs. Prefer before long Cosy clone sessions."
             )
             notes.append(

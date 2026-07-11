@@ -1,0 +1,1 @@
+"""Audio front gate package."""

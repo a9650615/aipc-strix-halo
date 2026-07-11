@@ -46,8 +46,12 @@ models:
   # Registered id (OpenAI model field / list --downloaded) drops the user.
   # prefix, matching Ornith. Then:
   #   lemonade load Qwen3.6-35B-A3B-Uncensored-Aggressive-Q4_K_P \
-  #     --llamacpp vulkan --ctx-size 262144 \
+  #     --llamacpp vulkan --ctx-size 131072 \
   #     --llamacpp-args "-np 4 -kvu" --save-options
+  # Default recipe on this machine: ctx 131072 (was 32768 — agentic tool
+  # loops hit the wall). Card max 262144; use that only if you need full
+  # window and accept heavier KV / slower long prefills. Always pair
+  # explicit -np with -kvu (see llm-lemonade README concurrency section).
   # Qwen3.6 hybrid thinking: coding/tool consumers should pass
   # enable_thinking=false (see litellm config extra_body).
   - alias: coder-agentic
@@ -113,20 +117,10 @@ models:
     model_id: Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M
     size_gb: 5.6
 
-  # Giant local coding model — Qwen3.5-122B-A10B MoE on Ollama Vulkan.
-  # Moved from Lemonade 2026-07-07 (slot-tracking bug with max_loaded_models=2).
-  #
-  # 2026-07-09 optimized tag qwen3.5:122b-aipc (same Q4_K_M weights ~81GB,
-  # not Q3 despite the historical alias name):
-  #   - num_ctx 65536 (default 262k wastes KV / slows prefill on 128GB UMA)
-  #   - coding sampling (temp 0.6), num_predict 8192, num_batch 512
-  #   - keep_alive 15m in litellm (was 0m = full 81GB reload every request)
-  # Unload Lemonade Vulkan LLMs before loading this (~81GB) or load fails /
-  # thrashing. NPU resident-small is fine to leave.
-  - alias: qwen35-122b-q3
-    backend: ollama
-    model_id: qwen3.5:122b-aipc
-    size_gb: 81.4
+  # qwen35-122b-q3 (Qwen3.5-122B on Ollama, ~81GB) retired 2026-07-11:
+  # hard to run comfortably on this UMA box, weights deleted from
+  # ~/aipc-models/blobs, and we avoid dual-backend copies of giant models.
+  # Re-add only after hardware-proving a single backend path.
 
   - alias: main-cloud
     backend: anthropic
