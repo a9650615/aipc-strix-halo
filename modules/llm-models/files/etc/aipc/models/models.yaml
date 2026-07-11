@@ -46,6 +46,7 @@ models:
     backend: lemonade
     model_id: Gemma4-E2B-it-qat-UD-Q4_K_XL
     size_gb: 2.4
+    idle_unload_after_s: 300
 
   # Tool-call / agentic default (2026-07-09 trial): HauhauCS Qwen3.6-35B-A3B
   # Aggressive uncensored Q4_K_P on Lemonade llamacpp:vulkan.
