@@ -262,11 +262,18 @@ def submit(
     fn: Callable[[], dict[str, Any]],
     *,
     plan_summary: str = "",
+    grace_s: float = 0.0,
 ) -> dict[str, Any]:
     """Run ``fn`` in a daemon thread. Returns spoken ack + job_id immediately.
 
     ``fn`` must return ``{status, text, detail?}`` like other bridges.
     While running, ``current_job_id()`` is set so workers can ``job_update``.
+
+    ``grace_s > 0``: wait up to ``grace_s`` seconds for ``fn`` to finish before
+    falling back to the async ack. If it finishes in time, return its full
+    result dict unchanged (as an inline call would) and suppress the
+    background completion notify/memory-internalize for this job — the
+    caller already got the answer synchronously and will handle it itself.
     """
     job_id = str(uuid.uuid4())[:12]
     started = time.time()
@@ -316,6 +323,9 @@ def submit(
         pass
 
     stop_hb = threading.Event()
+    result_ready = threading.Event()
+    claim_done = threading.Event()
+    raw_result_box: dict[str, Any] = {}
 
     def _heartbeat() -> None:
         phases = (
@@ -356,6 +366,7 @@ def submit(
         finally:
             stop_hb.set()
             _CURRENT_JOB_ID.reset(token)
+        raw_result_box["result"] = result
         status = str(result.get("status") or "error")
         answer = str(result.get("text") or "").strip() or "长任务已结束。"
         with _JOBS_LOCK:
@@ -382,7 +393,19 @@ def submit(
                 "last_progress": answer[:120],
                 "progress": prog[-_PROGRESS_MAX:],
                 "plan_summary": prev.get("plan_summary") or "",
+                "delivered_inline": prev.get("delivered_inline", False),
             }
+        if grace_s > 0:
+            # Give the grace-waiter in submit() a brief window to claim
+            # inline delivery before we decide whether to notify.
+            result_ready.set()
+            claim_done.wait(timeout=0.2)
+        with _JOBS_LOCK:
+            delivered = bool((_JOBS.get(job_id) or {}).get("delivered_inline"))
+        if delivered:
+            # Answer already went back synchronously to the caller; no
+            # duplicate HUD notify / memory-internalize for this job.
+            return
         title = "AIPC · 长任务完成" if status == "ok" else "AIPC · 长任务结束"
         try:
             from aipc_agent import activity
@@ -428,6 +451,15 @@ def submit(
 
     threading.Thread(target=_heartbeat, name=f"task-hb-{job_id}", daemon=True).start()
     threading.Thread(target=_worker, name=f"task-job-{worker}-{job_id}", daemon=True).start()
+
+    if grace_s > 0 and result_ready.wait(grace_s):
+        with _JOBS_LOCK:
+            j = _JOBS.get(job_id)
+            if j is not None:
+                j["delivered_inline"] = True
+        claim_done.set()
+        return dict(raw_result_box.get("result") or {"status": "error", "text": ""})
+
     try:
         from aipc_agent import ux_bridge
 

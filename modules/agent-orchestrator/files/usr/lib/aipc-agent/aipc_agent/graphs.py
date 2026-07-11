@@ -218,6 +218,9 @@ _LONG_MODE_MARKERS = (
 )
 # Workers that can run as background long jobs
 _LONG_CAPABLE = frozenset({"hermes", "daily_assistant"})
+# A Hermes turn that starts inline (mode=short) but runs longer than this
+# auto-detaches to the background flow instead of blocking the mic.
+DETACH_S = float(os.environ.get("AIPC_ASYNC_DETACH_S", "45"))
 # Substrings that imply tool/code agent work (not creative writing).
 # Live web / research style tasks hermes handles better than daily
 # (SearXNG may be down; hermes browser path is hardware-verified for stocks).
@@ -854,7 +857,14 @@ def _hermes_node(state: SupervisorState) -> SupervisorState:
         )
     except Exception:
         pass
-    result = _run()
+    # Auto-detach: starts inline, but a turn that runs past DETACH_S falls
+    # back to the background flow (short ack, mic freed, notify on finish)
+    # exactly like the explicit mode=long path — no marker required.
+    result = task_jobs.submit(
+        "hermes", text_in, sid, _run, plan_summary=plan_sum, grace_s=DETACH_S
+    )
+    if result.get("detail") == "background":
+        return {"text": result.get("text", ""), "session_id": sid}
     text = str(result.get("text") or "").strip() or "Hermes 没有返回内容。"
     trail = str(result.get("trail") or "").strip()
     ok = result.get("status") == "ok" and bool(text)
