@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -57,8 +58,11 @@ def loaded_models() -> list[dict[str, object]]:
 
 
 def npu_snapshot(models: list[dict[str, object]], device: Path = NPU_DEVICE) -> dict[str, object]:
+    service = subprocess.run(
+        ["systemctl", "is-active", "lemonade.service"], capture_output=True, text=True, check=False
+    ).stdout.strip() or "unknown"
     if not device.exists():
-        return {"availability": "unavailable", "summary": "XDNA NPU device not found", "models": []}
+        return {"availability": "unavailable", "summary": "XDNA NPU device not found", "service": service, "models": []}
     names = [
         str(row.get("model_name") or row.get("name") or "unknown")
         for row in models
@@ -67,6 +71,8 @@ def npu_snapshot(models: list[dict[str, object]], device: Path = NPU_DEVICE) -> 
     return {
         "availability": "available",
         "summary": "NPU ready; active model: " + (", ".join(names) if names else "none identified"),
+        "service": service,
+        "activity": "inference model identified" if names else "model activity unavailable; Lemonade health may be busy or timed out",
         "models": names,
     }
 
