@@ -25,6 +25,7 @@
 - [ ] 4.3 On any stage failure: `stream_fallback` → invoke batch `aipc-voice-once --wav`
 - [ ] 4.4 Barge-in: cancel player + abort stream client; UX back to listening; master volume unchanged
 - [ ] 4.5 Self-test / static verification without mic where possible
+- [x] 4.6 Instrument the stream turn with the voice-telemetry `TurnTimer` (path=stream: capture_end/llm_request/llm_first_token/tts_request/first-audio → perceived/llm_ttft/tts_ttfa), flushed on a successful streamed turn so §7.3 TTFA-vs-batch is measurable; stream_fallback lets aipc-voice-once record its own batch turn (render-verified)
 
 ## 5. Wake Integration
 

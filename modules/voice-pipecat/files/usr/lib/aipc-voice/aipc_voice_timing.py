@@ -84,6 +84,14 @@ class TurnTimer:
         self._marks[stage] = time.monotonic_ns() if ns is None else int(ns)
         return self
 
+    def mark_once(self, stage: str, ns: int | None = None) -> "TurnTimer":
+        """Mark only the first time — for first-token / first-audio events that
+        fire repeatedly (and possibly from a TTS worker thread). A benign race
+        on the dict is fine: worst case one stage is marked a few µs late."""
+        if stage not in self._marks:
+            self.mark(stage, ns)
+        return self
+
     def context(self, **labels: object) -> "TurnTimer":
         for key, value in labels.items():
             if key in _LABELS and value is not None:
@@ -140,6 +148,9 @@ def _self_test() -> int:
     assert rec["llm_ttft_ms"] is None
     assert rec["tts_backend"] == "kokoro" and rec["preset"] == "voice"
     assert "LEAK" not in json.dumps(rec)
+    # mark_once keeps the first value
+    tt.mark_once("play_start", ns=999 * ms)
+    assert tt._marks["play_start"] == 200 * ms
     # disabled → no write, no raise
     os.environ["AIPC_VOICE_TIMING"] = "0"
     assert tt.flush(path="/nonexistent/should-not-write.jsonl") is None

@@ -44,6 +44,10 @@ try:
     import aipc_voice_ux as voice_ux
 except Exception:
     voice_ux = None
+try:
+    import aipc_voice_timing
+except Exception:
+    aipc_voice_timing = None
 
 STT_URL = os.environ.get("AIPC_VOICE_STT_URL", "http://127.0.0.1:9001/transcribe")
 CHAT_STREAM_URL = os.environ.get(
@@ -173,6 +177,7 @@ def run_stream_turn(
     session_id: str,
     speak=None,
     stream_events=None,
+    timer=None,
 ) -> tuple[bool, str]:
     """Drive SSE → sentence TTS. Returns (ok, full_reply_or_error)."""
     if stream_mod is None:
@@ -183,7 +188,17 @@ def run_stream_turn(
     saw_done = False
     error_msg = ""
 
+    def _mark(stage: str) -> None:
+        if timer is not None:
+            try:
+                timer.mark_once(stage)
+            except Exception:
+                pass
+
     def _speak(t: str) -> bool:
+        # First real chunk about to play → first audible sound of the turn.
+        _mark("play_start")
+        _mark("tts_first_audio")
         if speak is not None:
             return bool(speak(t))
         if tts_mod is None:
@@ -201,6 +216,7 @@ def run_stream_turn(
     tts_q.start()
 
     try:
+        _mark("llm_request")
         events_iter = (
             stream_events
             if stream_events is not None
@@ -214,11 +230,13 @@ def run_stream_turn(
                 piece = str(ev.get("text") or "")
                 if not piece:
                     continue
+                _mark("llm_first_token")
                 full_parts.append(piece)
                 buffer += piece
                 _ux("thinking", "".join(full_parts)[-80:], force=False)
                 chunks, buffer = stream_mod.feed_sentence_chunks(buffer)
                 for ch in chunks:
+                    _mark("tts_request")
                     tts_q.enqueue(ch)
             elif kind == "error":
                 error_msg = str(ev.get("message") or "upstream_error")
@@ -228,12 +246,14 @@ def run_stream_turn(
                 saw_done = True
                 final = str(ev.get("text") or "").strip()
                 if final and not full_parts:
+                    _mark("llm_first_token")  # non-streamed reply arrived whole
                     full_parts.append(final)
                     buffer = final
                 chunks, buffer = stream_mod.feed_sentence_chunks(
                     buffer, flush=True
                 )
                 for ch in chunks:
+                    _mark("tts_request")
                     tts_q.enqueue(ch)
             elif kind == "session_id":
                 continue
@@ -268,6 +288,18 @@ def main(argv=None) -> int:
 
     _ux("thinking", "stream", force=True)
 
+    # Stream turn latency (voice-telemetry). capture_end ≈ now: wake already
+    # finished capture and handed off --wav/--text. Recorded only on a real
+    # streamed turn; a stream_fallback lets aipc-voice-once record its own
+    # batch turn instead. Best-effort — never affects the turn.
+    timer = None
+    if aipc_voice_timing is not None:
+        try:
+            timer = aipc_voice_timing.TurnTimer(path="stream")
+            timer.mark("capture_end")
+        except Exception:
+            timer = None
+
     text = (args.text or "").strip()
     if not text:
         try:
@@ -300,8 +332,13 @@ def main(argv=None) -> int:
         _ux("done", (local or "")[:80], force=True)
         return 0
 
-    ok, detail = run_stream_turn(text=text, session_id=args.session_id)
+    ok, detail = run_stream_turn(text=text, session_id=args.session_id, timer=timer)
     if ok:
+        if timer is not None:
+            try:
+                timer.flush()
+            except Exception:
+                pass
         print(f"aipc-voice-stream: ok reply={detail[:120]!r}", flush=True)
         _ux("done", detail[:80], force=True)
         return 0
@@ -338,6 +375,25 @@ def _self_test() -> int:
     assert "你好" in full
     assert spoken, "expected TTS chunks"
     assert build_parser().parse_args(["--self-test"]).self_test is True
+
+    # Timing marks populate for a streamed turn (llm_ttft / tts_ttfa non-null).
+    if aipc_voice_timing is not None:
+        tt = aipc_voice_timing.TurnTimer(path="stream")
+        tt.mark("capture_end")
+        ok2, _ = run_stream_turn(
+            text="hi",
+            session_id="voice-selftest",
+            speak=lambda t: True,
+            stream_events=iter(list(events)),
+            timer=tt,
+        )
+        assert ok2
+        rec = tt.record(ts=None)
+        assert rec["path"] == "stream"
+        assert rec["llm_ttft_ms"] is not None
+        assert rec["tts_ttfa_ms"] is not None
+        assert rec["perceived_ms"] is not None
+
     print("aipc-voice-stream: self-test OK")
     return 0
 
