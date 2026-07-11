@@ -50,7 +50,17 @@ if [ -f "$CFG" ]; then
   # /usr/lib/aipc/llm-lemonade/configure-lemonade.sh's mtime/content against
   # this repo file, see docs/live-hotfix-workflow.md) rather than a real
   # 10.8.1 schema change requiring a new key.
-  jq '.max_loaded_models = 8 | .enable_dgpu_gtt = true | .llamacpp.backend = "vulkan" | .global_timeout = 600' "$CFG" > "$tmp"
+  #
+  # 8 -> 4 (hardware-verified OOM 2026-07-11 22:49): with 8 slots nothing
+  # ever evicts, so LLMs accumulate — observed 5 resident (35B + 26B +
+  # VL-7B + E2B + NPU FLM) = 60 GiB GTT; with ComfyUI alongside, RAM hit
+  # 121/121 + swap 15/15 full and the kernel OOM killer fired
+  # (llama-server invoked oom-killer). 4 = pinned NPU FLM + coder-agentic
+  # (35B) + coder-compact (E2B) + one floating slot (ornith-35b advisor /
+  # vlm / daily); a 5th load LRU-evicts the floater (~5-12s reload) instead
+  # of OOMing the box. Derive this number from the memory budget, never
+  # set it "generously".
+  jq '.max_loaded_models = 4 | .enable_dgpu_gtt = true | .llamacpp.backend = "vulkan" | .global_timeout = 600' "$CFG" > "$tmp"
   mv "$tmp" "$CFG"
 fi
 
