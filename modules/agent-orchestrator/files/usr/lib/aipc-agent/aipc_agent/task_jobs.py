@@ -11,7 +11,9 @@ overlay and "任务进度" can show *what* is being thought / done.
 from __future__ import annotations
 
 import contextvars
+import json
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -46,6 +48,49 @@ def worker_label(worker: str) -> str:
 
 def current_job_id() -> str | None:
     return _CURRENT_JOB_ID.get()
+
+
+def _store_path() -> str:
+    # Read fresh each call (not cached at import) so tests can monkeypatch
+    # AIPC_TASK_JOBS_STORE per-test even though this module is imported once.
+    return os.environ.get("AIPC_TASK_JOBS_STORE", "/var/lib/aipc-agent/task_jobs.json")
+
+
+def _load_store() -> None:
+    """Populate _JOBS from disk. Best-effort — a read failure never crashes a turn."""
+    path = _store_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent task_jobs: store load failed ({path}): {exc}", flush=True)
+        return
+    if not isinstance(data, dict):
+        return
+    with _JOBS_LOCK:
+        _JOBS.update(data)
+
+
+def _save_store_locked() -> None:
+    """Atomic write of _JOBS to disk. Caller must hold _JOBS_LOCK."""
+    path = _store_path()
+    try:
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        tmp = f"{path}.tmp{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_JOBS, f)
+        os.replace(tmp, path)
+    except Exception as exc:  # noqa: BLE001 — persistence must never break a turn
+        print(f"aipc-agent task_jobs: store save failed ({path}): {exc}", flush=True)
+
+
+# Populate the in-memory cache from any prior run so job_list/format_status_speech
+# survive an orchestrator restart.
+_load_store()
 
 
 def _primary_user_home() -> tuple[str, str]:
@@ -194,6 +239,7 @@ def job_update(
                 prog = prog[-_PROGRESS_MAX:]
             j["progress"] = prog
         _JOBS[jid] = j
+        _save_store_locked()
     if push_ux:
         try:
             from aipc_agent import ux_bridge
@@ -233,9 +279,20 @@ def job_update(
             pass
 
 
-def format_status_speech(limit: int = 5) -> str:
-    """Spoken / text summary for voice「任务进度」."""
-    jobs = job_list(limit=limit)
+def format_status_speech(limit: int = 5, sid: str | None = None) -> str:
+    """Spoken / text summary for voice「任务进度」.
+
+    When ``sid`` is given, that session's own jobs are surfaced first (still
+    capped at ``limit`` total) so "我那个任务好了吗" resolves to the caller's
+    own task before falling back to the global list.
+    """
+    pool = job_list(limit=max(limit * 4, 20)) if sid else job_list(limit=limit)
+    if sid:
+        mine = [j for j in pool if j.get("session_id") == sid]
+        others = [j for j in pool if j.get("session_id") != sid]
+        jobs = (mine + others)[:limit]
+    else:
+        jobs = pool
     if not jobs:
         return "目前没有后台长任务在跑。"
     parts: list[str] = []
@@ -249,10 +306,60 @@ def format_status_speech(limit: int = 5) -> str:
             age = max(0.0, now - started)
             last = (j.get("last_progress") or j.get("detail") or "处理中")[:50]
             parts.append(f"{jid} {worker}：运行中 {age:.0f}秒，最近：{last}")
+        elif st == "interrupted":
+            preview = (j.get("result_text") or "")[:50]
+            parts.append(f"有一个任务上次中断了 — {jid} {worker}：{preview}")
         else:
             preview = (j.get("result_text") or j.get("text") or "")[:50]
             parts.append(f"{jid} {worker}：{st} — {preview}")
     return "后台任务：\n" + "\n".join(parts)
+
+
+def take_pending_followups(sid: str) -> list[dict[str, Any]]:
+    """Claim finished/interrupted jobs for ``sid`` that haven't been mentioned
+    to the user yet, and atomically mark them acknowledged so each surfaces
+    exactly once (across processes, via the same lock guarding disk saves).
+    """
+    if not sid:
+        return []
+    out: list[dict[str, Any]] = []
+    with _JOBS_LOCK:
+        for jid, j in _JOBS.items():
+            if (
+                j.get("session_id") == sid
+                and j.get("status") in ("ok", "error", "interrupted")
+                and j.get("needs_followup")
+            ):
+                j["needs_followup"] = False
+                _JOBS[jid] = j
+                out.append(dict(j))
+        if out:
+            _save_store_locked()
+    return out
+
+
+def followup_notice(jobs: list[dict[str, Any]]) -> str:
+    """Short zh notice for jobs that finished/interrupted while unattended."""
+    if not jobs:
+        return ""
+    if len(jobs) == 1:
+        j = jobs[0]
+        plan = (j.get("plan_summary") or j.get("text") or "任务")[:40]
+        st = j.get("result_status") or j.get("status") or ""
+        if st == "ok":
+            return f"对了，你刚才让我做的「{plan}」已经完成了。"
+        if st == "error":
+            return f"对了，你刚才让我做的「{plan}」处理时出错了。"
+        if st == "interrupted":
+            return f"对了，你刚才让我做的「{plan}」在重启时中断了，需要我重试吗？"
+        return f"对了，你刚才让我做的「{plan}」有更新了。"
+    tag = {"ok": "已完成", "error": "出错了", "interrupted": "被中断"}
+    bits = [
+        f"「{(j.get('plan_summary') or j.get('text') or '任务')[:20]}」"
+        f"{tag.get(j.get('result_status') or j.get('status') or '', '有更新')}"
+        for j in jobs[:3]
+    ]
+    return f"你有 {len(jobs)} 个后台任务有更新：" + "、".join(bits) + "。"
 
 
 def submit(
@@ -300,7 +407,12 @@ def submit(
                 }
             ],
             "plan_summary": plan_summary or "",
+            "pid": None,
+            "pgid": None,
+            "result_status": "",
+            "needs_followup": False,
         }
+        _save_store_locked()
 
     # Bind open session → working + first activity line
     try:
@@ -394,7 +506,12 @@ def submit(
                 "progress": prog[-_PROGRESS_MAX:],
                 "plan_summary": prev.get("plan_summary") or "",
                 "delivered_inline": prev.get("delivered_inline", False),
+                "pid": prev.get("pid"),
+                "pgid": prev.get("pgid"),
+                "result_status": status,
+                "needs_followup": False,
             }
+            _save_store_locked()
         if grace_s > 0:
             # Give the grace-waiter in submit() a brief window to claim
             # inline delivery before we decide whether to notify.
@@ -402,6 +519,14 @@ def submit(
             claim_done.wait(timeout=0.2)
         with _JOBS_LOCK:
             delivered = bool((_JOBS.get(job_id) or {}).get("delivered_inline"))
+            # A job delivered inline within grace_s already spoke its result
+            # synchronously to the caller — no followup owed. Anything else
+            # (plain background finish, or delivered too late) owes one.
+            cur_j = _JOBS.get(job_id)
+            if cur_j is not None:
+                cur_j["needs_followup"] = not delivered
+                _JOBS[job_id] = cur_j
+                _save_store_locked()
         if delivered:
             # Answer already went back synchronously to the caller; no
             # duplicate HUD notify / memory-internalize for this job.
@@ -486,3 +611,115 @@ def submit(
 
 def async_enabled() -> bool:
     return os.environ.get("AIPC_TASK_ASYNC", "1") not in ("0", "false", "no")
+
+
+def register_proc(pid: int) -> None:
+    """Record a spawned worker subprocess's pid/pgid on the current job.
+
+    Called right after a bridge's ``Popen`` succeeds. No-op if there is no
+    current job (e.g. an inline, non-submitted call) — safe to call always.
+    """
+    jid = current_job_id()
+    if not jid:
+        return
+    try:
+        pgid = os.getpgid(pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        pgid = pid
+    with _JOBS_LOCK:
+        j = _JOBS.get(jid)
+        if not j:
+            return
+        j["pid"] = pid
+        j["pgid"] = pgid
+        _JOBS[jid] = j
+        _save_store_locked()
+
+
+def _cmdline_contains(pid: int, needle: str) -> bool:
+    """PID-reuse sanity guard: only true if /proc/<pid>/cmdline still mentions
+    ``needle``. Prevents killing an unrelated process that happens to have
+    reused a dead job's pid after a restart."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            raw = f.read()
+    except OSError:
+        return False
+    cmd = raw.replace(b"\x00", b" ").decode("utf-8", "replace")
+    return needle in cmd
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    return True
+
+
+def _killpg_wait(pgid: int, grace: float = 3.0) -> None:
+    """SIGTERM then SIGKILL a process group; never raises."""
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        return
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return
+        except (PermissionError, OSError):
+            return
+        time.sleep(0.1)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def reap_orphans_on_startup() -> None:
+    """Call exactly once when the orchestrator process boots.
+
+    A freshly-started process owns no running jobs yet, so any job persisted
+    with status=="running" is left over from a dead/previous orchestrator.
+    If its subprocess is still alive (and still looks like hermes — the
+    pid-reuse guard), kill its whole process group so it cannot run forever
+    as an orphan. Always mark the job "interrupted" either way.
+    """
+    with _JOBS_LOCK:
+        running = [dict(j) for j in _JOBS.values() if j.get("status") == "running"]
+    for j in running:
+        jid = j.get("job_id")
+        pid = j.get("pid")
+        pgid = j.get("pgid")
+        if pid:
+            try:
+                pid_i = int(pid)
+            except (TypeError, ValueError):
+                pid_i = None
+            if pid_i is not None and _pid_alive(pid_i) and _cmdline_contains(pid_i, "hermes"):
+                try:
+                    pgid_i = int(pgid) if pgid else pid_i
+                    _killpg_wait(pgid_i)
+                except Exception as exc:  # noqa: BLE001 — never abort the reap loop
+                    print(
+                        f"aipc-agent task_jobs: orphan reap failed jid={jid}: {exc}",
+                        flush=True,
+                    )
+        with _JOBS_LOCK:
+            cur = _JOBS.get(jid)
+            if not cur:
+                continue
+            now = time.time()
+            cur["status"] = "interrupted"
+            cur["result_status"] = "interrupted"
+            cur["result_text"] = "任务在重启时中断"
+            cur["needs_followup"] = True
+            cur["updated"] = now
+            cur["finished"] = now
+            _JOBS[jid] = cur
+    with _JOBS_LOCK:
+        _save_store_locked()

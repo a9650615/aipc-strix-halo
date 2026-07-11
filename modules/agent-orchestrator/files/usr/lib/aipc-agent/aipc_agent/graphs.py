@@ -1144,7 +1144,7 @@ def _clarify_node(state: SupervisorState) -> SupervisorState:
 def _job_status_node(state: SupervisorState) -> SupervisorState:
     sid = state.get("session_id") or "default"
     ux_bridge.progress("查询任务进度…", state="thinking", source="job-status")
-    text = task_jobs.format_status_speech(limit=5)
+    text = task_jobs.format_status_speech(limit=5, sid=sid)
     try:
         from aipc_agent import activity
 
@@ -1246,6 +1246,14 @@ def wants_job_status(text: str) -> bool:
         "task status",
         "进度怎么样",
         "進度怎麼樣",
+        # ponytail: additive phrasings for "what's still running / what happened
+        # while I was away" — covers 還有哪些任務 / 有什麼任務在跑 / 现在在忙什么.
+        "哪些任务",
+        "哪些任務",
+        "在忙什么",
+        "在忙什麼",
+        "任务在跑",
+        "任務在跑",
     )
     return any(k in raw for k in keys)
 

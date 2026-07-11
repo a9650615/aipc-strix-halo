@@ -167,20 +167,32 @@ def rules_classify(text: str) -> dict[str, Any] | None:
             "source": "rules",
         }
     low = raw.lower()
-    # Job status — never need a model
-    status_keys = (
-        "任务进度",
-        "任務進度",
-        "长任务进度",
-        "長任務進度",
-        "后台任务",
-        "後台任務",
-        "job status",
-        "task status",
-        "进度怎么样",
-        "進度怎麼樣",
-    )
-    if any(k in low for k in status_keys):
+    # Job status — never need a model. Single source of truth is
+    # graphs.wants_job_status (late import to dodge the circular graphs import
+    # at module load); the local tuple is only a fallback for pure-parse tests
+    # where graphs is unimportable. Keeping two independent lists is exactly
+    # what let "還有哪些任務在跑" slip past this fast path once.
+    try:
+        from aipc_agent import graphs as g
+
+        _is_job_status = g.wants_job_status(text)
+    except Exception:
+        _is_job_status = any(
+            k in low
+            for k in (
+                "任务进度",
+                "任務進度",
+                "长任务进度",
+                "長任務進度",
+                "后台任务",
+                "後台任務",
+                "job status",
+                "task status",
+                "进度怎么样",
+                "進度怎麼樣",
+            )
+        )
+    if _is_job_status:
         return {
             "target": "job_status",
             "mode": "short",

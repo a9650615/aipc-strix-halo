@@ -439,15 +439,14 @@ class OrbWidget(QWidget):
         self.update()
 
     def _tick(self) -> None:
-        # Always breathe a little when visible; stronger when active
+        # Animate ONLY while active (tool run). When idle, stay fully static —
+        # a ~20Hz idle repaint of a translucent HUD on a fractionally-scaled
+        # monitor recomposites the whole surface and reads as flicker.
+        if not self._active:
+            return
         spin = getattr(self, "_spin", 0.08)
-        if self._active:
-            self._phase += spin
-            self.update()
-        elif self.isVisible():
-            self._phase += 0.03
-            if int(self._phase * 10) % 3 == 0:
-                self.update()
+        self._phase += spin
+        self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802
         p = QPainter(self)

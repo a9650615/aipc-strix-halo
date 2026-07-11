@@ -34,7 +34,13 @@ _CAL_RE = re.compile(r"(?i)(日历|日曆|行程|日程|calendar|会议|會議|a
 _MAIL_RE = re.compile(r"(?i)(邮件|郵件|email|inbox|收件)")
 _FILE_RE = re.compile(r"(?i)(打开文件|打開文件|读文件|讀文件|写文件|寫文件|delete file|删文件|刪文件)")
 _SCREEN_RE = re.compile(r"(?i)(屏幕|螢幕|桌面|screen|看一下屏幕|描述屏幕)")
-_JOB_RE = re.compile(r"(?i)(任务进度|任務進度|job status|后台任务|後台任務|跑完了吗|跑完了嗎)")
+_JOB_RE = re.compile(
+    r"(?i)("
+    r"任务进度|任務進度|job status|后台任务|後台任務|跑完了吗|跑完了嗎"
+    # "what tasks are running / what's still going" — the user's own phrasing
+    r"|哪些任务|哪些任務|什么任务|什麼任務|任务在跑|任務在跑|在忙什么|在忙什麼"
+    r")"
+)
 _CODE_RE = re.compile(
     r"(?i)("
     r"写代码|寫代碼|写程式|寫程式|写个|寫個|写一|寫一|实现|實現|refactor|debug|"

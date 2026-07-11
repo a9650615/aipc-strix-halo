@@ -18,6 +18,19 @@ from aipc_agent.stream_chat import iter_chat_sse
 app = FastAPI(title="aipc-agent-orchestrator")
 _graph = supervisor()
 
+# ponytail: module-level call, not a FastAPI startup event — uvicorn imports
+# this module exactly once per live worker process (ExecStart runs a single
+# `uvicorn aipc_agent.server:app`, no --reload/multi-import), so this already
+# runs exactly once at real service start and never at build time or in a
+# request path. Reaps any hermes subprocess orphaned by a previous
+# orchestrator crash/restart and marks its job "interrupted".
+try:
+    from aipc_agent import task_jobs as _startup_task_jobs
+
+    _startup_task_jobs.reap_orphans_on_startup()
+except Exception as _startup_exc:  # noqa: BLE001 — never block service start
+    print(f"aipc-agent server: startup orphan reap skipped: {_startup_exc}", flush=True)
+
 
 class ChatRequest(BaseModel):
     text: str
@@ -315,15 +328,32 @@ def chat(req: ChatRequest) -> ChatResponse | JSONResponse:
         except Exception:
             spoken = ""
 
+    background = background_from_result(result)
+    text = str(text)
+    if not background and not end_session:
+        # Single chokepoint: every normal turn passes through here, so this
+        # is where a finished/interrupted background task (from a prior turn
+        # the user wasn't watching) gets proactively mentioned — once.
+        try:
+            from aipc_agent import task_jobs
+
+            pending = task_jobs.take_pending_followups(sid)
+            notice = task_jobs.followup_notice(pending) if pending else ""
+            if notice:
+                text = f"{notice}\n{text}"
+                spoken = f"{notice} {spoken}".strip() if spoken else notice
+        except Exception as exc:  # noqa: BLE001 — must never break /chat
+            print(f"aipc-agent server: followup surfacing failed sid={sid}: {exc}", flush=True)
+
     return ChatResponse(
-        text=str(text),
+        text=text,
         task_id=task_id,
         end_session=end_session,
         session_id=sid,
         session_status=st,
         spoken_summary=spoken,
         expect_reply=expect_reply_from_result(result),
-        background=background_from_result(result),
+        background=background,
     )
 
 
