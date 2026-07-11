@@ -201,8 +201,9 @@ def test_sync_config_adds_limit_for_lemonade_backed_alias(
         opencode_sync.sync_config(config_path=config_path, manifest_path=manifest_path)
 
     written = json.loads(config_path.read_text())
+    # Lemonade may advertise card max 262144; sync caps to loaded recipe ceiling.
     assert written["provider"]["aipc"]["models"]["ornith-35b"]["limit"] == {
-        "context": 262144,
+        "context": 131072,
         "output": 16384,
     }
 

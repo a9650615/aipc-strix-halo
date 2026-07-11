@@ -25,6 +25,16 @@ LEMONADE_PORT_FILE = Path("/etc/aipc/env.d/llm-lemonade/port")
 # "isn't intuitive") and selecting either would just error.
 NON_CHAT_ALIASES = {"embed-bge", "intent-3b"}
 
+# NPU compact / title / light-work lane (LiteLLM → Lemonade FLM). Kept off the
+# Vulkan coder-agentic llama-server slots so compact prefill does not stall
+# the tool loop. See modules/llm-litellm config alias coder-compact.
+COMPACT_ALIAS = "coder-compact"
+# Recipe + LiteLLM model_info for coding/compact local GGUF/FLM lanes.
+# Lemonade /api/v1/models often advertises the card max (e.g. 262144) which
+# is larger than the loaded --ctx-size (131072); OpenCode must compact
+# against the real ceiling or it hits backend context_length_exceeded.
+CODING_CONTEXT_CAP = 131072
+
 
 def fetch_model_ids(base_url: str = DEFAULT_LITELLM_BASE) -> list[str]:
     """Query LiteLLM's /v1/models. Raises URLError if unreachable."""
@@ -97,6 +107,8 @@ def _limits(model_ids: list[str], manifest_path: Path) -> dict[str, dict[str, in
         ctx = ctx_by_model_id.get(model_id)
         if ctx is None:
             continue
+        # Prefer the loaded recipe ceiling over the GGUF card max.
+        ctx = min(int(ctx), CODING_CONTEXT_CAP)
         # Reserve a completion budget out of the same window so a long
         # generation can't blow the ceiling from the other direction.
         limits[alias] = {"context": ctx, "output": min(ctx // 4, 16384)}
@@ -118,6 +130,9 @@ def sync_config(
     Cloud aliases (main-cloud, coder-cloud, ...) are included like everything
     else — LiteLLM doesn't distinguish them in /v1/models, and OpenCode
     doesn't care that they're remote as long as the gateway does.
+
+    When ``coder-compact`` is available, sets ``small_model`` to that alias
+    and enables ``compaction.prune`` so light/compact work stays on NPU.
     """
     all_ids = fetch_model_ids(base_url)
     model_ids = [mid for mid in all_ids if mid not in exclude]
@@ -138,6 +153,13 @@ def sync_config(
     default_id = current_default.split("/", 1)[-1] if "/" in current_default else current_default
     if default_id not in model_ids:
         config["model"] = f"{provider_id}/{model_ids[0]}"
+
+    if COMPACT_ALIAS in model_ids:
+        config["small_model"] = f"{provider_id}/{COMPACT_ALIAS}"
+        compaction = config.setdefault("compaction", {})
+        compaction.setdefault("auto", True)
+        compaction["prune"] = True
+        compaction.setdefault("reserved", 12000)
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(config, indent=2) + "\n")

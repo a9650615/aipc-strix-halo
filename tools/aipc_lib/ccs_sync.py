@@ -8,6 +8,10 @@ from aipc_lib.opencode_sync import DEFAULT_LITELLM_BASE, NON_CHAT_ALIASES, fetch
 
 DEFAULT_CCS_SETTINGS = Path.home() / ".ccs" / "aipc.settings.json"
 
+# NPU compact lane (LiteLLM alias → Lemonade FLM). Haiku-tier Claude Code
+# work including auto-compact should hit this, not Vulkan coder-agentic.
+COMPACT_ALIAS = "coder-compact"
+
 # CCS's aipc profile is local-model-only (see modules/ccs/README.md) — never
 # touches the paid Claude subscription/API, so cloud aliases (main-cloud,
 # coder-cloud, ...) are deliberately left out of ANTHROPIC_EXTRA_MODELS,
@@ -25,8 +29,10 @@ def sync_extra_models(
     already the default ANTHROPIC_MODEL). Returns the list of extra model
     ids written.
 
-    Does NOT touch ANTHROPIC_MODEL or the DEFAULT_OPUS/SONNET/HAIKU_MODEL
-    keys — that's config_menu.py's tier-switcher's job, a separate concern.
+    Does NOT change ANTHROPIC_MODEL / DEFAULT_OPUS / DEFAULT_SONNET (coding
+    tiers stay on the primary tool-loop model). When LiteLLM exposes
+    ``coder-compact``, forces ANTHROPIC_DEFAULT_HAIKU_MODEL to that alias so
+    auto-compact stays on the NPU lane after a resync.
 
     Requires settings_path to already exist: CCS's settings.json has its
     own schema version/migration counter (see modules/ccs/README.md) — hand-
@@ -57,5 +63,7 @@ def sync_extra_models(
         raise ValueError(f"{base_url}/v1/models returned no local models besides the default")
 
     env["ANTHROPIC_EXTRA_MODELS"] = ",".join(extra_ids)
+    if COMPACT_ALIAS in all_ids:
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = COMPACT_ALIAS
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
     return extra_ids

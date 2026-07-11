@@ -140,3 +140,23 @@ def test_sync_extra_models_does_not_touch_default_model_keys(
     written = json.loads(settings_path.read_text())
     assert written["env"]["ANTHROPIC_MODEL"] == "coder-agentic"
     assert written["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "coder-agentic"
+    # No coder-compact in list → Haiku tier left as-is (still coder-agentic here).
+    assert written["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "coder-agentic"
+
+
+def test_sync_extra_models_routes_haiku_to_coder_compact(
+    settings_path: Path, no_manifest: Path
+) -> None:
+    payload = {
+        "data": [
+            {"id": "coder-agentic"},
+            {"id": "coder-compact"},
+            {"id": "ornith-35b"},
+        ]
+    }
+    with patch("urllib.request.urlopen", _fake_urlopen(payload)):
+        ccs_sync.sync_extra_models(settings_path=settings_path, manifest_path=no_manifest)
+
+    written = json.loads(settings_path.read_text())
+    assert written["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "coder-compact"
+    assert written["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "coder-agentic"

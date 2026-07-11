@@ -1,16 +1,49 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "aipc/coder-agentic",
+  "small_model": "aipc/coder-compact",
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 12000
+  },
   "provider": {
     "aipc": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "AIPC (LiteLLM)",
       "options": {
-        "baseURL": "http://127.0.0.1:4000/v1"
+        "baseURL": "http://127.0.0.1:4000/v1",
+        "timeout": 1800000
       },
       "models": {
-        "coder-agentic": { "name": "coder-agentic (Gemma4-26B) — default, reliable tool calling" },
-        "ornith-35b": { "name": "ornith-35b (Ornith-1.0-35B) — reasoning + agentic coding" }
+        "coder-agentic": {
+          "name": "coder-agentic (Vulkan tool loop)",
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        },
+        "coder-compact": {
+          "name": "coder-compact (NPU compact/summary)",
+          "limit": {
+            "context": 131072,
+            "output": 4096
+          }
+        },
+        "resident-small": {
+          "name": "resident-small (NPU)",
+          "limit": {
+            "context": 131072,
+            "output": 4096
+          }
+        },
+        "ornith-35b": {
+          "name": "ornith-35b (Ornith-1.0-35B) — reasoning + agentic coding",
+          "limit": {
+            "context": 131072,
+            "output": 4096
+          }
+        }
       }
     }
   }

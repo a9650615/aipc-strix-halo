@@ -24,6 +24,22 @@ model_list:
       timeout: 1800
       num_retries: 0
 
+  # Compact / light-summary lane on NPU (same FLM weights as resident-small).
+  # Isolates Claude Code auto-compact and other Haiku-tier work from the
+  # Vulkan coder-agentic llama-server slots (-np), so a long compact prefill
+  # does not stall tool-loop coding on iGPU. Wire CCS with
+  # ANTHROPIC_DEFAULT_HAIKU_MODEL=coder-compact (see modules/ccs README).
+  - model_name: coder-compact
+    litellm_params:
+      model: openai/gemma4-it-e4b-FLM
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
+      timeout: 600
+      num_retries: 0
+    model_info:
+      max_input_tokens: 131072
+      max_output_tokens: 4096
+
   # See models.yaml: 2026-07-09 trial — HauhauCS Qwen3.6-35B-A3B Aggressive
   # uncensored Q4_K_P on Lemonade llamacpp:vulkan (replaces Gemma-4-26B-A4B).
   # Same lemond :8001 router as resident-small; no keep_alive — Lemonade
@@ -57,6 +73,12 @@ model_list:
       # request isn't cut off either.
       timeout: 1800
       num_retries: 0
+    # Live Lemonade recipe uses --ctx-size 131072 (was 32768 — too tight for
+    # agentic tool loops). Model card max is 262144; raise recipe + this
+    # field together if you need the full window.
+    model_info:
+      max_input_tokens: 131072
+      max_output_tokens: 8192
 
   # Daily Gemma uncensored (2026-07-09) — does not replace coder-agentic.
   # HauhauCS Gemma4-26B-A4B QAT Balanced; same lemond :8001 + timeout policy.

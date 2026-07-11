@@ -43,9 +43,31 @@ ccs api create aipc --preset ollama \
   --base-url http://127.0.0.1:4000 \
   --api-key aipc-local \
   --model coder-agentic \
-  --extra-models ornith-35b,resident-small \
+  --extra-models coder-compact,ornith-35b,resident-small \
   --target claude --yes
 ```
+
+After create (or on an existing profile), point Claude Code's **Haiku** tier
+at the NPU compact lane so auto-compact does not share Vulkan
+`coder-agentic` llama-server slots (`-np`) with tool-loop coding:
+
+```json
+"ANTHROPIC_DEFAULT_OPUS_MODEL": "coder-agentic",
+"ANTHROPIC_DEFAULT_SONNET_MODEL": "coder-agentic",
+"ANTHROPIC_DEFAULT_HAIKU_MODEL": "coder-compact"
+```
+
+`coder-compact` is a LiteLLM alias for the same Lemonade FLM NPU weights as
+`resident-small` (`modules/llm-litellm` config). Restart the CCS proxy after
+editing (`ccs proxy stop aipc` then `ccs aipc`) so the env is picked up.
+
+**Hermes** (not CCS): set `model.context_length: 131072` (must match Lemonade;
+auto-detect often returns 256k and delays compression until past the real
+cap → "Context length exceeded and cannot compress further") and
+`auxiliary.compression.model: coder-compact` with explicit LiteLLM
+`base_url`/`api_key` so summaries run on NPU, not Vulkan `coder-agentic`.
+**OpenCode**: `small_model: aipc/coder-compact`, `compaction.prune: true`,
+and per-model `limit.context: 131072` (see `modules/dev-ai-opencode` skel).
 
 Hardware-verified 2026-07-04: `ccs aipc --print "reply with exactly: pong"`
 round-tripped through CCS's local proxy -> LiteLLM -> Ollama (`coder-agentic`
