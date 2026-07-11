@@ -129,7 +129,7 @@ Expected: import failure because `compact_idle_snapshot` does not exist.
 
 - [ ] **Step 3: Implement the minimal backend helper**
 
-Add `import time`, `import yaml`, and:
+Add `import subprocess`, `import time`, `import yaml`, and:
 
 ```python
 MODEL_MANIFEST = Path("/etc/aipc/models/models.yaml")
@@ -171,7 +171,7 @@ def compact_idle_snapshot(
         )
         model_id = str(policy["model_id"])
         timeout = int(policy["idle_unload_after_s"])
-    except (OSError, TypeError, ValueError, KeyError, StopIteration):
+    except (OSError, AttributeError, TypeError, ValueError, KeyError, StopIteration):
         return result
     result["timeout_s"] = timeout
     loaded = next(
