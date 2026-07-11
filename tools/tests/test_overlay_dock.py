@@ -45,16 +45,24 @@ def test_anchor_for_state_right_states():
         assert m.OverlayPanel._anchor_for_state(state) == "right", state
 
 
-def test_anchor_for_state_center_states():
+def test_anchor_for_state_rich_result_centers():
     m = _mod()
-    for state in ("thinking", "working", "speaking", "done", "error"):
-        assert m.OverlayPanel._anchor_for_state(state) == "center", state
+    # A genuinely rich result (long text / media) centers...
+    for state in ("speaking", "done", "error"):
+        assert m.OverlayPanel._anchor_for_state(state, rich=True) == "center", state
+    # ...but the same states with little content stay right — no center trip
+    # for a one-line answer (fixes "問時間也滑到中間").
+    for state in ("speaking", "done", "error"):
+        assert m.OverlayPanel._anchor_for_state(state, rich=False) == "right", state
+    # Transient activity never centers, rich flag or not.
+    for state in ("thinking", "working"):
+        assert m.OverlayPanel._anchor_for_state(state, rich=True) == "right", state
 
 
-def test_anchor_for_state_unknown_defaults_center():
+def test_anchor_for_state_unknown_defaults_right():
     m = _mod()
-    assert m.OverlayPanel._anchor_for_state("muted") == "center"
-    assert m.OverlayPanel._anchor_for_state("") == "center"
+    assert m.OverlayPanel._anchor_for_state("muted") == "right"
+    assert m.OverlayPanel._anchor_for_state("") == "right"
 
 
 def test_effective_anchor_env_override_wins(monkeypatch):
@@ -71,7 +79,9 @@ def test_effective_anchor_state_driven_by_default(monkeypatch):
     monkeypatch.delenv("AIPC_OVERLAY_ANCHOR", raising=False)
     monkeypatch.delenv("AIPC_OVERLAY_STATE_DOCK", raising=False)
     assert panel._effective_anchor("listening") == "right"
-    assert panel._effective_anchor("done") == "center"
+    # Short result stays right; only a rich result centers.
+    assert panel._effective_anchor("done", rich=False) == "right"
+    assert panel._effective_anchor("done", rich=True) == "center"
 
 
 def test_state_dock_disabled_falls_back_to_top_center(monkeypatch):
@@ -132,13 +142,42 @@ def test_compute_geom_right_is_more_rightward_than_center(monkeypatch):
     panel._mini = True
     x_right, *_ = panel._compute_geom(body_len=0, long_form=False, mini=True)
 
+    # A rich done result centers (rich=True → center anchor).
     panel._state = "done"
     panel._mini = False
-    panel._body_len = 10
-    panel._long_form = False
-    x_center, *_ = panel._compute_geom(body_len=10, long_form=False, mini=False)
+    panel._body_len = 200
+    panel._long_form = True
+    panel._rich = True
+    x_center, *_ = panel._compute_geom(body_len=200, long_form=True, mini=False)
 
     assert x_right > x_center
+
+
+def test_compute_geom_short_result_stays_right(monkeypatch):
+    """A short (non-rich) done answer must NOT slide to center — it docks
+    right, same as listening. Regression guard for '問時間也滑到中間'."""
+    m = _mod()
+    panel = _panel(m)
+    monkeypatch.delenv("AIPC_OVERLAY_ANCHOR", raising=False)
+    monkeypatch.delenv("AIPC_OVERLAY_STATE_DOCK", raising=False)
+
+    panel._state = "listening"
+    panel._mini = True
+    x_listen, *_ = panel._compute_geom(body_len=0, long_form=False, mini=True)
+
+    panel._state = "done"
+    panel._mini = False
+    panel._body_len = 12
+    panel._long_form = False
+    panel._rich = False
+    x_short, *_ = panel._compute_geom(body_len=12, long_form=False, mini=False)
+
+    # Both right-anchored: short answer's right edge tracks the listening pill,
+    # not the screen centre. Allow width difference; assert it's not centred.
+    screen = panel._target_screen()
+    avail = screen.availableGeometry()
+    centre_x = avail.left() + (avail.width() - panel._card_w) / 2
+    assert x_short > centre_x + 20, (x_short, centre_x)
 
 
 def test_place_animates_on_pure_x_move(monkeypatch):

@@ -1643,13 +1643,16 @@ class OverlayPanel(QWidget):
         return QGuiApplication.primaryScreen()
 
     @staticmethod
-    def _anchor_for_state(state: str) -> str:
-        """Idle/listening states dock compact to the right; activity/result
-        states expand centered. Pure mapping, no env/hardware reads — keep it
-        that way so it stays trivially unit-testable."""
-        if state in ("listening", "wake", "recording", "no_speech", "followup", "bg_task"):
-            return "right"
-        return "center"
+    def _anchor_for_state(state: str, rich: bool = False) -> str:
+        """Content-driven dock: center ONLY for a genuinely rich result
+        (long text / media / markdown). Everything else — idle, listening,
+        thinking, working, bg_task, AND short one-line answers — docks compact
+        to the right. Keeps the HUD from sliding center for a one-liner and
+        kills the right↔center bounce (flicker) across a turn's state changes.
+        Pure mapping, no env/hardware reads — stays trivially unit-testable."""
+        if rich and state in ("speaking", "done", "error"):
+            return "center"
+        return "right"
 
     def _state_dock_enabled(self) -> bool:
         """AIPC_OVERLAY_ANCHOR (explicit) always wins; otherwise state-driven
@@ -1658,12 +1661,12 @@ class OverlayPanel(QWidget):
             return False
         return (os.environ.get("AIPC_OVERLAY_STATE_DOCK", "1") or "1").strip() != "0"
 
-    def _effective_anchor(self, state: str) -> str:
+    def _effective_anchor(self, state: str, rich: bool = False) -> str:
         env_anchor = (os.environ.get("AIPC_OVERLAY_ANCHOR") or "").strip().lower()
         if env_anchor:
             return env_anchor
         if self._state_dock_enabled():
-            return self._anchor_for_state(state)
+            return self._anchor_for_state(state, rich)
         return "top-center"
 
     def _mini_for_state(self, state: str) -> bool:
@@ -1720,7 +1723,7 @@ class OverlayPanel(QWidget):
         max_h = int(min(sh * 0.82, sh - 20))
         h = min(h, max_h)
         margin_y = int(os.environ.get("AIPC_OVERLAY_MARGIN_Y", "14"))
-        anchor = self._effective_anchor(self._state)
+        anchor = self._effective_anchor(self._state, getattr(self, "_rich", False))
         if anchor in ("top-right", "right"):
             margin_x = int(os.environ.get("AIPC_OVERLAY_MARGIN_X", "16"))
             x = int(avail.right() - w - margin_x)
@@ -1931,6 +1934,10 @@ class OverlayPanel(QWidget):
         )
         body_len = 0 if mini else len(primary)
 
+        # Content-driven anchor: only a genuinely rich result centers.
+        prev_rich = getattr(self, "_rich", False)
+        self._rich = bool(long_form)
+
         core = _strip_elapsed(primary)
         layout_key = (
             "mini" if mini else ("long" if long_form else "full"),
@@ -1966,7 +1973,7 @@ class OverlayPanel(QWidget):
             return
 
         prev_mini = self._mini_for_state(self._last_state)
-        anchor_switch = self._effective_anchor(self._last_state) != self._effective_anchor(state)
+        anchor_switch = self._effective_anchor(self._last_state, prev_rich) != self._effective_anchor(state, long_form)
         # Animate on mini↔full switches AND on a right↔center dock move.
         mode_switch = (mini != prev_mini or anchor_switch) and bool(self._last_state)
 
