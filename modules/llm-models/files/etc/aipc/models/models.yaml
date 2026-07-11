@@ -27,6 +27,26 @@ models:
     model_id: gemma4-it-e4b-FLM
     size_gb: 9.6
 
+  # Compact / Haiku-tier (2026-07-11): Unsloth Gemma-4-E2B-it QAT GGUF on
+  # Lemonade llamacpp:vulkan. Faster long-prefill compact than NPU FLM E4B
+  # (hardware-bench on this machine). On-demand only — do NOT pin; lemond
+  # loads on first inference and LRU can unload it (competes with
+  # coder-agentic for iGPU/GTT). Official E2B window ~128k; recipe uses
+  # ctx 131072 + -np 1 -kvu (single slot, full KV for long prefill).
+  #
+  # First pull (user. prefix required with --checkpoint/--recipe):
+  #   lemonade pull user.Gemma4-E2B-it-qat-UD-Q4_K_XL \
+  #     --checkpoint main unsloth/gemma-4-E2B-it-qat-GGUF:UD-Q4_K_XL \
+  #     --recipe llamacpp
+  #   lemonade load Gemma4-E2B-it-qat-UD-Q4_K_XL \
+  #     --llamacpp vulkan --ctx-size 131072 \
+  #     --llamacpp-args "-np 1 -kvu" --save-options
+  #   lemonade unload Gemma4-E2B-it-qat-UD-Q4_K_XL   # stay cold until used
+  - alias: coder-compact
+    backend: lemonade
+    model_id: Gemma4-E2B-it-qat-UD-Q4_K_XL
+    size_gb: 2.4
+
   # Tool-call / agentic default (2026-07-09 trial): HauhauCS Qwen3.6-35B-A3B
   # Aggressive uncensored Q4_K_P on Lemonade llamacpp:vulkan.
   #

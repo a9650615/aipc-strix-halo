@@ -24,16 +24,20 @@ model_list:
       timeout: 1800
       num_retries: 0
 
-  # Compact / light-summary lane on NPU (same FLM weights as resident-small).
-  # Isolates Claude Code auto-compact and other Haiku-tier work from the
-  # Vulkan coder-agentic llama-server slots (-np), so a long compact prefill
-  # does not stall tool-loop coding on iGPU. Wire CCS with
+  # Compact / Haiku-tier (2026-07-11): Unsloth Gemma-4-E2B-it QAT on Lemonade
+  # llamacpp:vulkan — faster long prefill than NPU FLM E4B (hardware-bench).
+  # On-demand only: not pinned; lemond loads on first request and may LRU-
+  # evict when max_loaded_models is full (competes with coder-agentic for
+  # iGPU). Train/serve window ~128k. Wire CCS
   # ANTHROPIC_DEFAULT_HAIKU_MODEL=coder-compact (see modules/ccs README).
   - model_name: coder-compact
     litellm_params:
-      model: openai/gemma4-it-e4b-FLM
+      model: openai/Gemma4-E2B-it-qat-UD-Q4_K_XL
       api_base: http://127.0.0.1:8001/v1
       api_key: none
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
       timeout: 600
       num_retries: 0
     model_info:

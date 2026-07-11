@@ -12,8 +12,9 @@ distrobox enter node -- sudo npm install -g opencode-ai
 
 Skel config at `/etc/skel/.config/opencode/config.json` points at LiteLLM.
 Default model is `coder-agentic` (Vulkan tool loop). Compact / title /
-lightweight work uses `small_model: aipc/coder-compact` (NPU FLM via
-LiteLLM — same weights as `resident-small`) so session compaction does
+lightweight work uses `small_model: aipc/coder-compact` (Unsloth E2B-qat
+on Lemonade Vulkan via LiteLLM — on-demand, not the NPU resident pin) so
+session compaction does
 not share Vulkan `llama-server` slots with the main agent. Skel config
 also sets `compaction.prune: true` and per-model `limit.context: 131072`
 to match Lemonade. Default is **not** any qwen2.5-coder

@@ -48,8 +48,7 @@ ccs api create aipc --preset ollama \
 ```
 
 After create (or on an existing profile), point Claude Code's **Haiku** tier
-at the NPU compact lane so auto-compact does not share Vulkan
-`coder-agentic` llama-server slots (`-np`) with tool-loop coding:
+at `coder-compact` for auto-compact / light work:
 
 ```json
 "ANTHROPIC_DEFAULT_OPUS_MODEL": "coder-agentic",
@@ -57,15 +56,18 @@ at the NPU compact lane so auto-compact does not share Vulkan
 "ANTHROPIC_DEFAULT_HAIKU_MODEL": "coder-compact"
 ```
 
-`coder-compact` is a LiteLLM alias for the same Lemonade FLM NPU weights as
-`resident-small` (`modules/llm-litellm` config). Restart the CCS proxy after
+`coder-compact` is a LiteLLM alias for Unsloth **Gemma-4-E2B-it QAT** on
+Lemonade `llamacpp:vulkan` (on-demand load — not pinned; first request may
+cold-load ~seconds). Faster long prefill than NPU `resident-small`, but
+shares iGPU with `coder-agentic` while loaded. Restart the CCS proxy after
 editing (`ccs proxy stop aipc` then `ccs aipc`) so the env is picked up.
 
 **Hermes** (not CCS): set `model.context_length: 131072` (must match Lemonade;
 auto-detect often returns 256k and delays compression until past the real
 cap → "Context length exceeded and cannot compress further") and
 `auxiliary.compression.model: coder-compact` with explicit LiteLLM
-`base_url`/`api_key` so summaries run on NPU, not Vulkan `coder-agentic`.
+`base_url`/`api_key` so summaries use the E2B compact lane, not the big
+`coder-agentic` slots.
 **OpenCode**: `small_model: aipc/coder-compact`, `compaction.prune: true`,
 and per-model `limit.context: 131072` (see `modules/dev-ai-opencode` skel).
 
