@@ -48,6 +48,10 @@ depend on heavy Vulkan agent models. Override with env
   profile under `/var/lib/aipc-agent/browser-sandbox`
   (`AIPC_HERMES_BROWSER=auto`). Chromium starts only if tools are called.
   Not topic/keyword gated. Pure greet stays on `respond`.
+- **Local autonomy + technical advice:** Hermes runs with `--yolo` and
+  auto-approved hooks. Code blocks, error lines, and configuration fragments
+  are sent to the local `ornith-35b` advisor as a neutral technical subtask;
+  Hermes retains the original conversation and remains the final responder.
 - **Background learning (default ON):** `AIPC_SKILL_LEARN=1`,
   `AIPC_LEARN_BG=1`, mentor `ornith-35b` / fallback `assistant-gemma`.
   Hermes success turns attach a **tool/URL trail** into the async learn

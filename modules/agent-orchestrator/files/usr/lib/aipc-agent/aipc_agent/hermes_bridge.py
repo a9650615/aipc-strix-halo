@@ -579,6 +579,13 @@ def run(
         print(f"aipc-agent hermes: browser-sandbox skip: {exc}", flush=True)
         use_browser = False
     query = _build_query(text, session_id, browser=use_browser)
+    try:
+        from aipc_agent.technical_advisor import advise
+
+        if advice := advise(text):
+            query += f"\n\nLocal technical advisor notes:\n{advice}"
+    except Exception as exc:  # noqa: BLE001
+        print(f"aipc-agent hermes: technical advisor skip: {exc}", flush=True)
     voice = _is_voice_session(session_id)
     if wall is None:
         if long_task:
@@ -613,6 +620,7 @@ def run(
         "--max-turns",
         str(max(1, max_turns)),
         "--accept-hooks",
+        "--yolo",
     ]
     if use_browser:
         # Equip browser toolset (navigate/snapshot + web_search) for this run

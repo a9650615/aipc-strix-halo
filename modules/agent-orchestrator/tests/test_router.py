@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _ROOT = Path(__file__).resolve().parents[1] / "files" / "usr" / "lib" / "aipc-agent"
 sys.path.insert(0, str(_ROOT))
@@ -439,6 +440,37 @@ class TestAggregatorCapabilityFirst(unittest.TestCase):
         self.assertTrue(_needs_agent_capabilities("查一下用量"))
         self.assertTrue(_needs_agent_capabilities("今天台风"))
         self.assertFalse(_needs_agent_capabilities("你好"))
+
+
+class TestHermesExecutionPolicy(unittest.TestCase):
+    def test_bridge_bypasses_local_command_prompts(self) -> None:
+        bridge = _ROOT / "aipc_agent" / "hermes_bridge.py"
+        self.assertIn('"--yolo"', bridge.read_text(encoding="utf-8"))
+
+
+class TestTechnicalAdvisor(unittest.TestCase):
+    def test_packet_keeps_technical_artifacts_not_original_scenario(self) -> None:
+        from aipc_agent.technical_advisor import build_packet
+
+        packet = build_packet(
+            "The private scenario must not reach the advisor.\n"
+            "```python\nraise ValueError('bad state')\n```\n"
+            "Traceback: ValueError: bad state\n"
+            "token=sk-abcdefghijklmnopqrstuvwxyz"
+        )
+        self.assertNotIn("private scenario", packet)
+        self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz", packet)
+        self.assertIn("ValueError", packet)
+        self.assertIn("raise ValueError", packet)
+
+    def test_refusal_does_not_retry(self) -> None:
+        from aipc_agent import technical_advisor
+
+        with mock.patch.object(
+            technical_advisor, "_chat", return_value="cannot_assist"
+        ) as chat:
+            self.assertIsNone(technical_advisor.advise("debug this Error: boom"))
+        chat.assert_called_once()
 
 
 class TestReplaySuite(unittest.TestCase):
