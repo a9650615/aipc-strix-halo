@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from aipc_agent import memory
+from aipc_agent import proc_reaper
 
 HERMES_BIN = os.environ.get("AIPC_HERMES_BIN", "hermes")
 HERMES_USER = os.environ.get("AIPC_HERMES_USER", "")  # empty → auto primary desktop user
@@ -687,6 +688,10 @@ def run(
             stderr=subprocess.PIPE,
             text=True,
             cwd=home,
+            # Own process group so a timeout can reap the whole tree. Under
+            # `runuser -- hermes`, proc is runuser and the real worker is a
+            # grandchild; killing only proc orphans it (see proc_reaper).
+            start_new_session=True,
         )
         assert proc.stdout is not None and proc.stderr is not None
 
@@ -740,11 +745,9 @@ def run(
         try:
             rc = proc.wait(timeout=wall)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            try:
-                proc.wait(timeout=5)
-            except Exception:
-                pass
+            # Reap the whole group — proc may be a runuser wrapper whose hermes
+            # grandchild would otherwise keep hammering the model as an orphan.
+            proc_reaper.terminate_tree(proc)
             stop_tick.set()
             if ux_bridge is not None:
                 try:
