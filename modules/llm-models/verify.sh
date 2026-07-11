@@ -22,3 +22,13 @@ python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "${registry}" \
 for alias in resident-small coder-agentic ornith-35b embed-bge vlm-qwen2vl; do
   grep -q "alias: ${alias}" "${registry}" || fail "llm-models: missing required alias '${alias}'"
 done
+
+# Compact lane self-unloads after five minutes idle.
+python3 - "${registry}" <<'PY' || fail "llm-models: coder-compact idle_unload_after_s missing or not 300"
+import sys, yaml
+data = yaml.safe_load(open(sys.argv[1]))
+for entry in data.get("models", []):
+    if entry.get("alias") == "coder-compact":
+        raise SystemExit(0 if entry.get("idle_unload_after_s") == 300 else 1)
+raise SystemExit(1)
+PY

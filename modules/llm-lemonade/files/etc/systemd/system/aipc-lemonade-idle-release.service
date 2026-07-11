@@ -1,0 +1,8 @@
+[Unit]
+Description=AIPC Lemonade idle release for compact aliases
+Documentation=file:///var/home/birdyo/aipc-strix-halo/openspec/changes/0006-lemonade-compact-idle-unload/specs/ai-runtime/spec.md
+After=lemonade.service
+
+[Service]
+Type=oneshot
+ExecStart=/etc/aipc/llm-lemonade/lemonade-idle-release.py
