@@ -40,3 +40,10 @@ def test_glm_cloud_registry_and_secret_plumbing() -> None:
     assert 'zai_api_key: "REPLACE_ME"' in template
     assert "Z_AI_API_KEY" in decrypt
     assert "zai_api_key" in decrypt
+    assert "/etc/aipc/env.d/agent-orchestrator/zai.env" in decrypt
+
+    service = (
+        ROOT
+        / "modules/agent-orchestrator/files/etc/systemd/system/aipc-agent-orchestrator.service"
+    ).read_text()
+    assert "EnvironmentFile=-/etc/aipc/env.d/agent-orchestrator/zai.env" in service

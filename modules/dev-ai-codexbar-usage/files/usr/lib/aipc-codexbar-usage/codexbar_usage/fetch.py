@@ -66,6 +66,7 @@ def _snapshot_to_api(
         "primary": _window_to_api(result.primary),
         "secondary": _window_to_api(result.secondary),
         "identity": result.identity.to_dict() if result.identity else {},
+        "updated_at": result.updated_at.isoformat(),
     }
     if result.provider_cost is not None:
         out["provider_cost"] = result.provider_cost

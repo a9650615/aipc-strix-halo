@@ -26,9 +26,11 @@ def _quota_url() -> str:
 
 def _window(entry: dict[str, Any]) -> RateWindow:
     percentage = float(entry.get("percentage") or 0)
+    if not 0 <= percentage <= 100:
+        raise ValueError("Z.AI percentage must be between 0 and 100")
     reset_ms = entry.get("nextResetTime")
     return RateWindow(
-        used_percent=percentage / 100 if percentage > 1 else percentage,
+        used_percent=percentage / 100,
         window_minutes=_UNIT_MINUTES.get(entry.get("unit"), 0) * int(entry.get("number") or 0) or None,
         resets_at=datetime.fromtimestamp(reset_ms / 1000, timezone.utc) if reset_ms else None,
     )
@@ -60,4 +62,3 @@ class ZaiProvider(BaseProvider):
             )
         response.raise_for_status()
         return self.parse_usage(response.json())
-

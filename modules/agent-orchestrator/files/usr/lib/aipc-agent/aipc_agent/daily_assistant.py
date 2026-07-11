@@ -191,11 +191,12 @@ def usage_lookup(providers: str = "") -> dict:
 
 
 @tool
-def ask_glm(prompt: str) -> dict:
+def ask_glm(prompt: str, data_scope: str, interaction: str) -> dict:
     """Ask the quota-gated GLM cloud model for a second opinion. Use only when
     local reasoning is insufficient. Never send secrets, private context, or
-    content likely to be moderated; keep those requests local."""
-    return _ask_glm(prompt)
+    content likely to be moderated; keep those requests local. Set data_scope
+    to `prompt` and interaction to `foreground`; all other values are denied."""
+    return _ask_glm(prompt, data_scope=data_scope, interaction=interaction)
 
 
 @tool

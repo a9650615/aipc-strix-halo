@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -18,7 +19,13 @@ def test_unknown_quota_keeps_request_local() -> None:
         called = True
         return "unexpected"
 
-    result = ask_glm("compare two APIs", lookup=lambda _: {"status": "error"}, post=post)
+    result = ask_glm(
+        "compare two APIs",
+        data_scope="prompt",
+        interaction="foreground",
+        lookup=lambda _: {"status": "error"},
+        post=post,
+    )
 
     assert result["status"] == "local_only"
     assert called is False
@@ -33,8 +40,14 @@ def test_available_quota_calls_glm_once() -> None:
         "compare two APIs",
         lookup=lambda _: {
             "status": "ok",
-            "providers": [{"id": "zai", "remaining_percent": 80}],
+            "providers": [{
+                "id": "zai",
+                "remaining_percent": 80,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }],
         },
+        data_scope="prompt",
+        interaction="foreground",
         post=lambda prompt: prompts.append(prompt) or "answer",
     )
 
@@ -56,8 +69,14 @@ def test_explicit_secret_assignment_stays_local() -> None:
         "debug api_key=1234567890abcdef",
         lookup=lambda _: {
             "status": "ok",
-            "providers": [{"id": "zai", "remaining_percent": 80}],
+            "providers": [{
+                "id": "zai",
+                "remaining_percent": 80,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }],
         },
+        data_scope="prompt",
+        interaction="foreground",
         post=post,
     )
 
@@ -65,10 +84,58 @@ def test_explicit_secret_assignment_stays_local() -> None:
     assert called is False
 
 
+def test_stale_quota_keeps_request_local() -> None:
+    from aipc_agent.glm_tool import ask_glm
+
+    result = ask_glm(
+        "compare two APIs",
+        data_scope="prompt",
+        interaction="foreground",
+        lookup=lambda _: {
+            "status": "ok",
+            "providers": [{
+                "id": "zai",
+                "remaining_percent": 80,
+                "updated_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            }],
+        },
+        post=lambda _: "unexpected",
+    )
+    assert result["status"] == "local_only"
+
+
+def test_private_scope_or_background_keeps_request_local() -> None:
+    from aipc_agent.glm_tool import ask_glm
+
+    def fresh(_: str) -> dict:
+        return {
+            "status": "ok",
+            "providers": [{
+                "id": "zai",
+                "remaining_percent": 80,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }],
+        }
+    assert ask_glm(
+        "summarize this",
+        data_scope="email",
+        interaction="foreground",
+        lookup=fresh,
+        post=lambda _: "unexpected",
+    )["status"] == "local_only"
+    assert ask_glm(
+        "compare two APIs",
+        data_scope="prompt",
+        interaction="background",
+        lookup=fresh,
+        post=lambda _: "unexpected",
+    )["status"] == "local_only"
+
+
 def test_daily_assistant_binds_ask_glm_but_not_direct_fast_path() -> None:
     source = (ROOT / "aipc_agent/daily_assistant.py").read_text()
 
-    assert "def ask_glm(prompt: str)" in source
+    assert "def ask_glm(prompt: str, data_scope: str, interaction: str)" in source
     assert "    ask_glm," in source
     assert "ask_glm (optional cloud second opinion" in source
     direct = source[source.index("def try_direct_tool"):]
