@@ -1634,6 +1634,40 @@ class OverlayPanel(QWidget):
             pass
         return QGuiApplication.primaryScreen()
 
+    @staticmethod
+    def _anchor_for_state(state: str) -> str:
+        """Idle/listening states dock compact to the right; activity/result
+        states expand centered. Pure mapping, no env/hardware reads — keep it
+        that way so it stays trivially unit-testable."""
+        if state in ("listening", "wake", "recording", "no_speech", "followup"):
+            return "right"
+        return "center"
+
+    def _state_dock_enabled(self) -> bool:
+        """AIPC_OVERLAY_ANCHOR (explicit) always wins; otherwise state-driven
+        docking is on unless AIPC_OVERLAY_STATE_DOCK=0."""
+        if os.environ.get("AIPC_OVERLAY_ANCHOR"):
+            return False
+        return (os.environ.get("AIPC_OVERLAY_STATE_DOCK", "1") or "1").strip() != "0"
+
+    def _effective_anchor(self, state: str) -> str:
+        env_anchor = (os.environ.get("AIPC_OVERLAY_ANCHOR") or "").strip().lower()
+        if env_anchor:
+            return env_anchor
+        if self._state_dock_enabled():
+            return self._anchor_for_state(state)
+        return "top-center"
+
+    def _mini_for_state(self, state: str) -> bool:
+        """Compact pill layout: working/thinking (unchanged) plus any
+        state-driven right-docked idle state (reuses the existing narrow
+        mini form instead of a bespoke width path)."""
+        if state in ("speaking", "done", "error"):
+            return False
+        if state in ("working", "thinking"):
+            return True
+        return self._state_dock_enabled() and self._anchor_for_state(state) == "right"
+
     def _compute_geom(
         self,
         *,
@@ -1678,7 +1712,7 @@ class OverlayPanel(QWidget):
         max_h = int(min(sh * 0.82, sh - 20))
         h = min(h, max_h)
         margin_y = int(os.environ.get("AIPC_OVERLAY_MARGIN_Y", "14"))
-        anchor = (os.environ.get("AIPC_OVERLAY_ANCHOR") or "top-center").strip().lower()
+        anchor = self._effective_anchor(self._state)
         if anchor in ("top-right", "right"):
             margin_x = int(os.environ.get("AIPC_OVERLAY_MARGIN_X", "16"))
             x = int(avail.right() - w - margin_x)
@@ -1730,14 +1764,17 @@ class OverlayPanel(QWidget):
                 return
 
         size_delta = 0
+        x_delta = 0
         if self._last_geom is not None:
             size_delta = abs(self._last_geom[2] - w) + abs(self._last_geom[3] - h)
+            x_delta = abs(self._last_geom[0] - x)
 
-        # Animate only on real mode transitions (mini↔full), not every tick
+        # Animate on real mode transitions (mini↔full size change) OR a
+        # right↔center dock slide (x moves a lot without necessarily resizing).
         use_anim = (
             animate
             and self.isVisible()
-            and size_delta >= 40
+            and (size_delta >= 40 or x_delta >= 40)
             and not appear
         )
         if use_anim:
@@ -1871,8 +1908,10 @@ class OverlayPanel(QWidget):
         meta = self._pick_meta(state, primary, hint_field)
 
         # Tools / thinking: smallest pill. Answers expand height with content.
+        # Right-docked idle states (listening/wake/recording/no_speech/followup)
+        # reuse the same compact pill so the right-side dock stays narrow.
         is_result = state in ("speaking", "done", "error")
-        mini = state in ("working", "thinking") and not is_result
+        mini = self._mini_for_state(state)
         # Multi-media answers (any topic) always use long/scroll layout
         url_count = primary.lower().count("http://") + primary.lower().count("https://")
         long_form = is_result and (
@@ -1918,8 +1957,10 @@ class OverlayPanel(QWidget):
             self._last_state = state
             return
 
-        prev_mini = self._last_state in ("working", "thinking")
-        mode_switch = (mini != prev_mini) and bool(self._last_state)
+        prev_mini = self._mini_for_state(self._last_state)
+        anchor_switch = self._effective_anchor(self._last_state) != self._effective_anchor(state)
+        # Animate on mini↔full switches AND on a right↔center dock move.
+        mode_switch = (mini != prev_mini or anchor_switch) and bool(self._last_state)
 
         self._body_len = body_len
         self._long_form = long_form
@@ -2055,7 +2096,7 @@ class OverlayPanel(QWidget):
         self._last_state = state
 
         if state in SHOW_STATES:
-            # Animate only on mini ↔ answer mode switch
+            # Animate on mini ↔ answer mode switch, or a right ↔ center dock move
             self._show_passive(force_place=True, animate=mode_switch)
             if state in ("wake", "recording", "thinking", "working", "speaking", "followup"):
                 self._hide_at = None
