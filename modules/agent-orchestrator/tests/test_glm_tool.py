@@ -11,7 +11,47 @@ sys.path.insert(0, str(ROOT))
 
 glm_tool = import_module("aipc_agent.glm_tool")
 ask_glm = glm_tool.ask_glm
+consult_glm = glm_tool.consult_glm
 next_data_scopes = glm_tool.next_data_scopes
+
+
+def fresh_quota(_: str) -> dict:
+    return {
+        "status": "ok",
+        "providers": [{
+            "id": "zai",
+            "remaining_percent": 80,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }],
+    }
+
+
+def test_consult_glm_masks_credentials_before_dispatch() -> None:
+    sent: list[str] = []
+    result = consult_glm(
+        "review this code; api_key=1234567890abcdef",
+        lookup=fresh_quota,
+        post=lambda prompt: sent.append(prompt) or "safe answer",
+    )
+    assert result == {
+        "status": "ok",
+        "advisor": "glm",
+        "content": "safe answer",
+    }
+    assert sent == ["review this code; [REDACTED]"]
+
+
+def test_consult_glm_keeps_unknown_quota_local() -> None:
+    called = False
+
+    def post(_: str) -> str:
+        nonlocal called
+        called = True
+        return "unexpected"
+
+    result = consult_glm("review this", lookup=lambda _: {"status": "error"}, post=post)
+    assert result["status"] == "local_only"
+    assert called is False
 
 
 def test_unknown_quota_keeps_request_local() -> None:
