@@ -366,6 +366,39 @@ the backend URL only — client stays speech-shaped.
   pause listening; screen-lock autostart helper starts the mute target.
 - **Train**: `aipc-voice-train-wake --samples DIR --label NAME` (v0 marker; ONNX fit later).
 
+## Latency instrumentation (voice-telemetry)
+
+Every past perf fix on this loop (NPU-first chat, `models use voice`, compact
+lane isolation) was tuned by feel because **no per-stage latency number
+existed**. `voice-latency-instrumentation` adds the minimum measurement:
+`aipc_voice_timing.TurnTimer` writes **one JSON line per mic-captured turn** to
+`${XDG_STATE_HOME:-~/.local/state}/aipc-voice/turns.jsonl`.
+
+Record fields (durations in ms; no transcript/reply text ever stored):
+
+| Field | Meaning |
+|---|---|
+| `perceived_ms` | user end-of-speech → first audible output (the dead-air users feel) |
+| `llm_ttft_ms` | LLM request → first token (streaming path; `null` on batch) |
+| `tts_ttfa_ms` | TTS request → first audio |
+| `path` | `batch` (aipc-voice-once) or `stream` (voice-streaming-turn) |
+| `tts_backend` / `preset` | label to compare a stream turn against its batch baseline |
+
+Read it:
+
+```bash
+aipc voice timings              # recent turns + mean perceived/ttft/ttfa
+aipc voice timings --last 50 --json
+```
+
+Guarantees: best-effort (write-once at turn end, errors swallowed — never
+delays or fails a turn), bounded (keeps the most recent N turns),
+disable-able via `AIPC_VOICE_TIMING=0`. The batch path fills `perceived`; that
+is the baseline `voice-streaming-turn` must beat to satisfy its
+time-to-first-audio requirement. Percentile / per-scenario analytics are a
+**deferred** change (they land when the GPU-arbiter work needs to reason over a
+fleet of turns).
+
 ## Verification tiers
 
 - Static: script syntax, self-tests, and targeted Python tests pass.

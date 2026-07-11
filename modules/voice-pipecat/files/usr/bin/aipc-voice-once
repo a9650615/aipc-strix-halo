@@ -58,6 +58,13 @@ try:
     import aipc_voice_ux as voice_ux
 except Exception:
     voice_ux = None
+try:
+    import aipc_voice_timing
+except Exception:
+    aipc_voice_timing = None
+
+# Set once per mic-captured turn; show() marks play_start and flushes it.
+_turn_timer = None
 
 def _ux(state, detail="", **kw):
     if voice_ux is None:
@@ -565,6 +572,7 @@ def show(reply):
 
     Voice-once is the sole TTS owner for voice sessions — agent must not speak.
     """
+    global _turn_timer
     body = _answer_for_overlay(reply)
     cue = "\n\n（不对？说「不对」可反馈）"
     if "不对" in body or "不對" in body:
@@ -586,6 +594,14 @@ def show(reply):
         _ux("done", done_body, force=True, ttl_s=hold)
     except TypeError:
         _ux("done", done_body, force=True)
+
+    # Batch play_start proxy: the moment we begin speaking. capture_end→here is
+    # the dead-air the user feels (STT + intent + LLM + prep). Best-effort only.
+    if _turn_timer is not None:
+        try:
+            _turn_timer.mark("play_start")
+        except Exception:
+            pass
 
     spoke = False
     if os.environ.get("AIPC_VOICE_TTS", "1") == "0":
@@ -683,6 +699,14 @@ def show(reply):
         _reply_notify("AIPC Assistant", reply or "", timeout_ms=15000)
     elif not spoke and not _overlay_active():
         print(f"aipc-voice-once: reply (no TTS/overlay): {reply}")
+
+    # One record per mic-captured turn; best-effort, never affects the turn.
+    if _turn_timer is not None:
+        try:
+            _turn_timer.flush()
+        except Exception:
+            pass
+        _turn_timer = None
 
 
 def _matches_open_portal(text: str) -> bool:
@@ -919,6 +943,17 @@ def main(argv=None):
                 except OSError:
                     pass
             return 1
+
+    # Instrument only real mic-captured turns (unlink_wav ⇒ we recorded from
+    # the mic). --wav/--text handoff paths have no user end-of-speech to time.
+    global _turn_timer
+    _turn_timer = None
+    if unlink_wav and aipc_voice_timing is not None:
+        try:
+            _turn_timer = aipc_voice_timing.TurnTimer(path="batch")
+            _turn_timer.mark("capture_end")
+        except Exception:
+            _turn_timer = None
 
     try:
         _ux("thinking", force=True)

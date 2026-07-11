@@ -1278,6 +1278,17 @@ def voice_once(args: tuple[str, ...]) -> None:
     raise SystemExit(subprocess.call([str(helper), *args]))
 
 
+@voice_cmd.command("timings")
+@click.option("--last", type=int, default=20, help="show only the most recent N turns")
+@click.option("--json", "as_json", is_flag=True, help="raw JSON output")
+def voice_timings(last: int, as_json: bool) -> None:
+    """Show recent voice turn latency (perceived / llm_ttft / tts_ttfa)."""
+    from aipc_lib import voice_timing
+
+    records = voice_timing.read_records(last=last)
+    click.echo(voice_timing.format_report(records, as_json=as_json))
+
+
 @voice_cmd.command("bind-hotkey")
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
 def voice_bind_hotkey(args: tuple[str, ...]) -> None:

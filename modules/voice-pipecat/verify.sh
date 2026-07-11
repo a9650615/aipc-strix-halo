@@ -67,4 +67,14 @@ python3 "$stream_lib" >/dev/null || {
     exit 1
 }
 
+timing_lib="$this_dir/files/usr/lib/aipc-voice/aipc_voice_timing.py"
+python3 -c "import ast; ast.parse(open('$timing_lib').read())" || {
+    echo "voice-pipecat: aipc_voice_timing syntax error" >&2
+    exit 1
+}
+python3 "$timing_lib" >/dev/null || {
+    echo "voice-pipecat: aipc_voice_timing self-test failed" >&2
+    exit 1
+}
+
 exit 0

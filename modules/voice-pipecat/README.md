@@ -40,6 +40,23 @@ Bind the push-to-talk shortcut from a desktop session:
 aipc-voice-bind-hotkey
 ```
 
+### Turn latency instrumentation (voice-telemetry)
+
+`files/usr/lib/aipc-voice/aipc_voice_timing.py` records **one JSON line per
+mic-captured turn** to `${XDG_STATE_HOME:-~/.local/state}/aipc-voice/turns.jsonl`
+with the headline durations `perceived` (user end-of-speech → first audible
+output), `llm_ttft`, and `tts_ttfa`, plus a small label (`path`,
+`tts_backend`, `preset`). Read it with `aipc voice timings [--last N] [--json]`.
+
+Guarantees: **best-effort** (written once at turn end, any IO error swallowed —
+a logging failure never affects a turn), **no spoken content** (durations and
+categorical labels only — never transcript or reply text), **bounded** (log
+keeps the most recent N turns), and **disable-able** via `AIPC_VOICE_TIMING=0`.
+The batch path fills `perceived`; `llm_ttft` is filled by the streaming worker
+(`voice-streaming-turn`) and is null on batch. This exists to verify
+`voice-streaming-turn`'s time-to-first-audio requirement; percentile /
+per-scenario analytics are a deferred change.
+
 ### Siri-like partial overlay + shared UX (aipc)
 
 **Contract owner:** `tools/aipc_lib/voice_ux.py` (import `aipc_lib.voice_ux`).
