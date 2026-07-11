@@ -86,5 +86,16 @@ class CompactIdleSnapshotTest(unittest.TestCase):
             self.assertEqual(_systemctl_state("is-active"), "unknown")
 
 
+class CompactIdleFrontendContractTest(unittest.TestCase):
+    def test_runtime_card_formats_observational_states(self):
+        source = (ROOT / "web/src/pages/index.astro").read_text(encoding="utf-8")
+        for token in (
+            "Compact unloaded", "Compact in use", "Compact idle",
+            "auto-release", "release in", "compact_idle_release",
+        ):
+            self.assertIn(token, source)
+        self.assertNotIn("/unload", source)
+
+
 if __name__ == "__main__":
     unittest.main()

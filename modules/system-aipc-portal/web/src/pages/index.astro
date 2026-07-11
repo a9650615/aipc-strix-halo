@@ -14,6 +14,19 @@ import App from "../layouts/App.astro";
   <script>
     const show = (id, text) => document.querySelector(`#${id} p:last-child`).textContent = text;
     const post = async (path) => { await fetch(path, { method: "POST" }); refresh(); };
+    const duration = (seconds) => {
+      if (!Number.isFinite(seconds)) return "unknown";
+      const minutes = Math.floor(seconds / 60);
+      const rest = seconds % 60;
+      return minutes ? `${minutes}m${rest ? `${rest}s` : ""}` : `${rest}s`;
+    };
+    const compactText = (value) => {
+      const timer = `timer ${value?.timer || "unknown"}`;
+      if (value?.state === "unloaded") return `Compact unloaded · auto-release ${duration(value.timeout_s)} · ${timer}`;
+      if (value?.state === "in_use") return `Compact in use · ${timer}`;
+      if (value?.state === "idle") return `Compact idle ${duration(value.idle_s)} · release in ${duration(value.remaining_s)} · ${timer}`;
+      return `Compact unknown · ${timer}`;
+    };
     async function refresh() {
       try {
         const data = await fetch("/api/v1/dashboard").then((r) => r.ok ? r.json() : Promise.reject(r.status));
@@ -21,7 +34,7 @@ import App from "../layouts/App.astro";
         const ports = data.device?.io?.ports || [];
         show("device", `${data.device?.summary || data.device?.detail || "Unavailable"} · ${ports.filter((p) => p.state === "connected").length}/${ports.length} Type-C connected`);
         show("npu", data.npu?.summary || "Unavailable");
-        show("ai", data.runtime?.summary || "Unavailable");
+        show("ai", `${data.runtime?.summary || "Unavailable"} · ${compactText(data.runtime?.compact_idle_release)}`);
         document.querySelector("#services ul").replaceChildren(...(data.services || []).map((s) => {
           const row = document.createElement("li"); row.textContent = `${s.title}: ${s.state} `;
           const button = Object.assign(document.createElement("button"), { textContent: "Start" });
