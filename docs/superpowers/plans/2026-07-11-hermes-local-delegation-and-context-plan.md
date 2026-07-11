@@ -50,7 +50,7 @@
 
 - [x] Validate the existing 131072-token declaration and `max_tokens: 8192` output reservation.
 - [x] Change `compression.threshold` to `0.65` and `target_ratio` to `0.35`, leaving `protect_last_n: 12` and the local `coder-compact` auxiliary model in place.
-- [x] Set the compact auxiliary timeout to 90 seconds so a stalled summary does not block the interactive session for three minutes.
+- [x] Set the compact auxiliary timeout to 90 seconds so a stalled summary does not block the interactive session for three minutes. (Revised 2026-07-11 hermes-compact-fix: the 90s value was never actually applied — live stayed 600s; now set to 180s, bench-derived: worst-case E2B compact at the 80k trigger ≈ 110s, and 2 attempts × 180s = 360s stays under the 720s bridge wall timeout so failure cooldowns always get recorded.)
 - [x] Confirm YAML parses and calculate the 79.9K trigger below the 122.9K usable input limit; an 80K live soak remains hardware follow-up.
 
 ### Task 4: Verify and commit
