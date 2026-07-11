@@ -8,3 +8,11 @@ chmod +x /usr/bin/aipc-voice-stream
 chmod +x /usr/bin/aipc-voice-template
 chmod +x /usr/bin/aipc-voice-say
 mkdir -p /var/lib/aipc-voice/persona/templates
+
+# Enable the overlay user service declaratively (build-time symlink, no daemon).
+# This is the SINGLE launcher — the KDE autostart .desktop was removed because
+# running both spawned a duplicate overlay whose autostart instance escaped the
+# service cgroup and lingered as an orphan (systemctl restart could not reap it).
+mkdir -p /usr/lib/systemd/user/default.target.wants
+ln -sf ../aipc-voice-overlay.service \
+    /usr/lib/systemd/user/default.target.wants/aipc-voice-overlay.service
