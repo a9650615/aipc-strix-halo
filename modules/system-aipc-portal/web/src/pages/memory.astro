@@ -1,0 +1,69 @@
+---
+import App from "../layouts/App.astro";
+---
+<App title="AIPC Memory">
+  <section class="hero"><p class="eyebrow">MEM0 · LONG-TERM MEMORY</p><h1>Memory</h1><p id="summary">Loading memories…</p></section>
+  <section class="controls" aria-label="Memory filters">
+    <input id="query" placeholder="Semantic search…" />
+    <input id="user" placeholder="user_id" />
+    <input id="agent" placeholder="agent_id" />
+    <input id="app" placeholder="app_id" />
+    <button id="search">Search</button>
+    <button id="list">List all</button>
+  </section>
+  <section aria-label="Stored memories"><ul id="memories"></ul></section>
+  <script>
+    const summary = document.querySelector("#summary");
+    const value = (id) => document.querySelector(`#${id}`).value.trim();
+    const scope = () => Object.fromEntries(
+      [["user_id", value("user")], ["agent_id", value("agent")], ["app_id", value("app")]].filter(([, v]) => v)
+    );
+    function renderRows(items) {
+      summary.textContent = `${items.length} memories`;
+      document.querySelector("#memories").replaceChildren(...items.map((m) => {
+        const row = document.createElement("li");
+        const text = document.createElement("p");
+        text.textContent = m.memory || m.data || JSON.stringify(m);
+        const meta = document.createElement("small");
+        meta.textContent = [
+          m.user_id && `user:${m.user_id}`,
+          m.agent_id && `agent:${m.agent_id}`,
+          m.metadata?.app_id && `app:${m.metadata.app_id}`,
+          m.created_at?.slice(0, 19),
+          typeof m.score === "number" && `score:${m.score.toFixed(3)}`,
+        ].filter(Boolean).join(" · ");
+        const del = Object.assign(document.createElement("button"), { textContent: "Delete" });
+        del.onclick = async () => {
+          if (!confirm("Delete this memory?")) return;
+          await fetch(`/api/v1/memories/${m.id}`, { method: "DELETE" });
+          list();
+        };
+        row.append(text, meta, del);
+        return row;
+      }));
+    }
+    async function list() {
+      try {
+        const params = new URLSearchParams({ ...scope(), limit: "100" });
+        const data = await fetch(`/api/v1/memories?${params}`).then((r) => r.ok ? r.json() : Promise.reject(r.status));
+        renderRows(data.results || []);
+      } catch { summary.textContent = "Memory service unavailable"; }
+    }
+    async function search() {
+      const query = value("query");
+      if (!query) return list();
+      try {
+        const data = await fetch("/api/v1/memories/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, ...scope(), limit: 20 }),
+        }).then((r) => r.ok ? r.json() : Promise.reject(r.status));
+        renderRows(data.results || []);
+      } catch { summary.textContent = "Memory service unavailable"; }
+    }
+    document.querySelector("#search").onclick = search;
+    document.querySelector("#list").onclick = list;
+    document.querySelector("#query").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
+    list();
+  </script>
+</App>

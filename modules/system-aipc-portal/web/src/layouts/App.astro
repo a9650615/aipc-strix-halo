@@ -12,7 +12,7 @@ const { title = "AIPC Control Center" } = Astro.props;
     <ClientRouter fallback="swap" />
   </head>
   <body>
-    <header><a class="brand" href="/">AIPC <span>Control Center</span></a><nav><a href="/#home">Home</a><a href="/#device">Device</a><a href="/#ai">AI &amp; Voice</a><a href="/#services">Services</a></nav></header>
+    <header><a class="brand" href="/">AIPC <span>Control Center</span></a><nav><a href="/#home">Home</a><a href="/#device">Device</a><a href="/#ai">AI &amp; Voice</a><a href="/#services">Services</a><a href="/memory" data-astro-reload>Memory</a></nav></header>
     <main><slot /></main>
   </body>
 </html>

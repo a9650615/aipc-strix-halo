@@ -129,3 +129,32 @@ def add_memory(req: AddRequest) -> dict:
 def search_memories(req: SearchRequest) -> dict:
     result = _get_memory().search(req.query, top_k=req.limit, filters=_scope_filter(req))
     return {"results": result.get("results", result) if isinstance(result, dict) else result}
+
+
+@app.get("/memories")
+def list_memories(
+    user_id: str | None = None,
+    agent_id: str | None = None,
+    run_id: str | None = None,
+    app_id: str | None = None,
+    limit: int = 50,
+) -> dict:
+    # mem0ai==2.0.11 Memory.get_all() refuses filters without one of
+    # user_id/agent_id/run_id (ValueError, confirmed against the live
+    # service) -- but browsing everything is exactly what a management UI
+    # needs. get_all() is only that validation + telemetry around
+    # _get_all_from_vector_store(), so call the internal directly; pgvector's
+    # list() treats an empty filters dict as "no WHERE clause" (verified live).
+    scope = {
+        k: v
+        for k, v in (("user_id", user_id), ("agent_id", agent_id), ("run_id", run_id), ("app_id", app_id))
+        if v
+    }
+    results = _get_memory()._get_all_from_vector_store(scope, limit, False, limit)
+    return {"results": results}
+
+
+@app.delete("/memories/{memory_id}")
+def delete_memory(memory_id: str) -> dict:
+    _get_memory().delete(memory_id)
+    return {"status": "deleted", "id": memory_id}

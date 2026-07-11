@@ -29,6 +29,9 @@ class _FakeApp:
     def post(self, path):
         return lambda fn: fn
 
+    def delete(self, path):
+        return lambda fn: fn
+
 
 class _BaseModel:
     def __init__(self, **kwargs):
@@ -115,3 +118,42 @@ def test_search_uses_flat_and_filter_for_all_scopes(monkeypatch):
 
     assert seen["top_k"] == 3
     assert seen["filters"] == {"user_id": "u", "agent_id": "a", "run_id": "r", "app_id": "app"}
+
+
+def test_list_memories_bypasses_get_all_entity_validation(monkeypatch):
+    # real mem0ai==2.0.11 Memory.get_all() raises ValueError unless filters
+    # contains user_id/agent_id/run_id (confirmed live) -- the management UI
+    # must be able to browse everything, so the endpoint calls
+    # _get_all_from_vector_store() (the internal get_all() wraps) directly.
+    server = _load_server_module(monkeypatch)
+    calls = []
+
+    class FakeMemory:
+        def _get_all_from_vector_store(self, filters, limit, show_expired=False, output_limit=None):
+            calls.append((filters, limit, show_expired, output_limit))
+            return [{"id": "m1"}]
+
+    monkeypatch.setattr(server, "_get_memory", lambda: FakeMemory())
+
+    result = server.list_memories(user_id="u", app_id="app", limit=7)
+    assert calls == [({"user_id": "u", "app_id": "app"}, 7, False, 7)]
+    assert result == {"results": [{"id": "m1"}]}
+
+    server.list_memories()
+    assert calls[-1] == ({}, 50, False, 50)
+
+
+def test_delete_memory_forwards_id(monkeypatch):
+    server = _load_server_module(monkeypatch)
+    deleted = []
+
+    class FakeMemory:
+        def delete(self, memory_id):
+            deleted.append(memory_id)
+
+    monkeypatch.setattr(server, "_get_memory", lambda: FakeMemory())
+
+    result = server.delete_memory("abc-123")
+
+    assert deleted == ["abc-123"]
+    assert result == {"status": "deleted", "id": "abc-123"}
