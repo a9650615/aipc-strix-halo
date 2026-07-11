@@ -355,7 +355,15 @@ def _chat_timeout_text() -> str:
 
 
 def chat(text, session_id):
-    """Return (reply_text, end_session, session_id). end_session → wake should not re-open 接话."""
+    """Return (reply_text, end_session, expect_reply, background, session_id).
+
+    end_session → wake should dismiss + hide, no follow-up (farewell).
+    expect_reply → assistant is asking the user something; wake should open
+    a short follow-up window. background → turn detached to a background job
+    (auto-detach past DETACH_S, or explicit long mode); mic frees like a done
+    turn (no follow-up) but the overlay shows a persistent pending pill.
+    Default (all false) → answered, no follow-up.
+    """
     payload = json.dumps(
         {"text": text, "session_id": session_id, "source": "voice"}
     ).encode()
@@ -366,24 +374,30 @@ def chat(text, session_id):
         with urllib.request.urlopen(req, timeout=CHAT_TIMEOUT) as resp:
             body = resp.read()
     except TimeoutError:
-        return _chat_timeout_text(), False, session_id
+        return _chat_timeout_text(), False, False, False, session_id
     except urllib.error.HTTPError as exc:
         try:
             raw = exc.read()
             data = json.loads(raw.decode(errors="replace"))
             if isinstance(data, dict) and data.get("text"):
-                return str(data["text"]), bool(data.get("end_session")), str(data.get("session_id") or session_id)
+                return (
+                    str(data["text"]),
+                    bool(data.get("end_session")),
+                    bool(data.get("expect_reply")),
+                    bool(data.get("background")),
+                    str(data.get("session_id") or session_id),
+                )
             if isinstance(data, dict) and data.get("error"):
                 msg = data["error"]
                 if isinstance(msg, dict):
                     msg = msg.get("message") or msg
-                return f"助手暂时无法完成：{msg}", False, session_id
+                return f"助手暂时无法完成：{msg}", False, False, False, session_id
         except Exception:
             pass
         raise
     except urllib.error.URLError as exc:
         if _is_timeout_exc(exc):
-            return _chat_timeout_text(), False, session_id
+            return _chat_timeout_text(), False, False, False, session_id
         raise
     data = json.loads(body.decode() or "{}")
     if isinstance(data, dict):
@@ -392,8 +406,40 @@ def chat(text, session_id):
         spoken = str(data.get("spoken_summary") or "").strip()
         # stash for show() via attribute on str? return full; speak uses spoken if set
         chat._last_spoken = spoken  # type: ignore[attr-defined]
-        return full, bool(data.get("end_session")), str(data.get("session_id") or session_id)
-    return str(data), False, session_id
+        return (
+            full,
+            bool(data.get("end_session")),
+            bool(data.get("expect_reply")),
+            bool(data.get("background")),
+            str(data.get("session_id") or session_id),
+        )
+    return str(data), False, False, False, session_id
+
+
+def _turn_rc(end_session: bool, expect_reply: bool, background: bool = False) -> int:
+    """Map turn-completion signals to the voice-wake return code.
+
+    2 = farewell → dismiss, no follow-up (unchanged behavior).
+    4 = turn detached to a background job (auto-detach past DETACH_S, or
+        explicit long mode) → mic frees (no follow-up window, same as the
+        default done case) but the overlay shows a persistent pending pill
+        instead of a "done" card, until the background completion notify
+        replaces it.
+    3 = assistant is asking the user something → open a short follow-up window.
+    0 = default: answered, not expecting a reply → no follow-up (the fix for
+        "讲完话还一直听" — previously every non-farewell answer opened one).
+
+    Precedence: end_session always wins (farewell overrides everything else).
+    background beats expect_reply — a detached long turn already frees the
+    mic; there is no clarify question left to answer with a follow-up window.
+    """
+    if end_session:
+        return 2
+    if background:
+        return 4
+    if expect_reply:
+        return 3
+    return 0
 
 
 
@@ -1000,6 +1046,8 @@ def main(argv=None):
         _ux("thinking", (text or "處理中")[:40], force=True)
         wait = _long_wait_watchdog((text or "")[:60])
         end_session = False
+        expect_reply = False
+        background = False
         try:
             if USE_AGGREGATOR:
                 try:
@@ -1011,9 +1059,13 @@ def main(argv=None):
                         f"falling back to direct /chat",
                         file=sys.stderr,
                     )
-                    reply, end_session, _sid = chat(text, args.session_id)
+                    reply, end_session, expect_reply, background, _sid = chat(
+                        text, args.session_id
+                    )
             else:
-                reply, end_session, _sid = chat(text, args.session_id)
+                reply, end_session, expect_reply, background, _sid = chat(
+                    text, args.session_id
+                )
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
             # chat() already maps urlopen timeouts → spoken text; if anything
             # still surfaces here, speak timeout instead of silent exit 1.
@@ -1038,16 +1090,29 @@ def main(argv=None):
     if end_session:
         print("aipc-voice-once: session complete", flush=True)
     show(reply)
-    # end_session=2 → wake closes 接话 + overlay; 0 → may open follow-up
-    if end_session:
+    # rc contract (see _turn_rc): 2 = farewell, dismiss + hide overlay;
+    # 4 = turn detached to background, mic frees but overlay keeps a pending
+    # pill; 3 = assistant expects a reply, wake opens a short follow-up
+    # window; 0 = answered/done, no follow-up (default — fixes "讲完话还一直听").
+    rc = _turn_rc(end_session, expect_reply, background)
+    if rc == 2:
         print("aipc-voice-once: end_session → dismiss multi-turn", flush=True)
         # Keep farewell text; do not blank the card
         _ux("done", _answer_for_overlay(reply or "会话结束"), force=True)
-        return 2
+        return rc
+    if rc == 4:
+        # show() already spoke the ack via TTS and painted a "done" card;
+        # replace it with the persistent background-pending pill (mic is
+        # free, no follow-up window — same as rc==0's no-follow-up case).
+        print("aipc-voice-once: background detach → pending pill, mic free", flush=True)
+        _ux("bg_task", _answer_for_overlay(reply or "背景任务进行中"), force=True)
+        return rc
+    if rc == 3:
+        print("aipc-voice-once: expect_reply → open short follow-up", flush=True)
     # show() already set done with full answer + feedback cue. Do NOT
     # blank-overwrite with _ux("done") — that made the panel vanish in ~4s
     # and blocked「不对」feedback.
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

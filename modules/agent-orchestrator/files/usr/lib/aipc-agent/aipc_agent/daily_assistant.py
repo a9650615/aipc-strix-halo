@@ -51,10 +51,12 @@ from langchain_core.tools import tool
 from langchain_litellm import ChatLiteLLM
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import InjectedState, ToolNode, tools_condition
 
 from aipc_agent import memory, ux_bridge
 from aipc_agent._util import text_of
+from aipc_agent.glm_tool import ask_glm as _ask_glm
+from aipc_agent.glm_tool import next_data_scopes
 
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
 # Uncensored tool-calling default (Vulkan). Override with AIPC_DAILY_MODEL.
@@ -73,7 +75,15 @@ SYSTEM_PROMPT = (
     "Use tools iteratively: call a tool, read the result, call more tools if "
     "needed, then answer briefly. "
     "Tools: calendar, email, files.read, web search, usage_lookup (coding "
-    "quotas only — not for writing code), screen_describe (read-only VLM). "
+    "quotas only — not for writing code), screen_describe (read-only VLM look), "
+    "ask_glm (optional cloud second opinion; use only when local reasoning is "
+    "insufficient, never send secrets/private context or likely moderated content), "
+    "screen_click / screen_type / screen_key (actually control the desktop — "
+    "mouse + keyboard). For screen control: call screen_describe first to see "
+    "the layout and find coordinates, then act. If a control tool returns "
+    "needs_permission, tell the user to run `aipc agent screen --grant-session 300`; "
+    "if it returns blocked, the foreground window is protected (password manager / "
+    "terminal) — do not retry, tell the user. "
     "When a tool returns not_configured, say that feature is not set up yet. "
     "You do not write or refactor code — if the user wants coding, say they "
     "should ask the coding/Hermes agent. "
@@ -182,12 +192,85 @@ def usage_lookup(providers: str = "") -> dict:
 
 
 @tool
+def ask_glm(prompt: str, state: Annotated[dict, InjectedState]) -> dict:
+    """Ask the quota-gated GLM cloud model for a second opinion. Use only when
+    local reasoning is insufficient. Never send secrets, private context, or
+    content likely to be moderated; keep those requests local. Execution scope
+    is injected by the graph and cannot be supplied by the model."""
+    data_scope = "prompt" if state.get("data_scopes") == ["prompt"] else "private"
+    return _ask_glm(
+        prompt,
+        data_scope=data_scope,
+        interaction=str(state.get("interaction") or "background"),
+    )
+
+
+@tool
 def screen_describe(question: str = "") -> dict:
     """Look at the user's desktop (screenshot + local VLM). Read-only —
     does not click or type. Use when the user asks what is on screen/desktop."""
     from aipc_agent import screen_see
 
     return screen_see.describe_desktop(question or "")
+
+
+def _screen_control_action(fn_name: str, *args) -> dict:
+    """Shared body for the write screen-control tools. Every action routes
+    through agent-screen-control's own gate.check_action() (grant + window
+    blacklist, fail-closed); this only maps its exceptions to friendly tool
+    status dicts so the assistant can tell the user what to do next."""
+    try:
+        from aipc_agent_screen_control import input as sc_input  # phase-4-agent#4.7
+        from aipc_agent_screen_control import gate as sc_gate
+    except ImportError:
+        return {
+            "status": "not_configured",
+            "tool": fn_name,
+            "detail": "agent-screen-control not installed (module .disabled?)",
+        }
+    try:
+        getattr(sc_input, fn_name)(*args)
+        return {"status": "ok", "tool": fn_name, "detail": f"{fn_name}{args}"}
+    except sc_gate.GateDenied:
+        return {
+            "status": "needs_permission",
+            "tool": fn_name,
+            "detail": "螢幕控制未授權，請先執行：aipc agent screen --grant-session 300",
+        }
+    except sc_gate.BlacklistedWindow:
+        return {
+            "status": "blocked",
+            "tool": fn_name,
+            "detail": "目前前景視窗在黑名單（密碼管理器／終端機等），拒絕操作以保護敏感畫面",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "tool": fn_name, "detail": str(exc)}
+
+
+@tool
+def screen_click(x: int, y: int, button: str = "left") -> dict:
+    """Move the mouse to absolute pixel (x, y) and click. `button` is
+    left/right/middle. Requires an active screen-control grant; refuses on
+    blacklisted windows. Use screen_describe first to find coordinates."""
+    r = _screen_control_action("mouse_move", int(x), int(y))
+    if r["status"] != "ok":
+        return r
+    return _screen_control_action("mouse_click", button)
+
+
+@tool
+def screen_type(text: str) -> dict:
+    """Type `text` into the focused window via the keyboard. Requires an
+    active screen-control grant; refuses on blacklisted windows."""
+    return _screen_control_action("key_type", text)
+
+
+@tool
+def screen_key(key: str) -> dict:
+    """Press a key or combo (ydotool keycode name, e.g. "KEY_ENTER",
+    "29:1 46:1 29:0 46:0" for Ctrl+C). Requires an active screen-control
+    grant; refuses on blacklisted windows."""
+    return _screen_control_action("key_press", key)
 
 
 TOOLS = [
@@ -197,13 +280,19 @@ TOOLS = [
     search,
     search_tavily,
     usage_lookup,
+    ask_glm,
     screen_describe,
+    screen_click,
+    screen_type,
+    screen_key,
 ]
 
 
 class DailyAssistantState(TypedDict):
     text: str
     session_id: str
+    data_scopes: list[str]
+    interaction: str
     messages: Annotated[list, add_messages]
 
 
@@ -380,8 +469,10 @@ def _flatten_for_chat_template(messages: list) -> list:
 
 def _seed(state: DailyAssistantState) -> dict:
     # One system only — required by coder-agentic chat template
-    sys_parts = [SYSTEM_PROMPT, *_memory_parts(state)]
+    memory_parts = _memory_parts(state)
+    sys_parts = [SYSTEM_PROMPT, *memory_parts]
     return {
+        "data_scopes": ["private"] if memory_parts else state["data_scopes"],
         "messages": [
             SystemMessage(content="\n\n".join(p for p in sys_parts if p)),
             HumanMessage(content=state["text"]),
@@ -434,7 +525,9 @@ def _tools_node(state: DailyAssistantState) -> dict:
     names = ux_bridge.tool_names_from_message(last) if last is not None else []
     label = ux_bridge.humanize_tools(names)
     _job_progress(label, thinking=f"执行 {label}")
-    return ToolNode(TOOLS).invoke(state)
+    scopes = next_data_scopes(state["data_scopes"], names)
+    result = ToolNode(TOOLS).invoke({**state, "data_scopes": scopes})
+    return {**result, "data_scopes": scopes}
 
 
 def _finish(state: DailyAssistantState) -> dict:

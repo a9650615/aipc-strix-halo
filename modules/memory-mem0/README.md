@@ -209,7 +209,12 @@ Routes: `GET /healthz`, `POST /memories`
 `app_id` is folded into `metadata["app_id"]` before calling `Memory.add()`,
 since the underlying library has no native `app_id` parameter),
 `POST /search` (`{query, user_id, agent_id, app_id, run_id, limit}` — all
-scope keys present are ANDed together as a flat `filters` dict).
+scope keys present are ANDed together as a flat `filters` dict),
+`GET /memories` (query params `user_id/agent_id/run_id/app_id/limit`, all
+optional — no scope lists everything; backs the portal's Memory tab, so it
+calls `Memory._get_all_from_vector_store()` directly because the public
+`get_all()` in mem0ai==2.0.11 rejects unscoped filters),
+`DELETE /memories/{id}`.
 
 ## Client config example (Phase 4 agents)
 

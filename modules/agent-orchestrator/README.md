@@ -194,6 +194,13 @@ an email-keyword query; plain-text regression (`"reply with exactly:
 pong"` → `{"text": "pong", ...}`) confirms the supervisor path is
 unaffected.
 
+### Optional GLM second opinion
+
+Daily Assistant exposes `ask_glm` to its local tool-calling model. The tool
+checks CodexBar provider `zai` first and calls only LiteLLM alias `glm-cloud`;
+unknown or exhausted quota stays local. It is not in the direct-tool fast path,
+so ordinary requests never select GLM automatically.
+
 ## Dependencies
 - llm-litellm (all LLM calls route through the gateway)
 - agent-tools-search, agent-browser, agent-code-shell (sub-agent tools —

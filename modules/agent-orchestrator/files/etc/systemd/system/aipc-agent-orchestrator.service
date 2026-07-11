@@ -7,6 +7,7 @@ Wants=litellm.service
 Type=simple
 ExecStart=/usr/lib/aipc-agent/venv/bin/uvicorn aipc_agent.server:app --host 127.0.0.1 --port 4100
 Environment=PYTHONPATH=/usr/lib/aipc-agent
+EnvironmentFile=-/etc/aipc/env.d/agent-orchestrator/zai.env
 Restart=on-failure
 
 [Install]

@@ -25,8 +25,9 @@ existing runtimes remain responsible for executing that decision.
 |---|---|---|
 | A | TaskEnvelope, shadow planner, unified entries, local ladder, quality gates, spoken summary, traces | main delivery; paid providers disabled |
 | B | Codex/Claude **subscription CLI** adapters, one-shot ask grants, canary | only after Slice A local gate |
-| C | automatic **subscription** escalation (no metered API on this machine) | hardware evidence + separate user approval |
-| ~~C-metered~~ | metered API tokens / hard-cap ledger | **deferred / not planned** — user has subscription only |
+| C | Z.AI GLM `ask_glm` tool canary | SOPS key + CodexBar quota + hardware evidence |
+| D | automatic **subscription** escalation | hardware evidence + separate user approval |
+| ~~D-metered~~ | generic metered API escalation / hard-cap ledger | deferred; the GLM canary is the sole exception |
 
 ## Policy defaults (user-approved 2026-07-10; refined same day)
 
@@ -35,10 +36,12 @@ Slice A keeps paid providers off. When Slice B/C enable subscription:
 1. **Subscription (Codex CLI / Claude Code):** interactive → **ask once**
    (session-scoped grant is enough; do not re-prompt every turn).
    Unattended/background → `deny` until an explicit time-bounded grant.
-2. **Metered API / provider API tokens:** **not used**. This deployment has
-   subscription CLIs only. Do not build, prompt for, or auto-route to
-   metered LiteLLM cloud keys for assistant traffic. Cloud alias provisioning
-   in `cloud-llm-fallback` may remain for manual diagnostics only.
+2. **Z.AI GLM API:** one monthly-subscription exception is permitted as
+   `ask_glm`, a tool
+   available to the local main model rather than a default or fallback route.
+   It is foreground-only and uses CodexBar's `zai` usage snapshot for remaining
+   quota and reset time. Unknown or exhausted quota leaves the task local. No
+   other metered LiteLLM cloud route is enabled for assistant traffic.
 3. **Remote data:** default scopes = `prompt` only; coding may add an
    explicitly scoped workspace; personal docs/email/calendar/screen/mem0
    default deny; secrets/credential stores non-exportable always.
@@ -302,7 +305,7 @@ automation is not an acceptable production credential strategy.
 ## D6 — Paid-use and privacy gate
 
 **Chosen:** task/session/time-bounded grants plus conservative defaults and a
-local metered-budget ledger.
+subscription quota gate for the sole permitted GLM tool.
 
 **Alternatives considered:** provider-side limits only or permanent blanket
 approval. Neither prevents concurrent overspend or unintended data export.
@@ -315,17 +318,26 @@ Paid use requires all of:
 4. quota/budget policy approval;
 5. a redacted payload preview/hash recorded in the route trace.
 
-Default policy (this machine — subscription only):
+Default policy (this machine — subscriptions plus quota-gated GLM tool):
 
-| Context | Subscription CLI | Metered API |
+| Context | Subscription CLI | GLM subscription API |
 |---|---|---|
-| foreground, prompt only | ask **once per session** | **disabled** |
-| foreground, explicitly scoped code repo | ask once per session | **disabled** |
-| personal docs/email/calendar/screen/mem0 | deny unless explicit data-scope grant | **disabled** |
-| unattended/background | deny | **disabled** |
-| secrets/credential stores | deny | **disabled** |
+| foreground, prompt only | ask **once per session** | GLM `ask_glm` when CodexBar reports quota |
+| foreground, explicitly scoped code repo | ask once per session | GLM `ask_glm` when CodexBar reports quota |
+| personal docs/email/calendar/screen/mem0 | deny unless explicit data-scope grant | deny |
+| unattended/background | deny | deny |
+| secrets/credential stores | deny | deny |
 
-Metered API adapters, token prompts, and reservation ledgers are out of
+The GLM tool is deliberately narrower than generic metered routing. It has no
+automatic fallback or retry path. CodexBar provider `zai` is the quota source;
+the router consumes normalized `used_percent`, `resets_at`, and status fields
+instead of owning a second usage ledger. Missing, stale, or failed usage data
+keeps the request local. The local main model receives a tool contract that
+prohibits requests likely to be refused or moderated; this is best-effort, not
+a provider-policy bypass. No second moderation classifier is added: the hard
+gate is data scope and credentials, while ambiguous content stays local.
+
+Other metered API adapters, token prompts, and reservation ledgers are out of
 scope until the user explicitly revises this policy.
 
 Grants may be one-shot, session-bound, or time-bounded. There is no permanent

@@ -300,6 +300,7 @@ def _normalize_upstream(raw: list, ids: Optional[list[str]]) -> dict[str, Any]:
                         else 100.0 - float(_used_pct(primary))
                     ),
                     "reset": primary.get("reset_description"),
+                    "updated_at": snap.get("updated_at") or snap.get("updatedAt"),
                     "detail": snap.get("error"),
                 }
             )
@@ -347,6 +348,12 @@ def _normalize_upstream(raw: list, ids: Optional[list[str]]) -> dict[str, Any]:
                 or identity.get("accountEmail"),
                 "plan": usage.get("loginMethod") or identity.get("loginMethod"),
                 "source": item.get("source"),
+                "updated_at": (
+                    usage.get("updatedAt")
+                    or usage.get("updated_at")
+                    or item.get("updatedAt")
+                    or item.get("updated_at")
+                ),
                 "detail": err_msg,
             }
         )

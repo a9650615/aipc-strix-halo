@@ -8,7 +8,7 @@ The session-gate/always-on mode switch and its CLI (`aipc agent screen
 --mode ...`) are task 5.3, not this module; this module only ever *asks*
 the gate whether an action is currently allowed and refuses if not.
 
-## Current status: implemented, still `.disabled`
+## Current status: enabled — full hardware pass 2026-07-11
 
 Every action (mouse move/click, key type/press, screenshot+VLM describe)
 calls `gate.check_action()` first, which enforces two independent
@@ -18,18 +18,25 @@ fail-closed checks before anything real happens:
    can't even be determined, that also counts as blacklisted (unknown is
    never treated as safe).
 
-Stays `.disabled` primarily because:
-- **`kdotool` (window-class detection) was never hardware-verified** on the
-  input path — blacklist fails closed when class is unknown.
-- Module enable still needs a full hardware pass (CLAUDE.md §9) for
-  ydotool injection + grant/revoke sessions.
+The two reasons this module stayed `.disabled` are both resolved and the
+whole chain is hardware-verified end-to-end (see Verification tiers):
+- **`kdotool` window-class detection** is installed and verified live —
+  `getactivewindow` + `getwindowclassname` correctly returns
+  `org.kde.konsole` for a focused terminal, so the blacklist actually
+  fires instead of only failing closed on unknown.
+- **Vision model exists**: `vlm-screen` (Qwen2.5-VL-7B) is registered in
+  LiteLLM; a real screenshot POSTed through the bridge returned a correct
+  desktop description. `vlm.py`'s default is already `vlm-screen`.
+- Full chain verified in one pass: no-grant → `GateDenied`; grant →
+  konsole blacklisted → `BlacklistedWindow`; grant + empty blacklist →
+  real `ydotool` pointer move; screenshot → `vlm-screen` description;
+  revoke → `GateDenied` again.
 
-**VLM alias (2026-07-10):** `vlm-qwen2vl` is registered again in
-`models.yaml` + LiteLLM → Lemonade `Gemma-4-26B-A4B-it-GGUF` + mmproj
-(on-demand). The bridge in `vlm.py` no longer 400s for "unknown model"
-once the live gateway config includes that entry. Screen-control stays
-`.disabled` until the input/blacklist path is hardware-verified; VLM
-describe can be exercised via LiteLLM directly without enabling this module.
+Assistant callers reach this through the Daily Assistant tools
+`screen_click` / `screen_type` / `screen_key` (read-only look is
+`screen_describe`). A grant is still required first
+(`aipc agent screen --grant-session <seconds>`); the tools return
+`needs_permission` rather than acting when no grant is active.
 
 ## Files
 - `files/usr/lib/aipc-agent/aipc_agent_screen_control/`
@@ -152,13 +159,63 @@ there:
 |---|---|---|
 | `spectacle` screenshot capture | **Hardware-verified** | Ran for real: 1,956,339-byte PNG, valid `\x89PNG` header |
 | VLM bridge wire format (b64 encode, POST body, endpoint) | **Hardware-verified** | Real screenshot POSTed to real LiteLLM; got the expected HTTP 400 (model gap, not a code bug) — everything up to model resolution confirmed working |
-| VLM bridge actual vision response | **Not verified — cannot be**, no vision model registered (see above) |
+| VLM bridge actual vision response | **Hardware-verified 2026-07-11** | `vlm-screen` (Qwen2.5-VL-7B) registered; real screenshot returned a correct desktop description |
 | `aipc-agent-gate` check RPC (deny path) | **Hardware-verified** | `check_gate()` False with no grant active, against the real live socket |
 | `aipc-agent-gate` check RPC (allow path) | **Hardware-verified** | Granted a real 60s session `screen-control` grant, `check_gate()` True, revoked immediately, confirmed False again after |
 | Blacklist fail-closed (unknown window class) | **Hardware-verified** | With a real grant active, `input.mouse_move()` still raised `BlacklistedWindow`, not `GateDenied` — proves the second gate layer independently blocks when `kdotool` can't resolve a class |
-| `kdotool` window-class detection itself | **Static-only** | Package not installed on this dev host; live install blocked by read-only ostree `/usr` (see above); syntax-checked only |
-| Real input injection (`ydotool` moving a real pointer/typing into a real window) | **Static-only (code read-through)** | Per this dispatch's safety constraint, would require spawning a disposable target window and confirming it's focused via the window-list query — but that query is exactly the untested `kdotool` piece, so targeting couldn't be cleanly confirmed. Skipped rather than fake a hardware-verified claim; `ydotool` itself was already confirmed working in this session's environment setup (`ydotool mousemove 0 0` exits 0) |
+| `kdotool` window-class detection itself | **Hardware-verified 2026-07-11** | Installed via `rpm-ostree`-staged layer (live-extracted binary this pass); `getactivewindow` + `getwindowclassname` returned `org.kde.konsole` for a focused terminal |
+| Real input injection (`ydotool` moving a real pointer/typing into a real window) | **Hardware-verified 2026-07-11** | With a real grant + empty blacklist, `input.mouse_move(5, 5)` shelled out to `ydotool` and moved the real pointer, exit 0 |
 | Fail-closed self-tests (`input.py`/`vlm.py` `--self-test`) | **Hardware-verified** | Ran against the real live gate with no active grant; both raised the expected exception before touching `ydotool`/`spectacle`/network |
+| `ydotool.service` override syntax + manual restart | **Hardware-verified 2026-07-11** | `daemon-reload` + `systemctl restart ydotool.service` → active; `ydotool mousemove 0 0` as uid 1000 → exit 0 |
+| `ydotool.service` boot-time race actually eliminated | **Reboot-pending** | Dependency ordering (`After=`/`Requires=user-runtime-dir@1000.service`) is correct systemd syntax and matches the diagnosed failure mode, but only a real reboot proves the race is gone — this session could not reboot without dropping the task |
+
+## ydotool.service — boot-time race fix (phase-4-agent#4.7)
+`input.py` needs `ydotoold` reachable at an unprivileged, uid-1000-owned
+socket (`ydotool` shells out as the logged-in user, not root). The
+upstream `ydotool` package's base unit is `ExecStart=/usr/bin/ydotoold`
+with no args — root-only default socket, disabled by Fedora's preset.
+
+Diagnosed live on 2026-07-11: a hand-applied `/etc/systemd/system/
+ydotool.service.d/override.conf` (not previously in the repo) pointed
+`ydotoold` at `/run/user/1000/.ydotool_socket`, but the unit
+(`WantedBy=default.target`) had no ordering against
+`user-runtime-dir@1000.service`, the unit that actually creates
+`/run/user/1000`. Early in boot, `ydotoold` sometimes starts before that
+directory exists, fails to bind the socket, and — because `Restart=always`
+hits its start-limit burst faster than the directory shows up — ends up
+`failed` (status=2) until someone runs `systemctl restart ydotool` by hand
+(which always works once `/run/user/1000` exists).
+
+**Fix chosen: option (a), a repo-tracked drop-in with an explicit
+`After=`/`Requires=user-runtime-dir@1000.service`** —
+`files/etc/systemd/system/ydotool.service.d/override.conf` — over rewriting
+`ydotool.service` as a systemd `--user` unit. Reasons:
+- The socket-own design is already single-uid (`socket-own=1000:1000`,
+  matching the AI PC's single-user assumption, CLAUDE.md §6); a `--user`
+  unit would add per-session lifecycle (start/stop on login/logout,
+  lingering requirements) for no behavioral gain over a system unit that's
+  simply ordered correctly.
+- `Requires=` (not just `After=`) makes systemd actually pull
+  `user-runtime-dir@1000.service` in as a dependency rather than only
+  hoping it's already up — this is the actual root-cause fix, not a
+  restart-count band-aid.
+- Smallest diff: one drop-in file, no unit-type rewrite, no change to
+  `input.py`'s socket path assumption.
+
+`post-install.sh` now does `systemctl enable ydotool.service` (symlink
+write only, no `--now`) so a fresh image ships the unit enabled instead of
+relying on someone enabling it by hand on the live box, as had happened
+here.
+
+**Verification**: `systemctl daemon-reload` + `systemctl restart
+ydotool.service` → `active (running)`; `ydotool mousemove 0 0` as uid 1000
+→ exit 0 (hardware-verified, 2026-07-11). The boot-time race itself is
+only provable by a real reboot — this session cannot reboot without
+dropping the task, so **the dependency ordering is syntax/behavior-checked
+live via manual restart, but elimination of the boot race is
+reboot-pending** or the unit config verified across a `bootc switch` +
+reboot cycle (CLAUDE.md §9 hardware-verified tier for the boot-order claim
+specifically).
 
 ## Dependencies
 - ai-rocm (intended VLM inference backend once a vision model exists)

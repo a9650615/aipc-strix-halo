@@ -218,6 +218,9 @@ _LONG_MODE_MARKERS = (
 )
 # Workers that can run as background long jobs
 _LONG_CAPABLE = frozenset({"hermes", "daily_assistant"})
+# A Hermes turn that starts inline (mode=short) but runs longer than this
+# auto-detaches to the background flow instead of blocking the mic.
+DETACH_S = float(os.environ.get("AIPC_ASYNC_DETACH_S", "45"))
 # Substrings that imply tool/code agent work (not creative writing).
 # Live web / research style tasks hermes handles better than daily
 # (SearXNG may be down; hermes browser path is hardware-verified for stocks).
@@ -322,6 +325,11 @@ class SupervisorState(TypedDict, total=False):
     force_text: str  # canned reply (cancel etc.)
     # Conversation lifecycle (voice multi-turn): True → hide overlay / no follow-up
     end_session: bool
+    # True when this turn detached to a background job (auto-detach past
+    # DETACH_S, or explicit mode=long) — voice frees the mic (no follow-up)
+    # but shows a persistent "background task running" pill until the
+    # completion notify replaces it (see server.ChatResponse.background).
+    background: bool
     # Hermes tool/URL footprint for async skill learn (not spoken)
     learn_trail: str
     spoken_summary: str  # short TTS line; full text stays in `text`
@@ -743,6 +751,8 @@ def _daily_assistant_node(state: SupervisorState) -> SupervisorState:
     text_in = state.get("original_text") or state["text"]
     sid = state["session_id"]
     plan_sum = f"处理：{(text_in or '')[:60]}"
+    background = _should_run_long_async(state, "daily_assistant")
+    interaction = "background" if background else "foreground"
 
     # Fast path: single obvious tool without ornith-35b tool loop
     try:
@@ -775,7 +785,13 @@ def _daily_assistant_node(state: SupervisorState) -> SupervisorState:
     def _run() -> dict:
         task_jobs.job_update("日曆/工具助手思考中…", thinking="选择工具并执行")
         result = _daily_assistant_graph.invoke(
-            {"text": text_in, "session_id": sid, "messages": []}
+            {
+                "text": text_in,
+                "session_id": sid,
+                "data_scopes": ["prompt"],
+                "interaction": interaction,
+                "messages": [],
+            }
         )
         return {
             "status": "ok",
@@ -783,12 +799,12 @@ def _daily_assistant_node(state: SupervisorState) -> SupervisorState:
             "detail": "daily_assistant",
         }
 
-    if _should_run_long_async(state, "daily_assistant"):
+    if background:
         ux_bridge.progress("日曆/工具长任务派发…", source="daily-assistant")
         out = task_jobs.submit(
             "daily_assistant", text_in, sid, _run, plan_summary=plan_sum
         )
-        return {"text": out["text"], "session_id": sid}
+        return {"text": out["text"], "session_id": sid, "background": True}
 
     ux_bridge.progress("日曆/搜尋/用量助手啟動…", source="daily-assistant")
     result = _run()
@@ -828,7 +844,8 @@ def _hermes_node(state: SupervisorState) -> SupervisorState:
     if _should_run_long_async(state, "hermes"):
         ux_bridge.progress("Hermes 长任务派发…", source="hermes")
         out = task_jobs.submit("hermes", text_in, sid, _run, plan_summary=plan_sum)
-        return {"text": out["text"], "session_id": sid}
+        # explicit mode=long always backgrounds (grace_s=0 → immediate ack)
+        return {"text": out["text"], "session_id": sid, "background": True}
 
     ux_bridge.progress(
         "Hermes 工具代理啟動…" + ("（长流程同步）" if long_mode else ""),
@@ -854,7 +871,14 @@ def _hermes_node(state: SupervisorState) -> SupervisorState:
         )
     except Exception:
         pass
-    result = _run()
+    # Auto-detach: starts inline, but a turn that runs past DETACH_S falls
+    # back to the background flow (short ack, mic freed, notify on finish)
+    # exactly like the explicit mode=long path — no marker required.
+    result = task_jobs.submit(
+        "hermes", text_in, sid, _run, plan_summary=plan_sum, grace_s=DETACH_S
+    )
+    if result.get("detail") == "background":
+        return {"text": result.get("text", ""), "session_id": sid, "background": True}
     text = str(result.get("text") or "").strip() or "Hermes 没有返回内容。"
     trail = str(result.get("trail") or "").strip()
     ok = result.get("status") == "ok" and bool(text)

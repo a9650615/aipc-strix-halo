@@ -76,6 +76,7 @@ def test_lookup_usage_normalize_official_shape() -> None:
             "provider": "codex",
             "source": "oauth",
             "usage": {
+                "updatedAt": "2026-07-11T15:00:00+00:00",
                 "primary": {
                     "usedPercent": 32,
                     "resetDescription": "soon",
@@ -94,6 +95,7 @@ def test_lookup_usage_normalize_official_shape() -> None:
     assert p["remaining_percent"] == 68
     assert p["used_percent"] == 32
     assert p["account"] == "a@b.c"
+    assert p["updated_at"] == "2026-07-11T15:00:00+00:00"
 
 
 def test_used_pct_official_0_1_2_scale() -> None:

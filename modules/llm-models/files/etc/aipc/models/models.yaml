@@ -167,6 +167,11 @@ models:
     model_id: gemini-2.5-pro
     size_gb: cloud
 
+  - alias: glm-cloud
+    backend: zai
+    model_id: glm-5.2
+    size_gb: cloud
+
   # Phase 2 (memory-rag): bge-m3 + bge-reranker-v2-m3, served by
   # modules/rag-embedder on 127.0.0.1:8201. backend isn't ollama/lemonade
   # on purpose — the rag-embedder container manages its own model cache

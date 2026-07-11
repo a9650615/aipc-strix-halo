@@ -32,6 +32,33 @@ class ChatResponse(BaseModel):
     session_id: str = ""
     session_status: str = ""
     spoken_summary: str = ""
+    expect_reply: bool = False
+    # True when the turn detached to a background job (auto-detach past
+    # DETACH_S, or explicit long mode). Always paired with expect_reply=False
+    # and end_session=False — the mic frees, no follow-up window.
+    background: bool = False
+
+
+def expect_reply_from_result(result: object) -> bool:
+    """True when the graph is asking the user something (clarify_question set).
+
+    Voice clients use this to open a short follow-up listening window instead
+    of the default "answered, done" turn (see turn-state-contract).
+    """
+    if not isinstance(result, dict):
+        return False
+    return bool(str(result.get("clarify_question") or "").strip())
+
+
+def background_from_result(result: object) -> bool:
+    """True when the turn detached to a background job (graphs._hermes_node's
+    auto-detach or explicit long-mode ack). Voice clients free the mic (no
+    follow-up) but show a persistent pending pill instead of a "done" card
+    until the completion notify replaces it (see turn-state-contract).
+    """
+    if not isinstance(result, dict):
+        return False
+    return bool(result.get("background"))
 
 
 @app.get("/healthz")
@@ -295,6 +322,8 @@ def chat(req: ChatRequest) -> ChatResponse | JSONResponse:
         session_id=sid,
         session_status=st,
         spoken_summary=spoken,
+        expect_reply=expect_reply_from_result(result),
+        background=background_from_result(result),
     )
 
 

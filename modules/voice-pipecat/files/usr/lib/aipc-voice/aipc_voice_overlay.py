@@ -50,6 +50,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QScrollArea,
@@ -68,6 +69,7 @@ SHOW_STATES = frozenset(
         "working",
         "speaking",
         "followup",
+        "bg_task",
         "done",
         "no_speech",
         "error",
@@ -84,6 +86,7 @@ STATE_COLORS = {
     "speaking": QColor(100, 180, 255),
     "done": QColor(120, 200, 170),
     "followup": QColor(90, 210, 170),
+    "bg_task": QColor(255, 205, 90),
     "no_speech": QColor(255, 180, 80),
     "error": QColor(255, 90, 90),
     "miss": QColor(160, 160, 160),
@@ -100,6 +103,7 @@ STATE_HINTS = {
     "speaking": "",
     "done": "可滾動閱讀 · 說「不对」可反饋",
     "followup": "直接說下一句，無需喚醒詞",
+    "bg_task": "完成後會通知你 · 可繼續說「嘿助理」",
     "no_speech": "沒聽到，請再說一次",
     "error": "出了點問題",
     "muted": "喚醒已暫停",
@@ -116,6 +120,7 @@ STATE_LABELS = {
     "speaking": "AIPC · 回答中",
     "done": "AIPC · 已回答",
     "followup": "AIPC · 可接話",
+    "bg_task": "AIPC · 背景任務進行中",
     "no_speech": "AIPC · 沒聽清",
     "error": "AIPC · 出錯",
     "muted": "AIPC · 靜音",
@@ -132,8 +137,12 @@ def _strip_elapsed(text: str) -> str:
     return _ELAPSED_TAIL_RE.sub("", (text or "").strip()).strip()
 
 
-def _mini_chip_label(detail: str) -> str:
+def _mini_chip_label(detail: str, state: str = "") -> str:
     """Readable mini label; width is sized from measured text, not a fixed clip."""
+    if state == "bg_task":
+        # Persistent background-detach pill: fixed label, not content-derived
+        # (the ack text varies per turn; the pill identity should not).
+        return "背景任务进行中 ⋯"
     raw = (detail or "").strip()
     sec = ""
     m = __import__("re").search(r"(\d+)\s*s", raw, __import__("re").I)
@@ -522,6 +531,74 @@ def _extract_image_urls(text: str, *, limit: int = 6) -> list[str]:
     return out
 
 
+_MD_IMG_RE = re.compile(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)>?[^)]*\)")
+
+
+def _extract_and_strip_media(text, extra=None):
+    """Return (text_without_image_refs, ordered_unique_image_urls).
+
+    Pulls markdown ![](url) and bare image URLs so they render in the safe
+    gallery instead of as raw text. Non-image links are left in the text.
+    """
+    s = text or ""
+    urls: list[str] = []
+
+    def _add(u: str) -> None:
+        u = (u or "").strip().strip("<>")
+        if u and u not in urls:
+            urls.append(u)
+
+    for u in extra or []:
+        _add(u)
+
+    def _sub(m: "re.Match") -> str:
+        _add(m.group(1))
+        return ""
+
+    s = _MD_IMG_RE.sub(_sub, s)
+    for u in _extract_image_urls(re.sub(r"<[^>]+>", " ", s)):
+        _add(u)
+    for u in urls:
+        s = s.replace(u, "")
+    s = re.sub(r"[ \t]+\n", "\n", s)
+    s = re.sub(r"\n{3,}", "\n\n", s).strip()
+    return s, urls
+
+
+def _markdown_to_html(text):
+    """Markdown → Qt rich-text HTML via QTextDocument (built into PySide6).
+
+    Falls back to escaped plain text on empty/parse failure — never raises.
+    """
+    s = (text or "").strip()
+    if not s:
+        return ""
+    try:
+        from PySide6.QtGui import QTextDocument
+
+        doc = QTextDocument()
+        doc.setMarkdown(s)
+        html = doc.toHtml()
+        if html and "<" in html:
+            return html
+    except Exception:
+        pass
+    import html as _h
+
+    return _h.escape(s).replace("\n", "<br>")
+
+
+def _source_host(url):
+    """Bare host for a URL caption (drops www.), '' on failure."""
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(url).hostname or "").lower()
+        return host[4:] if host.startswith("www.") else host
+    except Exception:
+        return ""
+
+
 class _ImageFetch(QObject):
     """Background HTTP fetch → main-thread pixmap (no Qt Network dependency)."""
 
@@ -629,6 +706,7 @@ class BodyScroll(QScrollArea):
         self._v.setSpacing(8)
 
         self._label = QLabel("")
+        self._label.setTextFormat(Qt.TextFormat.RichText)
         self._label.setWordWrap(True)
         self._label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
@@ -644,9 +722,11 @@ class BodyScroll(QScrollArea):
 
         self._gallery = QWidget()
         self._gallery.setStyleSheet("background: transparent;")
-        self._gal = QVBoxLayout(self._gallery)
+        self._gal = QGridLayout(self._gallery)
         self._gal.setContentsMargins(0, 4, 0, 0)
         self._gal.setSpacing(8)
+        self._gal_cols = 1
+        self._gal_cell_w = 0
         self._v.addWidget(self._gallery, 0, Qt.AlignmentFlag.AlignTop)
         self._v.addStretch(0)
 
@@ -675,7 +755,6 @@ class BodyScroll(QScrollArea):
         image_urls: list[str] | None = None,
     ) -> int:
         """Set text + optional images; return full content height."""
-        self._label.setText(text or "")
         px = max(11.0, min(18.0, float(font_px)))
         wt = max(300, min(700, int(font_weight)))
         lh = max(1.25, min(1.6, float(line_height)))
@@ -697,12 +776,10 @@ class BodyScroll(QScrollArea):
         f.setPixelSize(max(11, int(round(px))))
         f.setWeight(QFont.Weight.Medium if wt >= 500 else QFont.Weight.Normal)
         self._label.setFont(f)
-        # Images: explicit list or auto-extract from plain/html text
-        urls = list(image_urls or [])
-        if not urls:
-            # strip tags for extraction
-            plain = re.sub(r"<[^>]+>", " ", text or "")
-            urls = _extract_image_urls(plain)
+        # Markdown text + safe media extraction: image URLs go to the gallery,
+        # non-image links stay in the rendered text.
+        clean, urls = _extract_and_strip_media(text or "", image_urls)
+        self._label.setText(_markdown_to_html(clean))
         self.set_images(urls, width=width)
         return self.measure_content_height(width)
 
@@ -735,7 +812,13 @@ class BodyScroll(QScrollArea):
         w = max(120, w - 8)
         gen = self._load_gen
         self._gallery.show()
-        for url in urls[:max_n]:
+        items = urls[:max_n]
+        # 2-up grid when there is more than one image; single column otherwise.
+        cols = 2 if len(items) > 1 else 1
+        cell_w = max(120, (w - (cols - 1) * 8) // cols)
+        self._gal_cols = cols
+        self._gal_cell_w = cell_w
+        for i, url in enumerate(items):
             lab = QLabel("🖼 載入中…")
             lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lab.setWordWrap(True)
@@ -745,14 +828,16 @@ class BodyScroll(QScrollArea):
                 "border: 1px solid rgba(255,255,255,28); border-radius: 10px; "
                 "padding: 10px; font-size: 12px;"
             )
-            lab.setFixedWidth(w)
+            lab.setFixedWidth(cell_w)
             lab.setMinimumHeight(56)
             lab.setCursor(Qt.CursorShape.PointingHandCursor)
             lab.setProperty("img_url", url)
+            host = _source_host(url)
+            lab.setToolTip(f"{host}\n{url}" if host else url)
             lab.mousePressEvent = (  # type: ignore[method-assign]
                 lambda ev, u=url: QDesktopServices.openUrl(QUrl(u))
             )
-            self._gal.addWidget(lab)
+            self._gal.addWidget(lab, i // cols, i % cols)
             self._img_labels.append(lab)
             self._img_urls.append(url)
             self._fetcher.fetch(gen, url)
@@ -770,7 +855,7 @@ class BodyScroll(QScrollArea):
         if not pm.loadFromData(data):
             lab.setText("⚠ 無法解碼圖片")
             return
-        w = max(100, lab.width() or self._inner_w)
+        w = max(100, self._gal_cell_w or lab.width() or self._inner_w)
         # Fit width, cap height
         scaled = pm.scaled(
             w,
@@ -822,12 +907,21 @@ class BodyScroll(QScrollArea):
 
         gal_h = 0
         if self._img_labels:
-            for lab in self._img_labels:
-                lab.setFixedWidth(w)
+            cols = max(1, self._gal_cols)
+            cell_w = self._gal_cell_w or w
+            row_h = 0
+            for i, lab in enumerate(self._img_labels):
+                lab.setFixedWidth(cell_w)
                 if lab.pixmap() is not None and not lab.pixmap().isNull():
-                    gal_h += lab.height() + 8
+                    lh = lab.height()
                 else:
-                    gal_h += max(56, lab.minimumHeight()) + 8
+                    lh = max(56, lab.minimumHeight())
+                row_h = max(row_h, lh)
+                if i % cols == cols - 1:
+                    gal_h += row_h + 8
+                    row_h = 0
+            if row_h:
+                gal_h += row_h + 8
             self._gallery.setFixedWidth(w)
             self._gallery.setFixedHeight(max(0, gal_h))
             self._gallery.show()
@@ -1548,6 +1642,43 @@ class OverlayPanel(QWidget):
             pass
         return QGuiApplication.primaryScreen()
 
+    @staticmethod
+    def _anchor_for_state(state: str, rich: bool = False) -> str:
+        """Content-driven dock: center ONLY for a genuinely rich result
+        (long text / media / markdown). Everything else — idle, listening,
+        thinking, working, bg_task, AND short one-line answers — docks compact
+        to the right. Keeps the HUD from sliding center for a one-liner and
+        kills the right↔center bounce (flicker) across a turn's state changes.
+        Pure mapping, no env/hardware reads — stays trivially unit-testable."""
+        if rich and state in ("speaking", "done", "error"):
+            return "center"
+        return "right"
+
+    def _state_dock_enabled(self) -> bool:
+        """AIPC_OVERLAY_ANCHOR (explicit) always wins; otherwise state-driven
+        docking is on unless AIPC_OVERLAY_STATE_DOCK=0."""
+        if os.environ.get("AIPC_OVERLAY_ANCHOR"):
+            return False
+        return (os.environ.get("AIPC_OVERLAY_STATE_DOCK", "1") or "1").strip() != "0"
+
+    def _effective_anchor(self, state: str, rich: bool = False) -> str:
+        env_anchor = (os.environ.get("AIPC_OVERLAY_ANCHOR") or "").strip().lower()
+        if env_anchor:
+            return env_anchor
+        if self._state_dock_enabled():
+            return self._anchor_for_state(state, rich)
+        return "top-center"
+
+    def _mini_for_state(self, state: str) -> bool:
+        """Compact pill layout: working/thinking (unchanged) plus any
+        state-driven right-docked idle state (reuses the existing narrow
+        mini form instead of a bespoke width path)."""
+        if state in ("speaking", "done", "error"):
+            return False
+        if state in ("working", "thinking"):
+            return True
+        return self._state_dock_enabled() and self._anchor_for_state(state) == "right"
+
     def _compute_geom(
         self,
         *,
@@ -1592,7 +1723,7 @@ class OverlayPanel(QWidget):
         max_h = int(min(sh * 0.82, sh - 20))
         h = min(h, max_h)
         margin_y = int(os.environ.get("AIPC_OVERLAY_MARGIN_Y", "14"))
-        anchor = (os.environ.get("AIPC_OVERLAY_ANCHOR") or "top-center").strip().lower()
+        anchor = self._effective_anchor(self._state, getattr(self, "_rich", False))
         if anchor in ("top-right", "right"):
             margin_x = int(os.environ.get("AIPC_OVERLAY_MARGIN_X", "16"))
             x = int(avail.right() - w - margin_x)
@@ -1644,14 +1775,17 @@ class OverlayPanel(QWidget):
                 return
 
         size_delta = 0
+        x_delta = 0
         if self._last_geom is not None:
             size_delta = abs(self._last_geom[2] - w) + abs(self._last_geom[3] - h)
+            x_delta = abs(self._last_geom[0] - x)
 
-        # Animate only on real mode transitions (mini↔full), not every tick
+        # Animate on real mode transitions (mini↔full size change) OR a
+        # right↔center dock slide (x moves a lot without necessarily resizing).
         use_anim = (
             animate
             and self.isVisible()
-            and size_delta >= 40
+            and (size_delta >= 40 or x_delta >= 40)
             and not appear
         )
         if use_anim:
@@ -1785,8 +1919,10 @@ class OverlayPanel(QWidget):
         meta = self._pick_meta(state, primary, hint_field)
 
         # Tools / thinking: smallest pill. Answers expand height with content.
+        # Right-docked idle states (listening/wake/recording/no_speech/followup)
+        # reuse the same compact pill so the right-side dock stays narrow.
         is_result = state in ("speaking", "done", "error")
-        mini = state in ("working", "thinking") and not is_result
+        mini = self._mini_for_state(state)
         # Multi-media answers (any topic) always use long/scroll layout
         url_count = primary.lower().count("http://") + primary.lower().count("https://")
         long_form = is_result and (
@@ -1797,6 +1933,10 @@ class OverlayPanel(QWidget):
             or "媒体" in primary
         )
         body_len = 0 if mini else len(primary)
+
+        # Content-driven anchor: only a genuinely rich result centers.
+        prev_rich = getattr(self, "_rich", False)
+        self._rich = bool(long_form)
 
         core = _strip_elapsed(primary)
         layout_key = (
@@ -1809,7 +1949,7 @@ class OverlayPanel(QWidget):
 
         # Same mini phase: update label + remeasure width if text length changed
         if same_layout and mini:
-            chip = _mini_chip_label(primary or label or "執行中")
+            chip = _mini_chip_label(primary or label or "執行中", state=state)
             tw = self._measure_text_width(chip)
             # only reflow width if pixel width moved by >6px
             if abs(tw - self._text_w) > 6:
@@ -1832,8 +1972,10 @@ class OverlayPanel(QWidget):
             self._last_state = state
             return
 
-        prev_mini = self._last_state in ("working", "thinking")
-        mode_switch = (mini != prev_mini) and bool(self._last_state)
+        prev_mini = self._mini_for_state(self._last_state)
+        anchor_switch = self._effective_anchor(self._last_state, prev_rich) != self._effective_anchor(state, long_form)
+        # Animate on mini↔full switches AND on a right↔center dock move.
+        mode_switch = (mini != prev_mini or anchor_switch) and bool(self._last_state)
 
         self._body_len = body_len
         self._long_form = long_form
@@ -1845,7 +1987,7 @@ class OverlayPanel(QWidget):
 
         # Mini: measure text → size chip → contrast → elide only past max
         if mini:
-            chip = _mini_chip_label(primary or title)
+            chip = _mini_chip_label(primary or title, state=state)
             self._text_w = self._measure_text_width(chip)
             self._apply_card_width(
                 body_len=0, long_form=False, mini=True, text=chip
@@ -1969,9 +2111,14 @@ class OverlayPanel(QWidget):
         self._last_state = state
 
         if state in SHOW_STATES:
-            # Animate only on mini ↔ answer mode switch
+            # Animate on mini ↔ answer mode switch, or a right ↔ center dock move
             self._show_passive(force_place=True, animate=mode_switch)
-            if state in ("wake", "recording", "thinking", "working", "speaking", "followup"):
+            if state in (
+                "wake", "recording", "thinking", "working", "speaking", "followup",
+                "bg_task",
+            ):
+                # bg_task must persist until the background job's completion
+                # notify replaces it with a centered "done" card — no auto-hide.
                 self._hide_at = None
             elif state == "done":
                 try:

@@ -14,6 +14,14 @@ from aipc_portal.dashboard import device_snapshot, snapshot
 from aipc_portal.registry import render, start_baseline_services, start_service
 
 STATIC_ROOT = Path(__file__).resolve().parent.parent / "static"
+MEM0_BASE = "http://127.0.0.1:7000"
+STATIC_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".json": "application/json; charset=utf-8",
+}
 
 
 def _services_roots() -> list[Path] | None:
@@ -30,7 +38,8 @@ def _safe_id(value: str) -> bool:
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/healthz":
             self._send(200, "text/plain; charset=utf-8", b"ok\n")
             return
@@ -40,23 +49,56 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/v1/device/events":
             self._stream_device_events()
             return
-        if path in ("/", "/index.html") and (STATIC_ROOT / "index.html").is_file():
-            self._send(200, "text/html; charset=utf-8", (STATIC_ROOT / "index.html").read_bytes())
+        if path == "/api/v1/memories":
+            self._proxy_mem0("/memories" + (f"?{parsed.query}" if parsed.query else ""))
             return
-        if path.startswith("/assets/"):
-            asset = (STATIC_ROOT / path.lstrip("/")).resolve()
-            if asset.is_file() and STATIC_ROOT in asset.parents:
-                content_type = "text/css; charset=utf-8" if asset.suffix == ".css" else "application/javascript; charset=utf-8"
-                self._send(200, content_type, asset.read_bytes())
-                return
+        if self._send_static(path):
+            return
         if path in ("/", "/index.html"):
             body = render(roots=_services_roots()).encode("utf-8")
             self._send(200, "text/html; charset=utf-8", body)
             return
         self._send(404, "text/plain; charset=utf-8", b"not found\n")
 
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+        if path.startswith("/api/v1/memories/"):
+            memory_id = path[len("/api/v1/memories/") :].strip("/")
+            if memory_id and _safe_id(memory_id):
+                self._proxy_mem0(f"/memories/{memory_id}", method="DELETE")
+                return
+        self._send(404, "text/plain; charset=utf-8", b"not found\n")
+
+    def _send_static(self, path: str) -> bool:
+        candidate = (STATIC_ROOT / path.lstrip("/")).resolve()
+        if candidate.is_dir():
+            candidate = candidate / "index.html"
+        if candidate.is_file() and STATIC_ROOT in candidate.parents:
+            self._send(200, STATIC_TYPES.get(candidate.suffix, "application/octet-stream"), candidate.read_bytes())
+            return True
+        return False
+
+    def _proxy_mem0(self, upstream: str, method: str = "GET", body: bytes | None = None) -> None:
+        req = urllib.request.Request(
+            MEM0_BASE + upstream,
+            data=body,
+            method=method,
+            headers={"Content-Type": "application/json"} if body else {},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as response:
+                self._send(response.status, "application/json; charset=utf-8", response.read())
+        except urllib.error.HTTPError as error:
+            self._send(error.code, "application/json; charset=utf-8", error.read())
+        except (urllib.error.URLError, OSError, TimeoutError):
+            self._send(502, "application/json; charset=utf-8", b'{"detail": "mem0 unavailable"}')
+
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/v1/memories/search":
+            length = int(self.headers.get("Content-Length") or 0)
+            self._proxy_mem0("/search", method="POST", body=self.rfile.read(length) if length else b"{}")
+            return
         if path.startswith("/automation/") and path.endswith("/cancel"):
             task_id = path[len("/automation/") : -len("/cancel")].strip("/")
             if task_id and _safe_id(task_id):
