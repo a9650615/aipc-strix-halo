@@ -8,21 +8,15 @@ Implements `backend.online` for `modules/assistant-aggregator`.
 
 ## Status
 
-**Enabled by default** (no `.disabled` marker — see `openspec/changes/
-assistant-chatgpt-online/STATUS.md`, v0 complete). Implementation is present
-and hardware-verified without login: self-test, `sites list`, `status`.
-Playwright Chromium engine, inject/send, turn --voice, session close are
-implemented; `auth status`/`auth login` still require a one-time manual
-ChatGPT login **per machine** (session cookies don't travel with the image).
-
-Known gap: `sites/system_audio.py` is a documented stub — `status()` always
-reports `implemented: false` / `mic_only`; no PipeWire share graph yet.
+Ships **`.disabled`** by default (enable after first login + Voice hardware
+check). Implementation is present: Playwright Chromium, inject/send,
+turn --voice, session close.
 
 ```bash
-# first-run login on a machine (module is already enabled)
+# enable on a machine after verifying
+rm modules/assistant-chatgpt/.disabled   # or image post-enable
 pip install playwright && python -m playwright install chromium
-aipc-chatgpt status               # engine/site-pack check, no login needed
-aipc-chatgpt auth login           # one-time manual login (opens a window)
+aipc-chatgpt status
 aipc-assistant mode online
 aipc-assistant --text "hello" --prefer online
 ```
