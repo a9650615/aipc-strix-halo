@@ -697,6 +697,7 @@ class BodyScroll(QScrollArea):
         self._v.setSpacing(8)
 
         self._label = QLabel("")
+        self._label.setTextFormat(Qt.TextFormat.RichText)
         self._label.setWordWrap(True)
         self._label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
@@ -743,7 +744,6 @@ class BodyScroll(QScrollArea):
         image_urls: list[str] | None = None,
     ) -> int:
         """Set text + optional images; return full content height."""
-        self._label.setText(text or "")
         px = max(11.0, min(18.0, float(font_px)))
         wt = max(300, min(700, int(font_weight)))
         lh = max(1.25, min(1.6, float(line_height)))
@@ -765,12 +765,10 @@ class BodyScroll(QScrollArea):
         f.setPixelSize(max(11, int(round(px))))
         f.setWeight(QFont.Weight.Medium if wt >= 500 else QFont.Weight.Normal)
         self._label.setFont(f)
-        # Images: explicit list or auto-extract from plain/html text
-        urls = list(image_urls or [])
-        if not urls:
-            # strip tags for extraction
-            plain = re.sub(r"<[^>]+>", " ", text or "")
-            urls = _extract_image_urls(plain)
+        # Markdown text + safe media extraction: image URLs go to the gallery,
+        # non-image links stay in the rendered text.
+        clean, urls = _extract_and_strip_media(text or "", image_urls)
+        self._label.setText(_markdown_to_html(clean))
         self.set_images(urls, width=width)
         return self.measure_content_height(width)
 

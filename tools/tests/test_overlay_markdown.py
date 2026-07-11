@@ -73,3 +73,16 @@ def test_source_host():
     m = _mod()
     assert m._source_host("https://www.cwa.gov.tw/V8/C/x.png") == "cwa.gov.tw"
     assert m._source_host("not a url") == ""
+
+
+def test_set_body_renders_markdown_widget():
+    m = _mod()
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    body = m.BodyScroll()
+    # no image URL → no network fetch
+    body.set_body("**strong** and text", long_form=False, width=280)
+    html = body.body_text()
+    assert "strong" in html
+    assert ("font-weight:700" in html) or ("<b" in html.lower())
