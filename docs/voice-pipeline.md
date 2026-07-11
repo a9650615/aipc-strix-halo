@@ -442,6 +442,65 @@ sudo systemctl restart aipc-voice-stt-sensevoice.service
 
 Only mark OpenSpec hardware tasks complete after the matching command path is exercised. Wake word, listen-off triggers, firstboot voice screens, and full command/chat routing remain pending.
 
+### Turn-state contract + async auto-detach + overlay dock (2026-07-11) — acceptance
+
+Assistant UX overhaul toward "Siri-like but smarter". All render-verified and
+deployed to live paths; the API tier is service-verified; the acoustic tier is
+**pending on-hardware acceptance below**.
+
+**What shipped** (branch `phase-3-voice-assistant-2026-07-08`):
+
+| Piece | Commit | Behavior |
+|---|---|---|
+| Overlay state-driven dock + animated slide | `90e8b73` | Idle/listening docks compact right; activity/result slides to center + expands |
+| Turn-state contract (fixes "講完話還一直聽") | `4f487bf` | `/chat` returns `expect_reply`; voice-once `_turn_rc`→rc 2/4/3/0; wake opens follow-up ONLY on rc==3 |
+| Auto-detach long turns | `dea9d8b` | `task_jobs.submit(grace_s=AIPC_ASYNC_DETACH_S, default 45)`; Hermes inline turn past 45s → background ack, mic freed, notify on finish |
+| `bg_task` background-pending pill | `fff4b4e` | Right-dock "背景任务进行中 ⋯", persists until completion notify replaces it |
+| daily_assistant long turns flag background | `948d4bc` | Consistency — long daily turns also show the pill |
+| Latent fix: `ok = rc in (0,2)` → `(0,2,3,4)` | in `fff4b4e` | rc==3 (reply) was routed to the failure branch and unreachable before |
+
+Rollback: `AIPC_WAKE_FOLLOWUP_ALWAYS=1` restores the old "open follow-up after
+every answer". Detach threshold knob: `AIPC_ASYNC_DETACH_S` (seconds).
+
+**API-tier verification (no mic, done 2026-07-11):**
+
+```bash
+# turn-state fields serialize on the running orchestrator:
+python3 - <<'PY'
+import json, urllib.request
+def ask(t): 
+    r=urllib.request.Request("http://127.0.0.1:4100/chat",
+        data=json.dumps({"text":t,"session_id":"accept"}).encode(),
+        method="POST",headers={"Content-Type":"application/json"})
+    return json.loads(urllib.request.urlopen(r,timeout=90).read())
+for t in ["現在幾點","再見"]:
+    d=ask(t); print(t, d.get("expect_reply"), d.get("background"), d.get("end_session"))
+PY
+# expect: 現在幾點 → False False False (done, no follow-up)
+#         再見     → False False True  (dismiss)
+```
+
+**Acoustic acceptance (only the physical AI PC can do this):**
+
+```bash
+systemctl --user restart aipc-voice-overlay
+sudo systemctl restart aipc-agent-orchestrator aipc-voice-wake
+```
+
+Then, with the mic:
+1. Say a normal query → assistant answers and **stops** (no lingering listen),
+   unless it asked you a clarifying question.
+2. Ask something that runs long (multi-step tool work) → after ~45s she says an
+   ack ("我來處理，好了通知你") and the **mic frees** (back to idle).
+3. During that background run → overlay shows a compact right-dock
+   "背景任务进行中 ⋯" pill.
+4. When the task finishes → the pill **slides to center and expands** the result
+   card (markdown/media), optionally spoken.
+
+Speaking split is already correct: HUD shows full markdown `text`; TTS speaks the
+short, markdown-stripped `spoken_summary`; barge-in (`AIPC_WAKE_BARGE=1`) stops
+speech mid-answer.
+
 ### Streaming TTFA baseline (voice-telemetry) — AI PC only
 
 Prove `voice-streaming-turn` actually lowers time-to-first-audio, using the
