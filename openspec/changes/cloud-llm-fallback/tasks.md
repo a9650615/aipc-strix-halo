@@ -19,7 +19,7 @@
   - `thinking-cloud` → `anthropic/claude-opus-4-20250514`, `api_key: os.environ/ANTHROPIC_API_KEY`
   - `gpt4o-cloud` → `openai/gpt-4o`, `api_key: os.environ/OPENAI_API_KEY`
    - `gemini-cloud` → `gemini/gemini-2.5-pro`, `api_key: os.environ/GEMINI_API_KEY`
-   - `glm-cloud` → OpenAI-compatible Z.AI general API, `api_key: os.environ/ZAI_API_KEY`
+   - `glm-cloud` → OpenAI-compatible Z.AI general API, `api_key: os.environ/Z_AI_API_KEY`
 
 ## 3. Models Manifest — Cloud Aliases
 
@@ -66,7 +66,7 @@
     ANTHROPIC_API_KEY=<decrypted anthropic_api_key>
     OPENAI_API_KEY=<decrypted openai_api_key>
     GEMINI_API_KEY=<decrypted gemini_api_key>
-    ZAI_API_KEY=<decrypted zai_api_key>
+    Z_AI_API_KEY=<decrypted zai_api_key>
     ```
   - Set permissions: `0600 root:root` on the `.env` file.
   - If no: skip with a diagnostic message (cloud aliases will not work).

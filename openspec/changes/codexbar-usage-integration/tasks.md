@@ -110,6 +110,19 @@
 
 ---
 
+## Task 6: Add Z.AI Subscription Quota Provider
+**Status**: `pending`
+
+- [ ] 6.1 Implement provider `zai` using CodexBar's Z.AI subscription usage source.
+- [ ] 6.2 Normalize remaining quota and reset time through the existing
+  `used_percent`, `resets_at`, and provider status schema.
+- [ ] 6.3 Return a fail-soft status when credentials, quota, or upstream usage
+  data are unavailable; routing must keep the request local.
+- [ ] 6.4 Add one provider parser check and keep source/rendered package copies
+  in sync.
+
+---
+
 ## Summary
 
 | Task | Status | Priority |
@@ -119,3 +132,4 @@
 | 3. Core Provider Parsers | completed | high |
 | 4. CLI Interface | completed | medium |
 | 5. Integration | completed | high |
+| 6. Z.AI Subscription Quota | pending | high |

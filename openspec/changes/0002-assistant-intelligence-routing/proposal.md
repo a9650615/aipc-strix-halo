@@ -59,7 +59,7 @@ Delivery is split deliberately:
   session-scoped `ask once` grants. Explicit foreground requests only.
 - **Slice C — GLM tool canary:** one SOPS-backed Z.AI API alias, exposed only
   as the main model's `ask_glm` tool. It remains local-first, foreground-only,
-  and disabled until the hardware gate; it is not a generic fallback alias.
+  and quota-gated by CodexBar; it is not a generic fallback alias.
 - **Slice D — automatic subscription escalation:** after hardware evidence and
   separate user approval. No automatic metered escalation is introduced.
 
@@ -117,11 +117,10 @@ Delivery is split deliberately:
 1. **Subscription policy:** interactive coding delegation asks once for every
    dispatched task, naming provider and repository. Unattended/background
    dispatch remains `deny` until that task is confirmed.
-2. **Metered API / API tokens:** the user approved one exception: a Z.AI GLM
-   API model may be provisioned as the main model's `ask_glm` tool. It stays
-   foreground-only and local-first; it does not enable automatic metered
-   escalation or unrestricted off-box data export. A spending cap remains an
-   explicit enablement prerequisite.
+2. **Z.AI subscription API:** the user approved one exception: a monthly GLM
+   subscription may be provisioned as the main model's `ask_glm` tool. It stays
+   foreground-only and local-first; CodexBar supplies remaining quota and reset
+   time. Unknown or exhausted quota keeps the request local.
 3. **Remote data:** default `prompt` only; scoped repo for coding on grant;
    personal docs/email/calendar/screen/mem0 deny unless data-scope grant;
    secrets never exportable.
