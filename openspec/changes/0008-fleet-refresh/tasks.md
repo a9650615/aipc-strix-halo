@@ -24,9 +24,20 @@
       `max_input_tokens: 262144`, `assistant-gemma` model name unchanged
       (same registered id, weights re-pulled underneath), `ornith-35b`
       model name.
+- [x] 5b. Swap `resident-small` to `qwen3.5-4b-FLM` (derived name — see
+      how.md item 5) in `models.yaml` (size_gb 9.6 → 2.5) and
+      `config.yaml` (model name + required
+      `extra_body.chat_template_kwargs.enable_thinking: false`); update
+      `ensure-resident-small.sh` (both `files/etc/...` and
+      `files/usr/lib/...` copies) default `MODEL` value, the
+      `aipc-resident-small.service` Description, and `llm-lemonade`'s
+      `verify.sh` grep target — **left as uncommitted working-tree edits
+      per this dispatch's spec, not committed by this task.**
 - [x] 6. Update `modules/llm-models/README.md` and
-      `modules/llm-lemonade/README.md` with a short note on the four swaps
-      and the MTP single-stream trade-off.
+      `modules/llm-lemonade/README.md` with a short note on the four
+      Vulkan/llamacpp swaps, the MTP single-stream trade-off, and (new)
+      the `resident-small` NPU swap + its `enable_thinking: false`
+      requirement.
 - [x] 7. `openspec validate 0008-fleet-refresh --strict` passes.
 - [x] 8. Render verification: `tools/aipc render bootc` and
       `tools/aipc render ansible --check` both exit 0.
@@ -66,6 +77,31 @@
 - [ ] 17. `ornith-35b`: confirm `idle_unload_after_s: 900` is honored by the
       existing 0006 idle-release timer for this alias (same check 0007
       itself will need for its half of this same field).
+- [ ] 20. `resident-small`: `aipc models sync` (or `lemonade pull
+      qwen3.5:4b`) against the live FLM catalog; confirm the actual
+      generated Lemonade model name matches the derived `qwen3.5-4b-FLM`
+      used in `models.yaml`/`config.yaml` — if it differs, correct both
+      files to the real value before trusting this swap.
+- [ ] 21. `resident-small`: confirm `enable_thinking: false` yields a
+      clean, non-empty `content` response through the LiteLLM gateway
+      (not `reasoning_content` filled to `max_tokens` with empty
+      `content` — the known hybrid-thinking failure mode).
+- [ ] 22. `resident-small`: measure NPU decode/prefill speed for
+      `qwen3.5-4b-FLM` and confirm it's acceptable for the always-on
+      resident chat path (compare qualitatively against the prior
+      `gemma4-it-e4b-FLM` baseline); record the number in
+      `docs/agent-log.md` regardless of outcome.
+- [ ] 23. `resident-small`: confirm `ensure-resident-small.sh`'s pin path
+      (`/api/v1/load` with `"pinned": true`, falling back to `/api/v0/load`
+      / `/internal/pin`) still succeeds against `qwen3.5-4b-FLM` and that
+      LRU does not evict it under load, same as the existing
+      `gemma4-it-e4b-FLM` hardware verification this replaces.
+- [ ] 24. `resident-small`: smoke-test voice (SenseVoice STT → `/chat` →
+      Kokoro/CosyVoice TTS), `mem0`, and `assistant-aggregator` end to end
+      against the new model — all three are `resident-small` alias
+      consumers per CLAUDE.md §7 and should be transparent to this swap,
+      but none of them have been hardware-exercised against
+      `qwen3.5-4b-FLM` yet.
 
 ## Follow-on (not this change)
 

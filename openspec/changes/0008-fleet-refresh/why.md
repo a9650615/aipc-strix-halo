@@ -36,7 +36,34 @@ sitting on Hugging Face today:
    quant) and `assistant-gemma` (HauhauCS's decensored Gemma-4 quant) —
    `ornith-35b` was the one alias in the fleet still on a censored build.
 
-None of these four changes need new infrastructure: no new backend, no new
+5. **`resident-small`'s NPU/FLM model** was considered and rejected earlier
+   in this same review round (see "Explicitly out of scope" below, prior
+   text) — that rejection is now superseded by a follow-up hardware pass
+   the same day. The FLM catalog on this machine (Lemonade v0.9.43) carries
+   `qwen3.5:4b` (min_ver 0.9.43, Image-Text-to-Text vision, Tool Calling:
+   Yes, 256k ctx, Q4_1), and 大哥 hardware-tested it standing alone on the
+   NPU (successful chat completion: "Hello! How"). It replaces
+   `gemma4-it-e4b-FLM` in the same NPU slot rather than adding a second
+   resident NPU model — hardware-tested this same session: `gemma4-it-e4b`
+   plus `qwen3.5:4b` loaded together fail `CREATE_HWCTX -22` at any context
+   size (only a 1B-class model fits alongside `e4b`), so this is a like-for-
+   like swap, not new NPU headroom spend. The prior rejection's stated
+   reason — preserving headroom for `coder-heavy` (0007) — does not apply to
+   a same-slot replacement; it applied to *adding* a second resident NPU
+   model, which this change does not do. Audio capability is not lost in
+   practice: the voice pipeline is SenseVoice STT (`:9001`) → text →
+   `/chat` (plain string content, `graphs.py:604`/`1061`) → Kokoro/CosyVoice
+   TTS — the LLM never receives audio, so `gemma4-it-e4b-FLM`'s audio
+   modality was already unused dead weight in this architecture; vision is
+   retained (`qwen3.5:4b` has it). `qwen3.5:4b` is a hybrid-thinking model
+   (like `assistant-gemma`/`coder-agentic`), so its LiteLLM entry needs
+   `extra_body.chat_template_kwargs.enable_thinking: false` — the same
+   already-known fix for the same failure mode (empty `content` filled by
+   `reasoning_content` until `max_tokens`) already applied to those two
+   aliases. `qwen3.6-35b` (a candidate "go big" NPU lane) stays out of scope
+   this round — the upstream FLM catalog on this machine does not bundle it.
+
+None of these five changes need new infrastructure: no new backend, no new
 idle-release mechanism (0006 already exists), no new headroom mechanism
 (0007 already proposed the `idle_unload_after_s` extension pattern for
 exactly this kind of alias). They are model-registry swaps plus one MTP
@@ -48,9 +75,14 @@ render-verified now, hardware-verified before being trusted as default.
 - **A 122B-class lane.** Discussed in the same review round but not
   approved by the user; left as a `Deferred` item below for a future
   change if wanted.
-- **`resident-small`'s NPU/FLM model.** Considered and rejected — the user
-  wants headroom preserved for the 80B `coder-heavy` lane (0007) rather than
-  spent on a resident-small upgrade.
+- **`qwen3.6-35b` as a `resident-small` NPU candidate.** Not available —
+  the upstream FLM catalog bundled on this machine does not carry it.
+  (Superseded note: an earlier pass in this same review round rejected
+  touching `resident-small`'s NPU model at all, reasoning that headroom
+  should be preserved for the 80B `coder-heavy` lane (0007). Item 5 above
+  revisits that with hardware evidence that this is a same-slot
+  *replacement*, not added NPU spend, so that headroom argument doesn't
+  apply here.)
 - Any model download, `lemonade pull`/`load`, service restart, or other
   live-machine mutation. This change is the registry + proposal only; every
   pull/load/verification step is a `tasks.md` item gated on hardware-session

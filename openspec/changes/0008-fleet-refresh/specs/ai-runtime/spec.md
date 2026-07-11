@@ -68,3 +68,36 @@ The alias SHALL carry `idle_unload_after_s: 900`.
   quant
 - **THEN** the swap is documented as provisional, following the same
   caveat pattern already recorded for `coder-agentic`
+
+### Requirement: Resident Small Alias Uses Current-Generation NPU/FLM Model
+
+The runtime SHALL provide a `resident-small` alias backed by the
+`qwen3.5-4b-FLM` FLM catalog model on Lemonade's NPU backend, replacing the
+prior `gemma4-it-e4b-FLM`, in the same single resident NPU slot (a
+replacement, not an additional resident NPU model). Because `qwen3.5:4b` is
+a hybrid-thinking model, the router entry SHALL set
+`extra_body.chat_template_kwargs.enable_thinking: false`.
+
+#### Scenario: resident-small alias is registered in both the model registry and the router
+
+- **WHEN** `llm-litellm` renders its router config from
+  `modules/llm-models/files/etc/aipc/models/models.yaml`
+- **THEN** a `resident-small` alias exists in both files, pointing at the
+  same Lemonade-registered NPU/FLM model id, and the router entry carries
+  `enable_thinking: false`
+
+#### Scenario: resident-small remains a single resident NPU model, not two
+
+- **WHEN** the NPU/FLM backend is asked to hold both `gemma4-it-e4b-FLM`
+  and a second large FLM model at once
+- **THEN** this fails (hardware-observed `CREATE_HWCTX -22` at any context
+  size), so this swap replaces the existing `resident-small` registration
+  in place rather than registering a second resident NPU alias
+
+#### Scenario: resident-small swap is not trusted as default until the derived model name and clean output are hardware-verified
+
+- **WHEN** `qwen3.5-4b-FLM` is registered as a derived (not yet
+  hardware-confirmed) Lemonade model name
+- **THEN** the swap is documented as provisional until `aipc models sync`
+  confirms the real generated model name and a gateway request confirms
+  `enable_thinking: false` produces non-empty `content`

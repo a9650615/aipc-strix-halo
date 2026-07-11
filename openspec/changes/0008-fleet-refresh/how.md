@@ -126,16 +126,53 @@ lemonade load Ornith-1.0-35B-uncensored-heretic-Q4_K_M \
   above is exactly right (e.g. confirming the `:Q4_K_M` short-tag form
   resolves against this specific repo's file list).
 
+## 5. `resident-small` — NPU/FLM model swap (replace, not add)
+
+```sh
+aipc models sync   # or: lemonade pull qwen3.5:4b  (FLM catalog entry, not a custom user. registration)
+```
+
+- No `user.`-prefixed custom registration and no `--checkpoint`/`--recipe`
+  flags — unlike the Vulkan/llamacpp swaps above, `qwen3.5:4b` is a
+  first-class FLM catalog entry on this machine (v0.9.43), pulled the same
+  way `gemma4-it-e4b-FLM` already was.
+- The resulting Lemonade model name is **derived, not asserted**:
+  `qwen3.5-4b-FLM` (`:` → `-`, `-FLM` suffix — the same convention already
+  observed for `gemma4-it:e4b` → `gemma4-it-e4b-FLM`). `tasks.md`'s
+  hardware step confirms the actual generated name before
+  `models.yaml`/`config.yaml` are trusted as correct against the live
+  system.
+- `ensure-resident-small.sh` (both `files/etc/...` and `files/usr/lib/...`
+  copies) already reads the model id from `AIPC_RESIDENT_MODEL_ID` with a
+  hardcoded fallback default — that default moves from
+  `gemma4-it-e4b-FLM` to `qwen3.5-4b-FLM`, no logic change, no new pin
+  mechanism. The existing pin-then-chat-prove loop in that script is the
+  hardware verification path for "pin normal" (`tasks.md`).
+- `llm-litellm`'s `resident-small` entry gains
+  `extra_body.chat_template_kwargs.enable_thinking: false` (new field on
+  this alias — `qwen3.5:4b` is hybrid-thinking, `gemma4-it-e4b-FLM` was
+  not) — same fix already applied to `assistant-gemma`/`coder-agentic` for
+  the same empty-`content`-until-`max_tokens` failure mode.
+- This is a **replacement of the model behind the resident NPU slot**, not
+  a second resident NPU model — `gemma4-it-e4b-FLM`'s existing entry is
+  edited in place (same as how `coder-compact` and `ornith-35b` above are
+  edited in place, not left alongside their predecessors).
+
 ## Verification tiers (CLAUDE.md §9)
 
 - **Static** (this session, done): `python -c "import yaml; yaml.safe_load(...)"`
   against both `models.yaml` and the LiteLLM `config.yaml`.
 - **Render** (this session, done): `tools/aipc render bootc` and
   `tools/aipc render ansible --check`.
-- **Hardware** (required before any of these four are trusted as the real
+- **Hardware** (required before any of these five are trusted as the real
   default — none of it done in this session, no hardware access): see
   `tasks.md` — pull weights, cold-load time, structured `tool_calls` through
   the LiteLLM gateway for the two tool-calling-relevant swaps
   (`coder-compact`, `ornith-35b`), an OCR/description smoke test for
-  `vlm-screen`, and a real decode-tok/s measurement for `assistant-gemma`
-  with MTP enabled vs. the prior plain-weights baseline.
+  `vlm-screen`, a real decode-tok/s measurement for `assistant-gemma` with
+  MTP enabled vs. the prior plain-weights baseline, and for
+  `resident-small`: confirm the real `qwen3.5-4b-FLM` model name,
+  `enable_thinking: false` yields clean non-empty `content`, decode/prefill
+  speed is acceptable, pinning via `ensure-resident-small.sh` still works,
+  and voice + mem0 + assistant-aggregator smoke tests pass against the new
+  model.
