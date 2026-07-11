@@ -11,8 +11,9 @@ would only postpone compression beyond the backend's actual limit.
 ## Chosen behavior
 
 Hermes keeps `model.context_length: 131072`, starts compression at 70% of the
-usable input window, and protects the last four messages. Tool results that
-would consume an excessive share of the prompt are represented by bounded
+usable input window, gives the local compact auxiliary model up to LiteLLM's
+600-second request ceiling, and protects the last four messages. Tool results
+that would consume an excessive share of the prompt are represented by bounded
 head/tail text plus a path to the complete local artifact.
 
 If compression still cannot produce a valid prompt, Hermes creates a successor

@@ -68,8 +68,9 @@ cap → "Context length exceeded and cannot compress further") and
 `compression.threshold: 0.70`, `compression.protect_last_n: 4`, and
 `compression.abort_on_summary_failure: true`; keep
 `auxiliary.compression.model: coder-compact` with explicit LiteLLM
-`base_url`/`api_key` so summaries use the E2B compact lane, not the big
-`coder-agentic` slots.
+`base_url`/`api_key` and `timeout: 600` so summaries use the E2B compact lane,
+not the big `coder-agentic` slots, and are not abandoned while Lemonade keeps
+working.
 **OpenCode**: `small_model: aipc/coder-compact`, `compaction.prune: true`,
 and per-model `limit.context: 131072` (see `modules/dev-ai-opencode` skel).
 
