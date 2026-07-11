@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from importlib import import_module
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -8,10 +9,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1] / "files/usr/lib/aipc-agent"
 sys.path.insert(0, str(ROOT))
 
+glm_tool = import_module("aipc_agent.glm_tool")
+ask_glm = glm_tool.ask_glm
+next_data_scopes = glm_tool.next_data_scopes
+
 
 def test_unknown_quota_keeps_request_local() -> None:
-    from aipc_agent.glm_tool import ask_glm
-
     called = False
 
     def post(_: str) -> str:
@@ -149,3 +152,10 @@ def test_supervisor_injects_trusted_glm_execution_scope() -> None:
 
     assert '"data_scopes": ["prompt"]' in source
     assert '"interaction": interaction' in source
+
+
+def test_private_tool_result_taints_later_glm_call() -> None:
+    scopes = next_data_scopes(["prompt"], ["calendar"])
+    scopes = next_data_scopes(scopes, ["ask_glm"])
+
+    assert scopes == ["private"]

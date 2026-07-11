@@ -39,6 +39,12 @@ def _quota_available(result: dict[str, Any]) -> bool:
     return False
 
 
+def next_data_scopes(current: list[str], tool_names: list[str]) -> list[str]:
+    if current != ["prompt"] or any(name != "ask_glm" for name in tool_names):
+        return ["private"]
+    return ["prompt"]
+
+
 def _lookup_zai(_: str) -> dict[str, Any]:
     from aipc_agent_tools_usage import lookup_usage
 
