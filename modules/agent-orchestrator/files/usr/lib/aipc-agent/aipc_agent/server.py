@@ -32,6 +32,18 @@ class ChatResponse(BaseModel):
     session_id: str = ""
     session_status: str = ""
     spoken_summary: str = ""
+    expect_reply: bool = False
+
+
+def expect_reply_from_result(result: object) -> bool:
+    """True when the graph is asking the user something (clarify_question set).
+
+    Voice clients use this to open a short follow-up listening window instead
+    of the default "answered, done" turn (see turn-state-contract).
+    """
+    if not isinstance(result, dict):
+        return False
+    return bool(str(result.get("clarify_question") or "").strip())
 
 
 @app.get("/healthz")
@@ -295,6 +307,7 @@ def chat(req: ChatRequest) -> ChatResponse | JSONResponse:
         session_id=sid,
         session_status=st,
         spoken_summary=spoken,
+        expect_reply=expect_reply_from_result(result),
     )
 
 

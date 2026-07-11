@@ -1216,6 +1216,15 @@ def run_phrase_loop() -> int:
                 force=True,
             )
 
+    # ponytail: rollback escape hatch for the turn-state contract below —
+    # default off; set truthy to restore "open follow-up on every answer".
+    _FOLLOWUP_ALWAYS = os.environ.get("AIPC_WAKE_FOLLOWUP_ALWAYS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
     def _on_once_finished(ok: bool, rc: int = 0) -> None:
         nonlocal followup_turn, last_submit_usable, followup_junk
         nonlocal miss_streak, energy_thr
@@ -1226,13 +1235,27 @@ def run_phrase_loop() -> int:
             _clear_followup("session-end", hide=True)
             _ux("listening", force=True)
             return
-        if ok and last_submit_usable:
+        # rc=3: assistant is asking the user something (expect_reply) — open
+        # a short follow-up window. This is the ONLY case (besides the
+        # AIPC_WAKE_FOLLOWUP_ALWAYS escape hatch) that re-opens listening;
+        # everything else answers and returns to idle (turn-state-contract).
+        if ok and last_submit_usable and (rc == 3 or _FOLLOWUP_ALWAYS):
             # Only continue multi-turn after a real utterance (not junk STT).
             followup_junk = 0
             last_submit_usable = False
             miss_streak = 0
             energy_thr = max(float(ENERGY_THRESHOLD), min(energy_thr * 0.85, 6500.0))
             _begin_followup()
+        elif ok and last_submit_usable:
+            # Answered, not expecting a reply → show answer, no follow-up
+            # window (the fix for "讲完话还一直听" — was unconditional before).
+            followup_junk = 0
+            last_submit_usable = False
+            miss_streak = 0
+            energy_thr = max(float(ENERGY_THRESHOLD), min(energy_thr * 0.85, 6500.0))
+            print("aipc-voice-wake: turn done, no expect_reply → no follow-up", flush=True)
+            _clear_followup("turn-done")
+            _ux("listening")
         elif ok and not last_submit_usable:
             # once "succeeded" but we never marked usable (legacy path) — close chain
             print("aipc-voice-wake: once ok but no usable submit → no follow-up", flush=True)
