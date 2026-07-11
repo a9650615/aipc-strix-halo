@@ -3,3 +3,4 @@ langchain-litellm==0.6.4
 fastapi==0.139.0
 uvicorn==0.50.0
 aiosqlite==0.22.1
+mcp>=1.28
