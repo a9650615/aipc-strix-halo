@@ -4,11 +4,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "files/usr/lib/aipc-portal"))
 
-from aipc_portal.dashboard import compact_idle_snapshot
+from aipc_portal.dashboard import _systemctl_state, compact_idle_snapshot
 
 
 class CompactIdleSnapshotTest(unittest.TestCase):
@@ -64,6 +65,25 @@ class CompactIdleSnapshotTest(unittest.TestCase):
         )
         self.assertEqual(value["state"], "unknown")
         self.assertIsNone(value["timeout_s"])
+
+    def test_malformed_manifest_degrades_to_unknown(self):
+        handle = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+        handle.write("models: [")
+        handle.close()
+        path = Path(handle.name)
+        self.addCleanup(path.unlink)
+
+        value = compact_idle_snapshot(
+            [], manifest_path=path, now=1000,
+            timer_enabled="enabled", timer_active="active",
+        )
+
+        self.assertEqual(value["state"], "unknown")
+        self.assertIsNone(value["timeout_s"])
+
+    def test_systemctl_execution_failure_degrades_to_unknown(self):
+        with mock.patch("aipc_portal.dashboard.subprocess.run", side_effect=OSError):
+            self.assertEqual(_systemctl_state("is-active"), "unknown")
 
 
 if __name__ == "__main__":

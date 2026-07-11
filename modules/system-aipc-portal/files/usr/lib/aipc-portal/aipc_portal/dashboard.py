@@ -21,10 +21,13 @@ IDLE_RELEASE_TIMER = "aipc-lemonade-idle-release.timer"
 
 
 def _systemctl_state(command: str) -> str:
-    result = subprocess.run(
-        ["systemctl", command, IDLE_RELEASE_TIMER],
-        capture_output=True, text=True, check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["systemctl", command, IDLE_RELEASE_TIMER],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return "unknown"
     return result.stdout.strip() if result.returncode == 0 else "unknown"
 
 
@@ -55,7 +58,7 @@ def compact_idle_snapshot(
         )
         model_id = str(policy["model_id"])
         timeout = int(policy["idle_unload_after_s"])
-    except (OSError, AttributeError, TypeError, ValueError, KeyError, StopIteration):
+    except (OSError, yaml.YAMLError, AttributeError, TypeError, ValueError, KeyError, StopIteration):
         return result
     result["timeout_s"] = timeout
     loaded = next(
