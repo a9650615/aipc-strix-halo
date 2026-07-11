@@ -694,6 +694,12 @@ def run(
             start_new_session=True,
         )
         assert proc.stdout is not None and proc.stderr is not None
+        try:
+            from aipc_agent import task_jobs as _tj_reg
+
+            _tj_reg.register_proc(proc.pid)
+        except Exception:
+            pass
 
         def _read(stream, bucket: list[str]) -> None:
             try:

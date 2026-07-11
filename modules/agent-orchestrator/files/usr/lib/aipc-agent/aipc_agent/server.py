@@ -18,6 +18,19 @@ from aipc_agent.stream_chat import iter_chat_sse
 app = FastAPI(title="aipc-agent-orchestrator")
 _graph = supervisor()
 
+# ponytail: module-level call, not a FastAPI startup event — uvicorn imports
+# this module exactly once per live worker process (ExecStart runs a single
+# `uvicorn aipc_agent.server:app`, no --reload/multi-import), so this already
+# runs exactly once at real service start and never at build time or in a
+# request path. Reaps any hermes subprocess orphaned by a previous
+# orchestrator crash/restart and marks its job "interrupted".
+try:
+    from aipc_agent import task_jobs as _startup_task_jobs
+
+    _startup_task_jobs.reap_orphans_on_startup()
+except Exception as _startup_exc:  # noqa: BLE001 — never block service start
+    print(f"aipc-agent server: startup orphan reap skipped: {_startup_exc}", flush=True)
+
 
 class ChatRequest(BaseModel):
     text: str
