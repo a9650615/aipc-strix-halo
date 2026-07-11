@@ -751,6 +751,8 @@ def _daily_assistant_node(state: SupervisorState) -> SupervisorState:
     text_in = state.get("original_text") or state["text"]
     sid = state["session_id"]
     plan_sum = f"处理：{(text_in or '')[:60]}"
+    background = _should_run_long_async(state, "daily_assistant")
+    interaction = "background" if background else "foreground"
 
     # Fast path: single obvious tool without ornith-35b tool loop
     try:
@@ -783,7 +785,13 @@ def _daily_assistant_node(state: SupervisorState) -> SupervisorState:
     def _run() -> dict:
         task_jobs.job_update("日曆/工具助手思考中…", thinking="选择工具并执行")
         result = _daily_assistant_graph.invoke(
-            {"text": text_in, "session_id": sid, "messages": []}
+            {
+                "text": text_in,
+                "session_id": sid,
+                "data_scopes": ["prompt"],
+                "interaction": interaction,
+                "messages": [],
+            }
         )
         return {
             "status": "ok",
@@ -791,7 +799,7 @@ def _daily_assistant_node(state: SupervisorState) -> SupervisorState:
             "detail": "daily_assistant",
         }
 
-    if _should_run_long_async(state, "daily_assistant"):
+    if background:
         ux_bridge.progress("日曆/工具长任务派发…", source="daily-assistant")
         out = task_jobs.submit(
             "daily_assistant", text_in, sid, _run, plan_summary=plan_sum

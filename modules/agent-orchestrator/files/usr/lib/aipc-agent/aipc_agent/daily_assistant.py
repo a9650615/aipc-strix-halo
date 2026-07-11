@@ -51,7 +51,7 @@ from langchain_core.tools import tool
 from langchain_litellm import ChatLiteLLM
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import InjectedState, ToolNode, tools_condition
 
 from aipc_agent import memory, ux_bridge
 from aipc_agent._util import text_of
@@ -191,12 +191,17 @@ def usage_lookup(providers: str = "") -> dict:
 
 
 @tool
-def ask_glm(prompt: str, data_scope: str, interaction: str) -> dict:
+def ask_glm(prompt: str, state: Annotated[dict, InjectedState]) -> dict:
     """Ask the quota-gated GLM cloud model for a second opinion. Use only when
     local reasoning is insufficient. Never send secrets, private context, or
-    content likely to be moderated; keep those requests local. Set data_scope
-    to `prompt` and interaction to `foreground`; all other values are denied."""
-    return _ask_glm(prompt, data_scope=data_scope, interaction=interaction)
+    content likely to be moderated; keep those requests local. Execution scope
+    is injected by the graph and cannot be supplied by the model."""
+    data_scope = "prompt" if state.get("data_scopes") == ["prompt"] else "private"
+    return _ask_glm(
+        prompt,
+        data_scope=data_scope,
+        interaction=str(state.get("interaction") or "background"),
+    )
 
 
 @tool
@@ -285,6 +290,8 @@ TOOLS = [
 class DailyAssistantState(TypedDict):
     text: str
     session_id: str
+    data_scopes: list[str]
+    interaction: str
     messages: Annotated[list, add_messages]
 
 

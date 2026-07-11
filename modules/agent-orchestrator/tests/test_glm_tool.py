@@ -135,8 +135,17 @@ def test_private_scope_or_background_keeps_request_local() -> None:
 def test_daily_assistant_binds_ask_glm_but_not_direct_fast_path() -> None:
     source = (ROOT / "aipc_agent/daily_assistant.py").read_text()
 
-    assert "def ask_glm(prompt: str, data_scope: str, interaction: str)" in source
+    assert "def ask_glm(prompt: str, state: Annotated[dict, InjectedState])" in source
+    assert 'data_scope = "prompt" if state.get("data_scopes") == ["prompt"] else "private"' in source
+    assert 'interaction=str(state.get("interaction") or "background")' in source
     assert "    ask_glm," in source
     assert "ask_glm (optional cloud second opinion" in source
     direct = source[source.index("def try_direct_tool"):]
     assert '"ask_glm"' not in direct
+
+
+def test_supervisor_injects_trusted_glm_execution_scope() -> None:
+    source = (ROOT / "aipc_agent/graphs.py").read_text()
+
+    assert '"data_scopes": ["prompt"]' in source
+    assert '"interaction": interaction' in source
