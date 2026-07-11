@@ -162,6 +162,16 @@ model_list:
       model: gemini/gemini-2.5-pro
       api_key: os.environ/GEMINI_API_KEY
 
+  # Z.AI monthly Coding Plan; endpoint/model match the working CCS glm profile.
+  # Tool-only: agent-orchestrator checks CodexBar quota before selecting it.
+  - model_name: glm-cloud
+    litellm_params:
+      model: anthropic/glm-5.2
+      api_base: https://api.z.ai/api/anthropic
+      api_key: os.environ/Z_AI_API_KEY
+      timeout: 180
+      num_retries: 0
+
   # Phase 2 (memory-rag): bge-m3, served by modules/rag-embedder. Local
   # service, not cloud — timeout/num_retries overridden same as the other
   # local (Lemonade-backed) entries above, for the same reason.

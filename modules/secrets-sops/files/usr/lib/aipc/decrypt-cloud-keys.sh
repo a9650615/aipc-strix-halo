@@ -17,5 +17,6 @@ SOPS_AGE_KEY_FILE=/etc/aipc/age.key sops --decrypt "$src" | \
         $1=="anthropic_api_key" { print "ANTHROPIC_API_KEY=" $2 }
         $1=="openai_api_key"    { print "OPENAI_API_KEY="    $2 }
         $1=="gemini_api_key"    { print "GEMINI_API_KEY="    $2 }
+        $1=="zai_api_key"       { print "Z_AI_API_KEY="      $2 }
     ' > "$dst"
 chmod 0600 "$dst"

@@ -21,7 +21,8 @@
   forbidden.
   (`cloud-llm-fallback/STATUS.md` + ai-runtime routing note: provisioning-only)
 - [x] 0.6 Record the user-approved Z.AI GLM tool exception: monthly subscription,
-  CodexBar quota source, foreground-only scope, and hardware enablement gate.
+  working CCS Anthropic profile (`glm-5.2`), CodexBar quota source,
+  foreground-only scope, and hardware enablement gate.
 
 ## 1. Slice A — router core in observe mode
 

@@ -14,7 +14,9 @@ agent tools, scripts).
 
 `resident-small`, `coder-agentic`, `ornith-35b`, `assistant-gemma`,
 `qwythos-9b`, `vlm-*`, plus the cloud aliases (`main-cloud`, `coder-cloud`,
-`thinking-cloud`, `gpt4o-cloud`, `gemini-cloud`) — see `llm-models`.
+`thinking-cloud`, `gpt4o-cloud`, `gemini-cloud`, `glm-cloud`) — see
+`llm-models`. `glm-cloud` is tool-only and quota-gated by CodexBar provider
+`zai`; it is never a default or automatic fallback.
 `qwen35-122b-q3` was retired 2026-07-11 (weights deleted; too heavy for
 comfortable UMA use; avoid dual-backend giants).
 
