@@ -69,6 +69,7 @@ SHOW_STATES = frozenset(
         "working",
         "speaking",
         "followup",
+        "bg_task",
         "done",
         "no_speech",
         "error",
@@ -85,6 +86,7 @@ STATE_COLORS = {
     "speaking": QColor(100, 180, 255),
     "done": QColor(120, 200, 170),
     "followup": QColor(90, 210, 170),
+    "bg_task": QColor(255, 205, 90),
     "no_speech": QColor(255, 180, 80),
     "error": QColor(255, 90, 90),
     "miss": QColor(160, 160, 160),
@@ -101,6 +103,7 @@ STATE_HINTS = {
     "speaking": "",
     "done": "可滾動閱讀 · 說「不对」可反饋",
     "followup": "直接說下一句，無需喚醒詞",
+    "bg_task": "完成後會通知你 · 可繼續說「嘿助理」",
     "no_speech": "沒聽到，請再說一次",
     "error": "出了點問題",
     "muted": "喚醒已暫停",
@@ -117,6 +120,7 @@ STATE_LABELS = {
     "speaking": "AIPC · 回答中",
     "done": "AIPC · 已回答",
     "followup": "AIPC · 可接話",
+    "bg_task": "AIPC · 背景任務進行中",
     "no_speech": "AIPC · 沒聽清",
     "error": "AIPC · 出錯",
     "muted": "AIPC · 靜音",
@@ -133,8 +137,12 @@ def _strip_elapsed(text: str) -> str:
     return _ELAPSED_TAIL_RE.sub("", (text or "").strip()).strip()
 
 
-def _mini_chip_label(detail: str) -> str:
+def _mini_chip_label(detail: str, state: str = "") -> str:
     """Readable mini label; width is sized from measured text, not a fixed clip."""
+    if state == "bg_task":
+        # Persistent background-detach pill: fixed label, not content-derived
+        # (the ack text varies per turn; the pill identity should not).
+        return "背景任务进行中 ⋯"
     raw = (detail or "").strip()
     sec = ""
     m = __import__("re").search(r"(\d+)\s*s", raw, __import__("re").I)
@@ -1639,7 +1647,7 @@ class OverlayPanel(QWidget):
         """Idle/listening states dock compact to the right; activity/result
         states expand centered. Pure mapping, no env/hardware reads — keep it
         that way so it stays trivially unit-testable."""
-        if state in ("listening", "wake", "recording", "no_speech", "followup"):
+        if state in ("listening", "wake", "recording", "no_speech", "followup", "bg_task"):
             return "right"
         return "center"
 
@@ -1934,7 +1942,7 @@ class OverlayPanel(QWidget):
 
         # Same mini phase: update label + remeasure width if text length changed
         if same_layout and mini:
-            chip = _mini_chip_label(primary or label or "執行中")
+            chip = _mini_chip_label(primary or label or "執行中", state=state)
             tw = self._measure_text_width(chip)
             # only reflow width if pixel width moved by >6px
             if abs(tw - self._text_w) > 6:
@@ -1972,7 +1980,7 @@ class OverlayPanel(QWidget):
 
         # Mini: measure text → size chip → contrast → elide only past max
         if mini:
-            chip = _mini_chip_label(primary or title)
+            chip = _mini_chip_label(primary or title, state=state)
             self._text_w = self._measure_text_width(chip)
             self._apply_card_width(
                 body_len=0, long_form=False, mini=True, text=chip
@@ -2098,7 +2106,12 @@ class OverlayPanel(QWidget):
         if state in SHOW_STATES:
             # Animate on mini ↔ answer mode switch, or a right ↔ center dock move
             self._show_passive(force_place=True, animate=mode_switch)
-            if state in ("wake", "recording", "thinking", "working", "speaking", "followup"):
+            if state in (
+                "wake", "recording", "thinking", "working", "speaking", "followup",
+                "bg_task",
+            ):
+                # bg_task must persist until the background job's completion
+                # notify replaces it with a centered "done" card — no auto-hide.
                 self._hide_at = None
             elif state == "done":
                 try:

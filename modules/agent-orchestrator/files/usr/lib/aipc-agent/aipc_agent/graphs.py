@@ -325,6 +325,11 @@ class SupervisorState(TypedDict, total=False):
     force_text: str  # canned reply (cancel etc.)
     # Conversation lifecycle (voice multi-turn): True → hide overlay / no follow-up
     end_session: bool
+    # True when this turn detached to a background job (auto-detach past
+    # DETACH_S, or explicit mode=long) — voice frees the mic (no follow-up)
+    # but shows a persistent "background task running" pill until the
+    # completion notify replaces it (see server.ChatResponse.background).
+    background: bool
     # Hermes tool/URL footprint for async skill learn (not spoken)
     learn_trail: str
     spoken_summary: str  # short TTS line; full text stays in `text`
@@ -831,7 +836,8 @@ def _hermes_node(state: SupervisorState) -> SupervisorState:
     if _should_run_long_async(state, "hermes"):
         ux_bridge.progress("Hermes 长任务派发…", source="hermes")
         out = task_jobs.submit("hermes", text_in, sid, _run, plan_summary=plan_sum)
-        return {"text": out["text"], "session_id": sid}
+        # explicit mode=long always backgrounds (grace_s=0 → immediate ack)
+        return {"text": out["text"], "session_id": sid, "background": True}
 
     ux_bridge.progress(
         "Hermes 工具代理啟動…" + ("（长流程同步）" if long_mode else ""),
@@ -864,7 +870,7 @@ def _hermes_node(state: SupervisorState) -> SupervisorState:
         "hermes", text_in, sid, _run, plan_summary=plan_sum, grace_s=DETACH_S
     )
     if result.get("detail") == "background":
-        return {"text": result.get("text", ""), "session_id": sid}
+        return {"text": result.get("text", ""), "session_id": sid, "background": True}
     text = str(result.get("text") or "").strip() or "Hermes 没有返回内容。"
     trail = str(result.get("trail") or "").strip()
     ok = result.get("status") == "ok" and bool(text)

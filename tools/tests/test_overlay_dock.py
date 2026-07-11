@@ -41,7 +41,7 @@ def _panel(m):
 
 def test_anchor_for_state_right_states():
     m = _mod()
-    for state in ("listening", "wake", "recording", "no_speech", "followup"):
+    for state in ("listening", "wake", "recording", "no_speech", "followup", "bg_task"):
         assert m.OverlayPanel._anchor_for_state(state) == "right", state
 
 
@@ -95,9 +95,29 @@ def test_mini_for_state_right_dock_states_are_mini(monkeypatch):
     assert panel._mini_for_state("wake") is True
     assert panel._mini_for_state("working") is True
     assert panel._mini_for_state("thinking") is True
+    assert panel._mini_for_state("bg_task") is True
     assert panel._mini_for_state("speaking") is False
     assert panel._mini_for_state("done") is False
     assert panel._mini_for_state("error") is False
+
+
+def test_bg_task_shows_and_persists_right_docked():
+    """The background-detach pending pill: right-docked, compact, and part
+    of SHOW_STATES (visible) — unlike the ambient listening/miss hides."""
+    m = _mod()
+    assert "bg_task" in m.SHOW_STATES
+    assert m.OverlayPanel._anchor_for_state("bg_task") == "right"
+
+
+def test_mini_chip_label_bg_task_is_fixed_regardless_of_detail():
+    """Chip text must not vary with the per-turn ack text — a stable
+    identity for the persistent pending pill (unlike other mini phases,
+    which derive their label from the passed detail string)."""
+    m = _mod()
+    assert m._mini_chip_label("好的，我让Hermes在后台处理...", state="bg_task") == (
+        "背景任务进行中 ⋯"
+    )
+    assert m._mini_chip_label("随便什么别的内容", state="bg_task") == "背景任务进行中 ⋯"
 
 
 def test_compute_geom_right_is_more_rightward_than_center(monkeypatch):

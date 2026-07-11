@@ -46,3 +46,22 @@ def test_expect_reply_false_for_non_dict_result():
     server = _server()
     assert server.expect_reply_from_result(None) is False
     assert server.expect_reply_from_result("not a dict") is False
+
+
+def test_background_true_when_graph_sets_flag():
+    """graphs._hermes_node's auto-detach and explicit-long acks both set
+    result["background"] = True (see turn-state-contract async slice)."""
+    server = _server()
+    assert server.background_from_result({"background": True}) is True
+
+
+def test_background_false_when_flag_absent_or_falsy():
+    server = _server()
+    assert server.background_from_result({"background": False}) is False
+    assert server.background_from_result({}) is False
+
+
+def test_background_false_for_non_dict_result():
+    server = _server()
+    assert server.background_from_result(None) is False
+    assert server.background_from_result("not a dict") is False

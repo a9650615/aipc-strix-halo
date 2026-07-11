@@ -726,8 +726,12 @@ class OnceWorker:
                 )
             else:
                 print(f"aipc-voice-wake: async once finished rc={rc}", flush=True)
-                # rc 0 = success+maybe follow-up; rc 2 = success end session
-                ok = rc in (0, 2)
+                # rc 0 = success/done; rc 2 = success end session; rc 3 =
+                # success + assistant expects a reply; rc 4 = success +
+                # detached to background. All four are non-error turn
+                # outcomes (see aipc-voice-once._turn_rc) — anything else
+                # (mic/STT/network failure) is a real failure.
+                ok = rc in (0, 2, 3, 4)
                 if self._on_finished is not None:
                     try:
                         self._on_finished(ok, rc=rc)
@@ -1234,6 +1238,23 @@ def run_phrase_loop() -> int:
             print("aipc-voice-wake: session-end → dismiss", flush=True)
             _clear_followup("session-end", hide=True)
             _ux("listening", force=True)
+            return
+        # rc=4: turn auto-detached to a background job (long Hermes run past
+        # DETACH_S, or explicit "后台慢慢做"). Mic frees like a done turn (no
+        # follow-up window) — same bookkeeping as the no-expect_reply case —
+        # but voice-once already painted a persistent "bg_task" pending pill
+        # before exiting; do NOT force the overlay back to "listening" here,
+        # it must persist until the background completion notify replaces it.
+        if ok and rc == 4:
+            followup_junk = 0
+            last_submit_usable = False
+            miss_streak = 0
+            energy_thr = max(float(ENERGY_THRESHOLD), min(energy_thr * 0.85, 6500.0))
+            print(
+                "aipc-voice-wake: background detach → mic free, pill persists",
+                flush=True,
+            )
+            _clear_followup("background-detach", hide=False)
             return
         # rc=3: assistant is asking the user something (expect_reply) — open
         # a short follow-up window. This is the ONLY case (besides the

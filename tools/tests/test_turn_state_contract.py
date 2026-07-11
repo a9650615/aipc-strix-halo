@@ -1,9 +1,11 @@
 """Turn-state contract tests (headless, pure).
 
 phase-3-voice-assistant: follow-up ("接话") window must be driven by
-turn-completion state, not opened after every answer. Three states:
-end (rc=2, farewell, unchanged) / reply (rc=3, assistant expects a reply,
-opens a short follow-up) / done (rc=0, default — answered, no follow-up).
+turn-completion state, not opened after every answer. Four states:
+end (rc=2, farewell, unchanged) / async (rc=4, turn detached to a
+background job — mic frees, overlay shows a persistent pending pill) /
+reply (rc=3, assistant expects a reply, opens a short follow-up) /
+done (rc=0, default — answered, no follow-up).
 """
 
 from __future__ import annotations
@@ -30,6 +32,9 @@ def test_turn_rc_end_session_wins():
     m = _load_voice_once()
     assert m._turn_rc(end_session=True, expect_reply=True) == 2
     assert m._turn_rc(end_session=True, expect_reply=False) == 2
+    # end_session beats background too
+    assert m._turn_rc(end_session=True, expect_reply=False, background=True) == 2
+    assert m._turn_rc(end_session=True, expect_reply=True, background=True) == 2
 
 
 def test_turn_rc_expect_reply_opens_followup():
@@ -40,3 +45,11 @@ def test_turn_rc_expect_reply_opens_followup():
 def test_turn_rc_plain_answer_no_followup():
     m = _load_voice_once()
     assert m._turn_rc(end_session=False, expect_reply=False) == 0
+
+
+def test_turn_rc_background_wins_over_expect_reply():
+    """A detached long turn already frees the mic — no clarify question is
+    left to answer with a follow-up window, so background beats expect_reply."""
+    m = _load_voice_once()
+    assert m._turn_rc(end_session=False, expect_reply=False, background=True) == 4
+    assert m._turn_rc(end_session=False, expect_reply=True, background=True) == 4
