@@ -98,10 +98,36 @@ data-scope policy, provider health check, and quota/budget policy all permit it.
 
 #### Scenario: Sensitive data scope
 
-- **WHEN** a remote attempt would include personal documents, email, calendar,
-  screen content, mem0 content, a credential store, or secret material
-- **THEN** default policy SHALL deny it unless an explicit compatible data-scope
-  grant exists; credential and secret contents SHALL remain non-exportable
+- **WHEN** automatic routing would implicitly include personal documents,
+  email, calendar, screen content, mem0 content, a credential store, or secret
+  material
+- **THEN** default policy SHALL deny that implicit export; an on-demand advisor
+  SHALL receive only its explicit agent-curated question, credential-shaped
+  substrings SHALL be masked, and credential-store contents SHALL remain
+  non-exportable
+
+#### Scenario: Hermes requests an on-demand advisor
+
+- **WHEN** a Hermes agent explicitly calls `consult_models` with an
+  agent-curated question and configured advisor
+- **THEN** the system SHALL send only that question through LiteLLM, SHALL mask
+  credential-shaped substrings, SHALL gate the call on provider quota, and
+  SHALL return labelled advisor output for the calling Hermes agent to
+  synthesize
+
+#### Scenario: Hermes advisor is available across agent surfaces
+
+- **WHEN** Hermes starts a CLI, messaging gateway, leaf subagent, or nested
+  orchestrator agent with its configured platform/inherited toolsets
+- **THEN** the global dynamic-advisor MCP toolset SHALL be available without
+  changing the acting model or automatically invoking an advisor
+
+#### Scenario: Advisor cannot run
+
+- **WHEN** the advisor is unknown, quota is stale or exhausted, credentials are
+  unavailable, or LiteLLM/provider execution fails
+- **THEN** the tool SHALL return a structured fail-soft result and the calling
+  Hermes agent SHALL remain able to continue locally
 
 #### Scenario: Metered API path disabled by default
 

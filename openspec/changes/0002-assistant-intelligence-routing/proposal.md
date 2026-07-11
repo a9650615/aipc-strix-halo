@@ -57,9 +57,10 @@ Delivery is split deliberately:
   route traces, and full-result/spoken-summary separation.
 - **Slice B — subscription canary:** Codex and Claude Code CLI adapters plus
   session-scoped `ask once` grants. Explicit foreground requests only.
-- **Slice C — GLM tool canary:** one SOPS-backed Z.AI API alias, exposed only
-  as the main model's `ask_glm` tool. It remains local-first, foreground-only,
-  and quota-gated by CodexBar; it is not a generic fallback alias.
+- **Slice C — dynamic advisor canary:** one SOPS-backed Z.AI API alias, exposed
+  through a global Hermes MCP `consult_models` tool and the existing Daily
+  Assistant adapter. Hermes remains the aggregator and invokes GLM only on
+  demand. Calls are quota-gated by CodexBar; GLM is not a fallback alias.
 - **Slice D — automatic subscription escalation:** after hardware evidence and
   separate user approval. No automatic metered escalation is introduced.
 
@@ -112,18 +113,20 @@ Delivery is split deliberately:
 - `0002` follows the numeric OpenSpec id convention required by `AGENTS.md`;
   older active siblings retain their historical descriptive-only names.
 
-## Open Questions — resolved 2026-07-10 (refined same day)
+## Open Questions — resolved 2026-07-10 (refined 2026-07-12)
 
 1. **Subscription policy:** interactive coding delegation asks once for every
    dispatched task, naming provider and repository. Unattended/background
    dispatch remains `deny` until that task is confirmed.
 2. **Z.AI subscription API:** the user approved one exception: a monthly GLM
-   subscription may be provisioned as the main model's `ask_glm` tool. It stays
-   foreground-only and local-first; CodexBar supplies remaining quota and reset
-   time. Unknown or exhausted quota keeps the request local.
-3. **Remote data:** default `prompt` only; scoped repo for coding on grant;
-   personal docs/email/calendar/screen/mem0 deny unless data-scope grant;
-   secrets never exportable.
+   subscription may be provisioned as an on-demand advisor for every Hermes
+   agent through the global `consult_models` MCP tool. It is never an automatic
+   fallback; CodexBar supplies remaining quota and reset time. Unknown or
+   exhausted quota keeps the request local.
+3. **Remote data:** the MCP receives only the explicit agent-curated question,
+   which may contain necessary code or selected context. It never receives
+   transcript, memory, files, or tool results implicitly. Credential-shaped
+   substrings are masked and credential-store contents never export.
 4. **Coding delegation:** every external CLI dispatch requires a foreground
    confirmation naming provider and repository. The delegated CLI MAY edit and
    commit on its task branch, but SHALL NOT push or merge.

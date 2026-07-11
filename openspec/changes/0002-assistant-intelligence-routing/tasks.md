@@ -20,9 +20,9 @@
   complete requirements here. Two conflicting active `ai-runtime` deltas are
   forbidden.
   (`cloud-llm-fallback/STATUS.md` + ai-runtime routing note: provisioning-only)
-- [x] 0.6 Record the user-approved Z.AI GLM tool exception: monthly subscription,
-  working CCS Anthropic profile (`glm-5.2`), CodexBar quota source,
-  foreground-only scope, and hardware enablement gate.
+- [x] 0.6 Record the initial Z.AI GLM tool exception: monthly subscription,
+  working CCS Anthropic profile (`glm-5.2`), CodexBar quota source, and hardware
+  enablement gate. Task 6.11 supersedes the initial foreground-only scope.
 
 ## 1. Slice A — router core in observe mode
 
@@ -115,12 +115,24 @@
 - [x] 6.7 Update `cloud-llm-fallback` documentation (STATUS.md + ai-runtime note).
 - [x] 6.8 Add `glm-cloud` provisioning and SOPS key flow under
   `cloud-llm-fallback`; it must not make the alias a default route.
-- [x] 6.9 Add the local `ask_glm` adapter and tool contract: deny credentials
-  and private data scopes, foreground-only, no automatic fallback/retry, and
-  leave moderation-sensitive or ambiguous content local.
+- [x] 6.9 Add the initial Daily Assistant `ask_glm` adapter and tool contract:
+  deny credentials and private data scopes, foreground-only, no automatic
+  fallback/retry, and leave moderation-sensitive or ambiguous content local.
+  Tasks 6.11–6.14 replace these initial scope rules for Hermes dynamic advice.
 - [ ] 6.10 Consume CodexBar provider `zai` quota; unknown, stale, or exhausted
   quota keeps the request local. Hardware-verify the enabled canary before any
   live assistant traffic. (Quota gate implemented; hardware canary pending.)
+- [ ] 6.11 Add one local stdio MCP server exposing
+  `consult_models(question, advisors=["glm"])`; Hermes remains the aggregator.
+- [ ] 6.12 Reuse the existing quota-gated LiteLLM call core and replace hard
+  private-context denial with credential masking on the explicit question.
+- [ ] 6.13 Provision `mcp-dynamic-moa` into every Hermes platform toolset so
+  CLI, messaging gateways, and inherited subagents can discover it.
+- [ ] 6.14 Add unit and MCP contract checks for advisor validation, masking,
+  quota fail-soft behavior, and labelled advisor responses.
+- [ ] 6.15 Render-verify bootc and Ansible outputs.
+- [ ] 6.16 Hardware-verify MCP discovery and calls from both a normal Hermes
+  session and a delegated child; confirm quota movement and local fail-soft.
 
 ## 7. Slice A — latency, reliability (local only; paid load tests deferred)
 
