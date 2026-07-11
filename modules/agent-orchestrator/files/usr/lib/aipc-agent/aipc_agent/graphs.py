@@ -796,7 +796,7 @@ def _daily_assistant_node(state: SupervisorState) -> SupervisorState:
         out = task_jobs.submit(
             "daily_assistant", text_in, sid, _run, plan_summary=plan_sum
         )
-        return {"text": out["text"], "session_id": sid}
+        return {"text": out["text"], "session_id": sid, "background": True}
 
     ux_bridge.progress("日曆/搜尋/用量助手啟動…", source="daily-assistant")
     result = _run()
