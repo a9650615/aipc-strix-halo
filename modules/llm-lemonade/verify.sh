@@ -50,6 +50,20 @@ config_json=$(podman exec lemonade cat /root/.cache/lemonade/config.json 2>/dev/
 # Expect a generous slot budget (memory-rich box keeps multiple LLMs resident).
 printf '%s' "$config_json" | grep -qE '"max_loaded_models": *([3-9]|[1-9][0-9]+)' \
   || fail "llm-lemonade: config.json max_loaded_models too low — restart lemonade.service to reapply"
+
+# Also check the live health endpoint directly — config.json alone doesn't
+# prove the running lemond process actually picked the value up (a stale
+# pre-fix copy of configure-lemonade.sh deployed under /usr/lib/aipc/...
+# would leave config.json correct-looking while the server itself never
+# re-ran ExecStartPre with it — see docs/live-hotfix-workflow.md). 10.8.1
+# hardware-verified 2026-07-11: `/api/v1/health`'s `max_models.llm` mirrors
+# `max_loaded_models` directly, no separate per-type key exists.
+health_json=$(curl -fsS "http://127.0.0.1:${port}/api/v1/health" 2>/dev/null || echo '{}')
+printf '%s' "$health_json" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if d.get('max_models', {}).get('llm', 0) >= 3 else 1)
+" || fail "llm-lemonade: /api/v1/health max_models.llm < 3 — restart lemonade.service to reapply config.json"
 # ensure-resident-small must be installed (pin path for always-on FLM)
 [ -x /usr/lib/aipc/llm-lemonade/ensure-resident-small.sh ] \
   || [ -x /etc/aipc/llm-lemonade/ensure-resident-small.sh ] \

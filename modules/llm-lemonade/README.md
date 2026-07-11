@@ -88,6 +88,33 @@ unit file for why):
   ROCm can't load either model at all. Left on even though Vulkan is the
   active backend, in case ROCm is revisited later.
 
+## 10.8.1 per-type `max_models` in `/api/v1/health` — no separate config key (2026-07-11)
+
+`/api/v1/health` reports `max_models: {llm, embedding, image, reranking,
+transcription, tts}` — looked at first glance like a new per-type slot
+schema `config.json` would need a matching key for. Hardware-verified this
+is not the case: read the shipped `lemond` binary's own symbols
+(`RuntimeConfig::max_loaded_models()` is the only config-backed accessor;
+`Router::get_max_model_limits()` computes the per-type breakdown from that
+single value) and confirmed live — setting only `max_loaded_models: 8`
+made `max_models.llm` read `8` too, with `resident-small` (NPU/FLM),
+`coder-agentic` (35B, Vulkan), and `coder-compact` (E2B, Vulkan) all
+resident simultaneously via LiteLLM, no eviction, no swap thrashing
+(`free -g`: 48G available, `vmstat`'s `si`/`so` settled to 0).
+
+What actually caused a real sighting of `max_models.llm: 2` on this
+machine on 2026-07-11 was **not** a schema-version issue: the live
+`/usr/lib/aipc/llm-lemonade/configure-lemonade.sh` (immutable ostree
+`/usr`, can't be hand-patched — confirmed `install: 唯讀的檔案系統` when
+attempting it) was a stale pre-`max_loaded_models=8` build that predated
+this file's current content, so every `lemonade.service` restart kept
+re-applying `max_loaded_models=2`. Only a real `bootc switch` + reboot (or
+a `systemd` drop-in redirecting `ExecStartPre` to a writable `/etc/aipc/...`
+copy, purely for same-boot verification) picks up this repo file's current
+`max_loaded_models=8`. If `/api/v1/health` ever shows `max_models.llm < 3`
+in the field, diff the live script against this repo path before assuming
+a new 10.8.1 schema key is needed.
+
 ## Concurrency: `-np 4 -kvu`, not `-np N` alone (2026-07-05, bumped from `-np 2` same day)
 
 `llama-server` has continuous batching on by default (`-cb`), but that
