@@ -6,6 +6,7 @@ set -eu
 
 src=/etc/aipc/secrets/cloud-llm.yaml
 dst=/etc/aipc/env.d/llm-litellm/cloud-keys.env
+agent_dst=/etc/aipc/env.d/agent-orchestrator/zai.env
 
 [ -f "$src" ] || { echo "no $src; skipping" >&2; exit 0; }
 [ -f /etc/aipc/age.key ] || { echo "no /etc/aipc/age.key; cannot decrypt" >&2; exit 0; }
@@ -17,5 +18,9 @@ SOPS_AGE_KEY_FILE=/etc/aipc/age.key sops --decrypt "$src" | \
         $1=="anthropic_api_key" { print "ANTHROPIC_API_KEY=" $2 }
         $1=="openai_api_key"    { print "OPENAI_API_KEY="    $2 }
         $1=="gemini_api_key"    { print "GEMINI_API_KEY="    $2 }
+        $1=="zai_api_key"       { print "Z_AI_API_KEY="      $2 }
     ' > "$dst"
 chmod 0600 "$dst"
+mkdir -p "$(dirname "$agent_dst")"
+awk -F= '$1=="Z_AI_API_KEY" { print }' "$dst" > "$agent_dst"
+chmod 0600 "$agent_dst"

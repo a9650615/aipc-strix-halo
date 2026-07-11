@@ -19,7 +19,7 @@
   - `thinking-cloud` → `anthropic/claude-opus-4-20250514`, `api_key: os.environ/ANTHROPIC_API_KEY`
   - `gpt4o-cloud` → `openai/gpt-4o`, `api_key: os.environ/OPENAI_API_KEY`
    - `gemini-cloud` → `gemini/gemini-2.5-pro`, `api_key: os.environ/GEMINI_API_KEY`
-   - `glm-cloud` → OpenAI-compatible Z.AI general API, `api_key: os.environ/Z_AI_API_KEY`
+   - `glm-cloud` → CCS-compatible `anthropic/glm-5.2` at `https://api.z.ai/api/anthropic`, `api_key: os.environ/Z_AI_API_KEY`
 
 ## 3. Models Manifest — Cloud Aliases
 
@@ -51,9 +51,9 @@
      size_gb: 0
 
    - alias: glm-cloud
-     backend: cloud
-     model_id: glm-5.1
-     size_gb: 0
+     backend: zai
+     model_id: glm-5.2
+     size_gb: cloud
   ```
   `size_gb: 0` — no local weights to manage.
 

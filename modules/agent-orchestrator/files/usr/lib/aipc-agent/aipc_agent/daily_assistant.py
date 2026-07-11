@@ -51,10 +51,12 @@ from langchain_core.tools import tool
 from langchain_litellm import ChatLiteLLM
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import InjectedState, ToolNode, tools_condition
 
 from aipc_agent import memory, ux_bridge
 from aipc_agent._util import text_of
+from aipc_agent.glm_tool import ask_glm as _ask_glm
+from aipc_agent.glm_tool import next_data_scopes
 
 LITELLM_BASE_URL = "http://127.0.0.1:4000"
 # Uncensored tool-calling default (Vulkan). Override with AIPC_DAILY_MODEL.
@@ -74,6 +76,8 @@ SYSTEM_PROMPT = (
     "needed, then answer briefly. "
     "Tools: calendar, email, files.read, web search, usage_lookup (coding "
     "quotas only — not for writing code), screen_describe (read-only VLM look), "
+    "ask_glm (optional cloud second opinion; use only when local reasoning is "
+    "insufficient, never send secrets/private context or likely moderated content), "
     "screen_click / screen_type / screen_key (actually control the desktop — "
     "mouse + keyboard). For screen control: call screen_describe first to see "
     "the layout and find coordinates, then act. If a control tool returns "
@@ -188,6 +192,20 @@ def usage_lookup(providers: str = "") -> dict:
 
 
 @tool
+def ask_glm(prompt: str, state: Annotated[dict, InjectedState]) -> dict:
+    """Ask the quota-gated GLM cloud model for a second opinion. Use only when
+    local reasoning is insufficient. Never send secrets, private context, or
+    content likely to be moderated; keep those requests local. Execution scope
+    is injected by the graph and cannot be supplied by the model."""
+    data_scope = "prompt" if state.get("data_scopes") == ["prompt"] else "private"
+    return _ask_glm(
+        prompt,
+        data_scope=data_scope,
+        interaction=str(state.get("interaction") or "background"),
+    )
+
+
+@tool
 def screen_describe(question: str = "") -> dict:
     """Look at the user's desktop (screenshot + local VLM). Read-only —
     does not click or type. Use when the user asks what is on screen/desktop."""
@@ -262,6 +280,7 @@ TOOLS = [
     search,
     search_tavily,
     usage_lookup,
+    ask_glm,
     screen_describe,
     screen_click,
     screen_type,
@@ -272,6 +291,8 @@ TOOLS = [
 class DailyAssistantState(TypedDict):
     text: str
     session_id: str
+    data_scopes: list[str]
+    interaction: str
     messages: Annotated[list, add_messages]
 
 
@@ -448,8 +469,10 @@ def _flatten_for_chat_template(messages: list) -> list:
 
 def _seed(state: DailyAssistantState) -> dict:
     # One system only — required by coder-agentic chat template
-    sys_parts = [SYSTEM_PROMPT, *_memory_parts(state)]
+    memory_parts = _memory_parts(state)
+    sys_parts = [SYSTEM_PROMPT, *memory_parts]
     return {
+        "data_scopes": ["private"] if memory_parts else state["data_scopes"],
         "messages": [
             SystemMessage(content="\n\n".join(p for p in sys_parts if p)),
             HumanMessage(content=state["text"]),
@@ -502,7 +525,9 @@ def _tools_node(state: DailyAssistantState) -> dict:
     names = ux_bridge.tool_names_from_message(last) if last is not None else []
     label = ux_bridge.humanize_tools(names)
     _job_progress(label, thinking=f"执行 {label}")
-    return ToolNode(TOOLS).invoke(state)
+    scopes = next_data_scopes(state["data_scopes"], names)
+    result = ToolNode(TOOLS).invoke({**state, "data_scopes": scopes})
+    return {**result, "data_scopes": scopes}
 
 
 def _finish(state: DailyAssistantState) -> dict:
