@@ -31,6 +31,7 @@ PROVIDER_MODULE_MAP: dict[str, str] = {
     "grok": "grok",
     "warp": "warp",
     "litellm": "litellm",
+    "zai": "zai",
 }
 
 
