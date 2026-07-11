@@ -442,6 +442,34 @@ sudo systemctl restart aipc-voice-stt-sensevoice.service
 
 Only mark OpenSpec hardware tasks complete after the matching command path is exercised. Wake word, listen-off triggers, firstboot voice screens, and full command/chat routing remain pending.
 
+### Streaming TTFA baseline (voice-telemetry) — AI PC only
+
+Prove `voice-streaming-turn` actually lowers time-to-first-audio, using the
+latency records. This is `voice-latency-instrumentation` group 5 and
+`voice-streaming-turn` §7.3.
+
+```bash
+# 1) Batch baseline — several real mic turns on the default preset/backend
+for i in 1 2 3 4 5; do aipc-voice-once --seconds 6; done
+aipc voice timings --last 20            # note mean perceived for path=batch
+
+# 2) Streaming — enable and run comparable turns
+export AIPC_VOICE_STREAM=1
+aipc-voice-stream --wav /tmp/cmd.wav --session-id ttfa-test   # or via wake
+aipc voice timings --last 20            # path=stream perceived/llm_ttft/tts_ttfa
+
+# 3) Verdict — stream perceived MUST be < batch perceived
+aipc voice timings --last 50 --json \
+  | jq '[.turns[] | {path, perceived_ms, llm_ttft_ms, tts_ttfa_ms}]'
+```
+
+Records land at `${XDG_STATE_HOME:-~/.local/state}/aipc-voice/turns.jsonl`
+(disable with `AIPC_VOICE_TIMING=0`). Write the measured batch-vs-stream
+numbers back into this doc + one `docs/agent-log.md` row, then — only if stream
+perceived is reliably lower — consider defaulting `AIPC_VOICE_STREAM=1` in the
+wake drop-in (§7.4, separate small commit). Also confirm barge-in cancels
+playback and master sink volume is never changed.
+
 ### Change Kokoro voice without code
 
 ```bash
