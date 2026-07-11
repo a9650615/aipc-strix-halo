@@ -44,3 +44,14 @@ SHALL NOT advertise a context window larger than the backend provides.
 - **WHEN** Hermes starts against the local coder backend
 - **THEN** its declared context window is 131,072 tokens
 - **AND** automatic compression begins at 70% of usable input
+
+### Requirement: Hermes permits local compaction to finish
+
+Hermes SHALL give the local compact auxiliary model up to 600 seconds to
+finish a summary, matching the LiteLLM request ceiling.
+
+#### Scenario: A long local summary remains active
+
+- **WHEN** `coder-compact` needs more than an interactive short timeout
+- **THEN** Hermes waits up to 600 seconds for the summary
+- **AND** it does not abandon the request while Lemonade continues GPU work

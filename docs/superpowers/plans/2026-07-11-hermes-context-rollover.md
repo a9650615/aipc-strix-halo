@@ -12,6 +12,7 @@
 
 - The local backend context window remains exactly 131,072 tokens.
 - Automatic compression begins at `0.70`; the last four messages are protected.
+- The local compact auxiliary timeout matches LiteLLM's 600-second request ceiling.
 - Complete oversized tool results remain available as local artifacts.
 - A rollover never replays model calls, tool calls, or other side effects.
 - Use existing Hermes session stores and tool-result storage; add no dependency or daemon.
@@ -78,10 +79,10 @@
 - Modify: `/var/home/birdyo/aipc-strix-halo/modules/ccs/README.md`
 
 **Interfaces:**
-- Produces: `context_length: 131072`, `compression.threshold: 0.70`, `protect_last_n: 4`, and the existing `coder-compact` lane.
+- Produces: `context_length: 131072`, `compression.threshold: 0.70`, `protect_last_n: 4`, a 600-second compact timeout, and the existing `coder-compact` lane.
 
 - [ ] Update the user YAML without changing provider credentials or unrelated preferences.
-- [ ] Parse the YAML and assert the four approved values.
+- [ ] Parse the YAML and assert the approved values, including `auxiliary.compression.timeout: 600`.
 - [ ] Correct the existing Hermes configuration note in `modules/ccs/README.md`.
 - [ ] Commit the AIPC documentation with `Spec-Task: 0005-hermes-context-rollover#3.1`.
 
