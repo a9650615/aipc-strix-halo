@@ -18,8 +18,12 @@ Volume=/etc/aipc/models/models.yaml:/app/models.yaml:ro,Z
 Exec=--config /app/config.yaml --host 127.0.0.1 --port 4000
 EnvironmentFile=/etc/aipc/env.d/llm-litellm/cloud-keys.env
 # Scheduler tunables (defaults live in scheduler_hook.py; override here).
-# Budget: GTT ceiling is 122GiB but desktop+services need headroom.
-Environment=AIPC_SCHED_BUDGET_GB=96
+# Budget: GTT ceiling is 122GiB, but hardware-observed 2026-07-12 the
+# non-model working set (desktop + hermes + services) runs ~47GB, so 96
+# would let ornith+coder-122b coexist and OOM real RAM. 80 forces the
+# scheduler to evict down to the 122B + small residents during coding
+# sessions (user directive: never OOM; swap acceptable).
+Environment=AIPC_SCHED_BUDGET_GB=80
 
 [Service]
 Restart=always

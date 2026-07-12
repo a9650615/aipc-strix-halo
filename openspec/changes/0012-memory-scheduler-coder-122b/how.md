@@ -75,6 +75,24 @@ not multiply KV slots, and coding sessions are effectively single-user.
 litellm entry mirrors `coder-agentic` (`enable_thinking: false`,
 `timeout: 1800`, `num_retries: 0`, `max_input_tokens: 262144`).
 
+## Hardware findings folded back in (2026-07-12 live verification)
+
+- **Budget 96 → 80.** The non-model working set on this box measured ~47GB
+  (desktop + hermes + services), not the ~25GB the 96 figure assumed; 96
+  would have admitted ornith + coder-122b together and OOMed real RAM.
+- **Recipe options MUST be pinned before a big model's first load.** With no
+  saved options, lemonade loads at the model-card ctx (262144); for the
+  122B that exhausted GTT and took down every GPU context on the box
+  (llama-server SIGABRT via vk::DeviceLostError, zen SIGSEGV, lemond
+  SIGSEGV, kwin GL_CONTEXT_LOST, plasmashell wedged). Pin by writing
+  `recipe_options.json` directly (no load needed), then restart lemonade.
+- **`--no-warmup` is required in the 122B recipe.** The empty-run warmup
+  measured 8.5 min — past lemonade's `global_timeout` (600s ready-wait), so
+  loads fell into a timeout-kill-retry loop. `--no-warmup` makes ready
+  fast; the first real request pays the warmup. configure-lemonade.sh also
+  raises `global_timeout` to 1800 for the next image build (the live /usr
+  copy resets 600 on every service start until then).
+
 ## What this does NOT do
 
 - No lemond-side changes: `max_loaded_models` stays 4 (count ceiling as a

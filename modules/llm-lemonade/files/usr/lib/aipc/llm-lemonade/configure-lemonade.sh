@@ -33,7 +33,7 @@ CFG=/var/lib/aipc-lemonade/cache/config.json
 if [ -f "$CFG" ]; then
   tmp=$(mktemp -p "$(dirname "$CFG")")
   # High slot count: 128GB unified memory — keep FLM + several Vulkan LLMs
-  # resident. Pin gemma4-it-e4b-FLM via ensure-resident-small.sh so LRU never
+  # resident. Pin the resident-small FLM model via ensure-resident-small.sh so LRU never
   # evicts the always-on chat model. Do not thrash by unloading big models.
   # FLM is type=llm in this lemond build and counts against the pool.
   #
@@ -60,16 +60,19 @@ if [ -f "$CFG" ]; then
   # vlm / daily); a 5th load LRU-evicts the floater (~5-12s reload) instead
   # of OOMing the box. Derive this number from the memory budget, never
   # set it "generously".
-  jq '.max_loaded_models = 4 | .enable_dgpu_gtt = true | .llamacpp.backend = "vulkan" | .global_timeout = 600' "$CFG" > "$tmp"
+  # max_loaded_models stays 4 — do NOT raise: 8 was hardware-verified to OOM
+  # the 128 GB unified memory on 2026-07-11 (see the note above). 0011.
+  # global_timeout 600 -> 1800 (0012, hardware-verified 2026-07-12): it is
+  # the llama-server ready-wait; coder-122b's 55GiB load blew past 600s
+  # (warmup alone measured 8.5 min) and lemonade fell into a
+  # timeout-kill-retry loop. 1800 matches litellm's local-model timeout.
+  # Big-model recipes should still carry --no-warmup so ready comes fast
+  # and the first real request pays the warmup instead.
+  jq '.max_loaded_models = 4 | .enable_dgpu_gtt = true | .llamacpp.backend = "vulkan" | .global_timeout = 1800' "$CFG" > "$tmp"
   mv "$tmp" "$CFG"
 fi
 
-# Qwen 3.5-122B moved to Ollama 2026-07-07 to avoid Lemonade slot-tracking bug
-# (see models.yaml comment). Remove from user_models.json so lemond won't
-# auto-load it on startup — same slot issue that caused the crash.
-UM=/var/lib/aipc-lemonade/cache/user_models.json
-if [ -f "$UM" ]; then
-  tmp2=$(mktemp -p "$(dirname "$UM")")
-  jq 'del(.["Qwen3.5-122B-A10B-GGUF-Q3_K_XL"])' "$UM" > "$tmp2"
-  mv "$tmp2" "$UM"
-fi
+# (Removed 2026-07-12: the 2026-07-07 user_models.json cleanup for the
+# retired Ollama-era Qwen3.5-122B-A10B-GGUF-Q3_K_XL id — that id no longer
+# exists anywhere, and the 0012 coder-122b re-add uses a different id
+# under the gateway memory scheduler.)
