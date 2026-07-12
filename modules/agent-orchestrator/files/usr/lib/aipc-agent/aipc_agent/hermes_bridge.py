@@ -47,6 +47,21 @@ HERMES_USE_MEM0 = os.environ.get("AIPC_HERMES_USE_MEM0", "1") not in (
     "no",
 )
 HERMES_SOURCE = os.environ.get("AIPC_HERMES_SOURCE", "aipc-voice")
+# Model the assistant-dispatched Hermes runs on. Defaults to the NPU-resident
+# small model so the voice/assistant path does not tie up the iGPU with the 35B
+# coder-agentic; the standalone `hermes` CLI keeps its ~/.hermes default. Empty
+# → fall back to that config default.
+HERMES_MODEL = os.environ.get("AIPC_HERMES_MODEL", "resident-small")
+# When the small primary model cannot handle a task (fails, times out, or emits
+# the NEED_STRONGER escape token), retry once on this stronger model. Empty →
+# no fallback.
+HERMES_FALLBACK_MODEL = os.environ.get("AIPC_HERMES_FALLBACK_MODEL", "coder-agentic")
+# Cap the primary (small-model) attempt so the fallback still fits inside the
+# outer voice CHAT_TIMEOUT. ponytail: fixed cap; tune per-hardware if the small
+# model needs longer before we give up on it.
+HERMES_PRIMARY_TIMEOUT = float(os.environ.get("AIPC_HERMES_PRIMARY_TIMEOUT", "300"))
+# Escape token the small model emits when a task is beyond it (see _build_query).
+_NEED_STRONGER_RE = re.compile(r"\bNEED_STRONGER\b")
 
 
 def _primary_user_home() -> tuple[str, str]:
@@ -130,11 +145,23 @@ def _is_unusable_answer(text: str) -> bool:
         "after retries",
         "fallback providers",
         "任务跑完了，但没有可读",
+        # Small model too weak: echoes the prompt scaffold instead of answering.
+        "out-of-band user message",
+        "[/out-of-band",
+        "user request:",
+        # Gateway/model error leaked to stdout as if it were the answer.
+        "invalid model name",
+        "/chat/completions",
+        "call `/v1/models`",
+        "http 400",
+        "http 500",
     )
     return any(b in low or b in t for b in bad)
 
 
-def _build_query(text: str, session_id: str, *, browser: bool = False) -> str:
+def _build_query(
+    text: str, session_id: str, *, browser: bool = False, allow_escape: bool = False
+) -> str:
     parts = [
         "You are helping via the aipc voice assistant. "
         "Discover facts yourself with tools and search engines — "
@@ -163,6 +190,19 @@ def _build_query(text: str, session_id: str, *, browser: bool = False) -> str:
         "",
         f"User request:\n{text.strip()}",
     ]
+    parts[0] += (
+        " You are a small, fast model on this path — prioritise accuracy over "
+        "fluency. If you are not certain, say so plainly; never fill gaps with "
+        "plausible-sounding guesses, invented facts, names, numbers, or URLs."
+    )
+    if allow_escape:
+        parts[0] += (
+            " If this needs coding, multi-step reasoning, or anything beyond a "
+            "quick tool-assisted lookup — or you cannot finish it confidently "
+            "with the tools — do NOT produce a partial or guessed answer. Reply "
+            "with exactly NEED_STRONGER on its own line and nothing else; a "
+            "stronger model will take over."
+        )
     # Local skills first (paths she already learned on this machine)
     has_skill = False
     try:
@@ -544,15 +584,17 @@ def _is_voice_session(session_id: str) -> bool:
     return any(k in s for k in ("voice", "wake", "ptt", "aipc-voice"))
 
 
-def run(
+def _run_once(
     text: str,
     session_id: str = "voice",
     *,
+    model: str = "",
+    allow_escape: bool = False,
     long_task: bool = False,
     wall: float | None = None,
     max_turns: int | None = None,
 ) -> dict:
-    """Run Hermes once. Returns {status, text, detail?, ephemeral?}."""
+    """Run Hermes once on `model`. Returns {status, text, detail?, ephemeral?}."""
     hermes = _resolve_hermes()
     if not hermes:
         return {
@@ -579,7 +621,9 @@ def run(
     except Exception as exc:  # noqa: BLE001
         print(f"aipc-agent hermes: browser-sandbox skip: {exc}", flush=True)
         use_browser = False
-    query = _build_query(text, session_id, browser=use_browser)
+    query = _build_query(
+        text, session_id, browser=use_browser, allow_escape=allow_escape
+    )
     try:
         from aipc_agent.technical_advisor import advise
 
@@ -623,6 +667,8 @@ def run(
         "--accept-hooks",
         "--yolo",
     ]
+    if model:
+        cmd.extend(["-m", model])
     if use_browser:
         # Equip browser toolset (navigate/snapshot + web_search) for this run
         cmd.extend(["-t", "browser"])
@@ -817,7 +863,7 @@ def run(
         )
         # Sometimes quiet mode still prints answer on partial failure
         answer = _extract_answer(proc.stdout or "")
-        if answer and len(answer) > 8:
+        if answer and len(answer) > 8 and not _is_unusable_answer(answer):
             try:
                 from aipc_agent.grounding import is_ungrounded_lookup
 
@@ -896,6 +942,75 @@ def run(
     }
 
 
+def _should_fallback(res: dict) -> bool:
+    st = res.get("status")
+    if st in ("timeout", "error"):
+        return True
+    return st == "ok" and bool(_NEED_STRONGER_RE.search(res.get("text", "")))
+
+
+def run(
+    text: str,
+    session_id: str = "voice",
+    *,
+    long_task: bool = False,
+    wall: float | None = None,
+    max_turns: int | None = None,
+) -> dict:
+    """Dispatch Hermes on the small NPU model; fall back to the strong model
+    when it cannot handle the task. Returns {status, text, detail?, ephemeral?}."""
+    primary = HERMES_MODEL
+    fb = HERMES_FALLBACK_MODEL
+    armed = bool(primary and fb and fb != primary)
+    primary_wall = wall
+    if armed:
+        # Leave room in the outer CHAT_TIMEOUT for the fallback attempt.
+        primary_wall = (
+            HERMES_PRIMARY_TIMEOUT
+            if wall is None
+            else min(wall, HERMES_PRIMARY_TIMEOUT)
+        )
+    res = _run_once(
+        text,
+        session_id,
+        model=primary,
+        allow_escape=armed,
+        long_task=long_task,
+        wall=primary_wall,
+        max_turns=max_turns,
+    )
+    if armed and _should_fallback(res):
+        print(
+            f"aipc-agent hermes: fallback {primary!r} -> {fb!r} "
+            f"({res.get('status')})",
+            flush=True,
+        )
+        try:
+            from aipc_agent import ux_bridge
+
+            ux_bridge.progress("切換較強模型重試…", source="hermes")
+        except Exception:
+            pass
+        res = _run_once(
+            text,
+            session_id,
+            model=fb,
+            allow_escape=False,
+            long_task=long_task,
+            wall=wall,
+            max_turns=max_turns,
+        )
+    if res.get("status") == "ok" and _NEED_STRONGER_RE.search(res.get("text", "")):
+        # Escape token leaked but no fallback ran — never speak it to the user.
+        return {
+            **res,
+            "status": "error",
+            "text": "這題我這邊的小模型接不住，請改用文字終端或稍後再試。",
+            "detail": "need_stronger_no_fallback",
+        }
+    return res
+
+
 def self_test() -> None:
     assert _extract_answer("hello\n\nSession ID: abc123xyz") == "hello"
     assert _extract_session_id("Session ID: abc123xyz") == "abc123xyz"
@@ -915,6 +1030,13 @@ def self_test() -> None:
     )
     assert "a.example" in merged and "b.example" in merged
     assert _trail_from_session_db("/nonexistent", "nope") == ""
+    assert _should_fallback({"status": "timeout"})
+    assert _should_fallback({"status": "error"})
+    assert _should_fallback({"status": "ok", "text": "NEED_STRONGER"})
+    assert not _should_fallback({"status": "ok", "text": "here is the answer"})
+    assert _is_unusable_answer("[OUT-OF-BAND USER MESSAGE — 現在幾月？]")
+    assert "NEED_STRONGER" in _build_query("hi", "s", allow_escape=True)
+    assert "NEED_STRONGER" not in _build_query("hi", "s", allow_escape=False)
     assert HERMES_VOICE_TIMEOUT < float(os.environ.get("AIPC_VOICE_CHAT_TIMEOUT", "780"))
     assert HERMES_LONG_TIMEOUT >= HERMES_VOICE_TIMEOUT
     print("hermes_bridge self_test: OK")

@@ -89,7 +89,13 @@ def snapshot(
     models = loaded_models() if models is None else models
     automation = load_automation() if automation is None else automation
     services = [
-        {"id": item.meta.id, "title": item.meta.title, "state": item.unit_state}
+        {
+            "id": item.meta.id,
+            "title": item.meta.title,
+            "state": item.unit_state,
+            "ui": item.meta.ui,
+            "health": item.health_ok,
+        }
         for item in statuses
     ]
     healthy = sum(item.health_ok is not False and item.unit_state in ("active", "n/a") for item in statuses)

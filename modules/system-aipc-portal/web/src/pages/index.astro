@@ -24,9 +24,17 @@ import App from "../layouts/App.astro";
         document.querySelector("#npu small").textContent = `Lemonade: ${data.npu?.service || "unknown"} · ${data.npu?.activity || "no runtime probe"}`;
         show("ai", data.runtime?.summary || "Unavailable");
         document.querySelector("#services ul").replaceChildren(...(data.services || []).map((s) => {
-          const row = document.createElement("li"); row.textContent = `${s.title}: ${s.state} `;
-          const button = Object.assign(document.createElement("button"), { textContent: "Start" });
-          button.onclick = () => post(`/services/${s.id}/start`); row.append(button); return row;
+          const row = document.createElement("li");
+          const state = s.state === "n/a" ? (s.health === true ? "ready" : s.health === false ? "down" : "n/a") : s.state;
+          row.textContent = `${s.title}: ${state} `;
+          if (s.state !== "n/a") {
+            const button = Object.assign(document.createElement("button"), { textContent: "Start" });
+            button.onclick = () => post(`/services/${s.id}/start`); row.append(button);
+          }
+          if (s.ui) {
+            row.append(" ", Object.assign(document.createElement("a"), { textContent: "Open UI", href: s.ui, target: "_blank", rel: "noopener" }));
+          }
+          return row;
         }));
         document.querySelector("#automation ul").replaceChildren(...(data.automation || []).map((job) => {
           const row = document.createElement("li"); row.textContent = `${job.provider || "automation"}: ${job.state || "unknown"} `;

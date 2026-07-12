@@ -24,6 +24,11 @@ Environment=AIPC_WAKE_PHRASES_FILE=/etc/aipc/wake/phrases
 Environment=AIPC_WAKE_ENERGY=1500
 Environment=AIPC_WAKE_ENERGY_FRAMES=4
 Environment=AIPC_WAKE_CAPTURE_S=2.0
+# Denoise OFF for the short wake-word capture: RNNoise on the 2s wake window
+# made SenseVoice render '嘿助理' as '我。' (hardware-confirmed 2026-07-12).
+# Command capture (aipc-voice-once) keeps denoise — it hurts only the short
+# wake phrase. The code honours this via _mic_env()'s AIPC_WAKE_DENOISE check.
+Environment=AIPC_WAKE_DENOISE=0
 Environment=AIPC_WAKE_COOLDOWN=8
 Environment=AIPC_WAKE_CMD_MAX_S=6
 Environment=AIPC_WAKE_CMD_END_SILENCE_MS=450
