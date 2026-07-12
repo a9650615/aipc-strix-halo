@@ -119,13 +119,17 @@ models:
   # explicit -np with -kvu (see llm-lemonade README concurrency section).
   # Qwen3.6 hybrid thinking: coding/tool consumers should pass
   # enable_thinking=false (see litellm config extra_body).
+  # Rewarm removed 2026-07-12 (user-directed): the idle-release daemon no
+  # longer reloads this (or any) model on its own — the tier: resident
+  # marker is gone, this is pure on-demand now. idle_unload_after_s: 1800
+  # (30min) keeps it warm across a single working session so repeated use
+  # doesn't pay reload+prefill cost, while still releasing once genuinely
+  # idle. resident-small (NPU-pinned) is the only always-loaded model left.
   - alias: coder-agentic
     backend: lemonade
     model_id: Qwen3.6-35B-A3B-Uncensored-Aggressive-Q4_K_P
     size_gb: 21.8
-    # 0011 steady-state agent set member; 0012 scheduler evicts residents
-    # only for an exclusive-tier target (coder-122b).
-    tier: resident
+    idle_unload_after_s: 1800
     checkpoints:
       main: HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:Q4_K_P
     recipe: llamacpp
@@ -182,7 +186,7 @@ models:
     backend: lemonade
     model_id: Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M
     size_gb: 15.8
-    tier: resident
+    idle_unload_after_s: 1800
     checkpoints:
       main: HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M
       draft: HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:mtp-gemma-4-26B-A4B-it.gguf
@@ -288,7 +292,7 @@ models:
     backend: lemonade
     model_id: Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M
     size_gb: 5.6
-    tier: resident
+    idle_unload_after_s: 1800
     checkpoints:
       main: empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M
     recipe: llamacpp
