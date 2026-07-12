@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -197,7 +198,11 @@ def recipe_pin_command(entry: ModelEntry) -> list[str] | None:
 # btrfs here, so the materialise step reflinks (CoW, ~free); cross-fs falls
 # back to a full copy via --reflink=auto.
 LEMONADE_HF_HUB = Path("/var/lib/aipc-models/hf/hub")
-XET_STAGING = Path.home() / ".cache" / "aipc-xet"
+# User-writable HF_HOME the hf_xet download stages into. Overridable so a
+# deploy/verify run can point it at an existing HF cache (hf skips the fetch
+# when the file is already there). Never a tmpfs path — a multi-GB pull would
+# OOM the box.
+XET_STAGING = Path(os.environ.get("AIPC_XET_STAGING") or (Path.home() / ".cache" / "aipc-xet"))
 
 # Replicate one hf-CLI-produced HF repo cache dir (blobs + snapshot symlinks +
 # refs) from staging into Lemonade's root-owned cache, reflinking blobs and

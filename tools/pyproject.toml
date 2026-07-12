@@ -12,6 +12,11 @@ dependencies = [
     "rich>=13.0",
     "textual>=0.60",
     "httpx>=0.24.0",
+    # `aipc models sync` shells out to the `hf` CLI for hf_xet-provisioned
+    # models (0015); the extra pulls the Xet client + installs `hf` alongside
+    # aipc on the same PATH so `hf download` reconstructs Xet content-addressed
+    # weights (which lemonade pull / naive HTTP fetch wrong past a stale etag).
+    "huggingface_hub[hf_xet]>=0.30",
 ]
 
 [project.scripts]
