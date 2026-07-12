@@ -68,15 +68,17 @@ model_list:
       max_input_tokens: 262144
       max_output_tokens: 4096
 
-  # See models.yaml: 2026-07-09 trial — HauhauCS Qwen3.6-35B-A3B Aggressive
-  # uncensored Q4_K_P on Lemonade llamacpp:vulkan (replaces Gemma-4-26B-A4B).
+  # See models.yaml: 2026-07-13 SWAP — now SC117 Qwen3.6-35B-A3B native-MTP
+  # (heretic, APEX I-Balanced) replacing the HauhauCS Aggressive Q4_K_P. Same
+  # base model, but 20 native MTP layers + --spec-type draft-mtp give +28%
+  # single-stream decode (hardware A/B) with identical tool-call quality.
   # Same lemond :8001 router as resident-small; no keep_alive — Lemonade
-  # max_loaded_models=2 keeps this + ornith-35b. enable_thinking false so
+  # max_loaded_models keeps this + ornith-35b. enable_thinking false so
   # agentic/tool consumers get structured tool_calls without hybrid-thinking
   # preambles (daily chat can override per-request).
   - model_name: coder-agentic
     litellm_params:
-      model: openai/Qwen3.6-35B-A3B-Uncensored-Aggressive-Q4_K_P
+      model: openai/Qwen3.6-35B-A3B-heretic-NativeMTP-APEX-I-Balanced
       api_base: http://127.0.0.1:8001/v1
       api_key: none
       extra_body:

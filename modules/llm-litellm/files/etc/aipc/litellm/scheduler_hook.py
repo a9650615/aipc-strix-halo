@@ -32,6 +32,16 @@ POLL_S = float(os.environ.get("AIPC_SCHED_POLL_S", "2"))
 # host's actual MemAvailable so admission tracks reality: idle desktop =>
 # more room, browser-heavy desktop => scheduler evicts or holds sooner.
 HEADROOM_GB = float(os.environ.get("AIPC_SCHED_HEADROOM_GB", "10"))
+# Swap-backed admission (user directive 2026-07-13: "swap is fine, OOM is
+# not; auto-unload OTHER LLM models when memory is tight"). The loop already
+# evicts eligible LLM victims first. But when the only thing still blocking
+# the real-memory gate is NON-LLM memory the scheduler cannot evict (e.g.
+# ComfyUI's resident diffusion model, which the user keeps), holding until
+# HOLD_TIMEOUT just fails the request. Instead, once no evictable LLM remains,
+# admit if free swap can absorb the model and a hard RAM floor stays intact —
+# lean on swap (zram 48G + nvme 30G) rather than OOM or block. This only
+# bypasses the real-memory gate, never the logical BUDGET_GB ledger.
+RAM_FLOOR_GB = float(os.environ.get("AIPC_SCHED_RAM_FLOOR_GB", "4"))
 
 
 def mem_available_gb(meminfo_path: str = "/proc/meminfo") -> float | None:
@@ -39,6 +49,17 @@ def mem_available_gb(meminfo_path: str = "/proc/meminfo") -> float | None:
     try:
         for line in open(meminfo_path):
             if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1024 / 1024
+    except OSError:
+        pass
+    return None
+
+
+def swap_free_gb(meminfo_path: str = "/proc/meminfo") -> float | None:
+    """Host SwapFree in GB (zram + nvme swap), or None if unreadable."""
+    try:
+        for line in open(meminfo_path):
+            if line.startswith("SwapFree:"):
                 return int(line.split()[1]) / 1024 / 1024
     except OSError:
         pass
@@ -137,7 +158,8 @@ class _SchedulerCore:
     def __init__(self, fetch_health, post_unload, budget_gb=BUDGET_GB,
                  cooldown_s=COOLDOWN_S, hold_timeout_s=HOLD_TIMEOUT_S,
                  poll_s=POLL_S, clock=time.monotonic, sleeper=asyncio.sleep,
-                 headroom_gb=HEADROOM_GB, mem_available=mem_available_gb):
+                 headroom_gb=HEADROOM_GB, mem_available=mem_available_gb,
+                 ram_floor_gb=RAM_FLOOR_GB, swap_free=swap_free_gb):
         self.fetch_health = fetch_health
         self.post_unload = post_unload
         self.budget_gb = budget_gb
@@ -148,6 +170,8 @@ class _SchedulerCore:
         self.sleeper = sleeper
         self.headroom_gb = headroom_gb
         self.mem_available = mem_available
+        self.ram_floor_gb = ram_floor_gb
+        self.swap_free = swap_free
         self.lock = asyncio.Lock()
         self.admitted_at: dict[str, float] = {}
 
@@ -159,6 +183,19 @@ class _SchedulerCore:
         # a broken probe). Weights are mmap'd so an unload returns its pages
         # to MemAvailable before the next loop iteration re-checks.
         return avail is None or avail >= target["size_gb"] + self.headroom_gb
+
+    def _swap_admits(self, loaded: list[dict], target: dict) -> bool:
+        """Last resort once no evictable LLM remains: admit iff free swap can
+        absorb the model and MemAvailable is still above the RAM floor. Only
+        the real-memory gate is bypassed — the logical budget ledger is not,
+        so a genuine over-subscription of model weights still holds."""
+        if free_gb(loaded, self.budget_gb) < target["size_gb"]:
+            return False
+        avail = self.mem_available()
+        swap = self.swap_free()
+        if avail is None or swap is None:
+            return False  # can't reason about swap → stay conservative, hold
+        return avail >= self.ram_floor_gb and swap >= target["size_gb"] + self.headroom_gb
 
     async def admit(self, alias: str, manifest: dict[str, dict]) -> None:
         """Return when `alias` may be forwarded; raise TimeoutError on hold expiry."""
@@ -186,6 +223,9 @@ class _SchedulerCore:
                                      self.clock(), self.cooldown_s)
                 if victim is not None:
                     await self.post_unload(victim)
+                elif self._swap_admits(loaded, target):
+                    break  # no evictable LLM left; only non-LLM memory (e.g.
+                    # ComfyUI) blocks the RAM gate — swap absorbs it, admit
                 else:
                     await self.sleeper(self.poll_s)
                 if self.clock() > deadline:
@@ -395,7 +435,8 @@ def self_test() -> None:
         await core5.admit("assistant-gemma", manifest)
         assert state5["unloads"] == ["ORN"], state5["unloads"]
 
-        # Real-memory gate with nothing evictable -> hold then timeout.
+        # Real-memory gate, nothing evictable, AND swap too small to absorb
+        # -> hold then timeout (the only true out-of-room case left).
         state6 = {"loaded": [], "unloads": []}
 
         async def health6():
@@ -409,13 +450,52 @@ def self_test() -> None:
         core6 = _SchedulerCore(health6, unload3, budget_gb=96,
                                hold_timeout_s=20, poll_s=0,
                                clock=lambda: clock6["t"], sleeper=sleep6,
-                               mem_available=lambda: 8.0)
+                               mem_available=lambda: 8.0, swap_free=lambda: 2.0)
         try:
             await core6.admit("qwythos-9b", manifest)
         except TimeoutError:
             pass
         else:
             raise AssertionError("expected real-memory hold timeout")
+
+        # Swap-backed admit: real memory short, nothing evictable (only non-LLM
+        # memory like ComfyUI is the blocker), but free swap can absorb the
+        # model and RAM stays above the floor -> admit without unloading, don't
+        # hold (user directive: swap ok, keep ComfyUI). Ledger still fits.
+        state8 = {"loaded": [], "unloads": []}
+
+        async def health8():
+            return health_for(state8["loaded"])
+
+        core8 = _SchedulerCore(health8, unload3, budget_gb=96,
+                               hold_timeout_s=10, poll_s=0,
+                               mem_available=lambda: 8.0, swap_free=lambda: 60.0)
+        await core8.admit("qwythos-9b", manifest)
+        assert state8["unloads"] == [], state8["unloads"]
+
+        # ...but swap-admit never bypasses the logical budget: an over-budget
+        # ledger (63.6GB in-use loaded, 59.2GB target -> only 32.4GB free)
+        # holds even with ample swap and RAM floor intact.
+        state9 = {"loaded": ["ORN", "G26", "Q36"], "unloads": []}
+
+        async def health9():
+            return health_for(state9["loaded"], in_use={"ORN", "G26", "Q36"})
+
+        clock9 = {"t": 0.0}
+
+        async def sleep9(_s):
+            clock9["t"] += 5.0
+
+        core9 = _SchedulerCore(health9, unload3, budget_gb=96,
+                               hold_timeout_s=20, poll_s=0,
+                               clock=lambda: clock9["t"], sleeper=sleep9,
+                               mem_available=lambda: 200.0, swap_free=lambda: 200.0)
+        try:
+            await core9.admit("coder-122b", manifest)
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("swap must not bypass the budget ledger")
 
         # Broken meminfo probe degrades to ledger-only.
         core7 = _SchedulerCore(health6, unload3, budget_gb=96,

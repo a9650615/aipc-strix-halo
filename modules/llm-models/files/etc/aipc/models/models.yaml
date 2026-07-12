@@ -125,18 +125,31 @@ models:
   # (30min) keeps it warm across a single working session so repeated use
   # doesn't pay reload+prefill cost, while still releasing once genuinely
   # idle. resident-small (NPU-pinned) is the only always-loaded model left.
+  # SWAPPED 2026-07-13: coder-agentic now points at the SC117 native-MTP model.
+  # Fresh hardware A/B (llama-server, -np 1, temp 0, single-stream) on THIS
+  # vulkan build: native 20-layer MTP + --spec-type draft-mtp --spec-draft-n-max 2
+  # = 78.5 tok/s vs 57.7 no-spec (+36%), and vs 61.2 for the old Aggressive
+  # Q4_K_P (+28%); 87.5% draft acceptance, coherent uncorrupted output. This is
+  # the "fresh measured win" the MTP-rejection note below (assistant-gemma /
+  # ornith, 1-layer embedded MTP) demanded before re-enabling --spec-type.
+  # HARD: native MTP requires n_parallel=1 (llama.cpp "MTP supports only
+  # n_parallel=1"), hence -np 1 — do NOT restore -np 4 while spec is on.
+  # Old HauhauCS Aggressive Q4_K_P gguf stays on disk for manual rollback.
+  # NOTE: this repo's gguf carries a stale upstream LFS etag (HF Xet migration)
+  # — verify it by LOADING (llama.cpp parses the tensors), not by sha256; naive
+  # curl / lemonade-pull download wrong bytes, must fetch via the hf_xet client.
   - alias: coder-agentic
     backend: lemonade
-    model_id: Qwen3.6-35B-A3B-Uncensored-Aggressive-Q4_K_P
-    size_gb: 21.8
+    model_id: Qwen3.6-35B-A3B-heretic-NativeMTP-APEX-I-Balanced
+    size_gb: 24.2
     idle_unload_after_s: 1800
     checkpoints:
-      main: HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:Q4_K_P
+      main: SC117/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-GGUF:Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Balanced.gguf
     recipe: llamacpp
     recipe_options:
       ctx_size: 131072
       llamacpp_backend: vulkan
-      llamacpp_args: "-np 4 -kvu"
+      llamacpp_args: "-np 1 -kvu --spec-type draft-mtp --spec-draft-n-max 2 --no-warmup"
     label: tool-calling
 
   # Daily / Gemma-voice assistant (2026-07-09): HauhauCS Gemma4 26B-A4B QAT
