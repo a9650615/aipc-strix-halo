@@ -24,4 +24,9 @@ grep -q 'BUSY_THRESHOLD' "$SH" || fail "must expose BUSY_THRESHOLD"
 grep -qE 'BUSY_THRESHOLD:-50|BUSY_THRESHOLD=50' "$SH" \
   || fail "default BUSY_THRESHOLD should be >=50 (was 15 — stuck inhibitor on ambient load)"
 
+JOURNAL_CONF="$MOD/files/etc/systemd/journald.conf.d/90-suspend-hang-forensics.conf"
+[ -f "$JOURNAL_CONF" ] || fail "missing journald forensics drop-in"
+grep -q '^RuntimeMaxUse=' "$JOURNAL_CONF" || fail "journald drop-in missing RuntimeMaxUse"
+grep -q '^RateLimitBurst=' "$JOURNAL_CONF" || fail "journald drop-in missing RateLimitBurst"
+
 echo "suspend-gpu-guard verify OK (static)"

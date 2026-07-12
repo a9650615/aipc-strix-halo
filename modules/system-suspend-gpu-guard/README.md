@@ -48,6 +48,23 @@ AC — “该释放不放”. Defaults are now:
 Override via `Environment=` on the unit (or drop-in). Kill switch:
 `/etc/aipc/suspend-gpu-guard.disabled`.
 
+## Journald forensics drop-in (2026-07-12)
+
+A second real hang — s2idle suspend, USB device unplugged mid-sleep, resume
+never came back, forced power-cycle — showed the runtime journal for that
+boot had almost nothing left except ~40k lines of `plasma-systemmonitor`
+spamming a QML warning (`TreeViewDelegate.qml: Unable to assign [undefined]
+to QString`) after one of its sensors vanished along with the unplugged
+device. That flood evicted whatever kernel/suspend evidence existed for the
+actual hang before it could be inspected.
+
+`files/etc/systemd/journald.conf.d/90-suspend-hang-forensics.conf` raises
+`RuntimeMaxUse`/`SystemMaxUse` (default was unset → small implicit cap) and
+tightens `RateLimitBurst` to 1000/30s so a single runaway app can no longer
+evict a whole boot's worth of real log before anyone gets to read it. This
+doesn't fix the KDE-side QML bug (upstream, not this repo's to patch) — it
+just makes sure the *next* hang leaves evidence behind.
+
 ## Hardware assumption
 
 AMD Ryzen AI MAX+ 395 (gfx1151), amdgpu driver exposing `gpu_busy_percent`.
