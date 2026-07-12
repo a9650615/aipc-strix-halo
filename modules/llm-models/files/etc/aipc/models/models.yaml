@@ -168,8 +168,16 @@ models:
   #     --recipe llamacpp --label tool-calling --label mtp
   #   lemonade load Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M \
   #     --llamacpp vulkan --ctx-size 262144 \
-  #     --llamacpp-args "-np 1 -kvu --spec-type draft-mtp --spec-draft-n-max 4" \
-  #     --save-options
+  #     --llamacpp-args "-np 1 -kvu" --save-options
+  #
+  # MTP spec flags DROPPED from the recipe 2026-07-12: hardware-tested on
+  # ornith's embedded MTP with this exact llamacpp:vulkan build — the
+  # speculative loop achieved 99.2% draft acceptance yet decoded at 5.4
+  # tok/s vs 73.2 baseline (13x SLOWER; draft-eval overhead swamps the
+  # acceptance win on Vulkan). The draft checkpoint stays pulled for
+  # re-testing on future llama.cpp builds; do not re-enable --spec-type
+  # without a fresh measured win. The community "~110 tok/s with MTP"
+  # numbers did not reproduce here.
   - alias: assistant-gemma
     backend: lemonade
     model_id: Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M
@@ -182,7 +190,7 @@ models:
     recipe_options:
       ctx_size: 262144
       llamacpp_backend: vulkan
-      llamacpp_args: "-np 1 -kvu --spec-type draft-mtp --spec-draft-n-max 4"
+      llamacpp_args: "-np 1 -kvu"
     label: [tool-calling, mtp]
 
   # 35B MoE reasoning + agentic-coding model. Same migration as
@@ -223,9 +231,15 @@ models:
   #     --llamacpp vulkan --ctx-size 131072 \
   #     --llamacpp-args "-np 4 -kvu" --save-options
   # Vision wired 2026-07-12 (user-directed): mmproj-F16.gguf (0.9GB file,
-  # ~1.3GB extra at load). mmproj on llamacpp:vulkan is already exercised
-  # live by other registrations on this box; the not-yet-verified part is
-  # the embedded-MTP + mmproj combination on this exact model.
+  # ~1.3GB extra at load). Hardware-verified same day: text 1.0s /
+  # tool_calls 1.4s / vision 256px correct — MTP tensors + mmproj + -np 4
+  # coexist fine when speculative decoding is OFF.
+  # Embedded MTP tested and REJECTED 2026-07-12 (hardware-measured on this
+  # llamacpp:vulkan build): `-np 1 --spec-type draft-mtp` initialized
+  # cleanly and hit 99.2% draft acceptance (mean length 3.6) — but decoded
+  # at 5.4 tok/s vs 73.2 tok/s baseline (185ms/token; the Vulkan
+  # speculative loop's draft-eval overhead swamps the acceptance win).
+  # Keep -np 4, no spec flags; re-test on future llama.cpp builds only.
   - alias: ornith-35b
     backend: lemonade
     model_id: Ornith-1.0-35B-MTP-APEX-I-Balanced
