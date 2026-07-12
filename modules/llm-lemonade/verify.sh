@@ -25,12 +25,14 @@ curl -fsS "http://127.0.0.1:${port}/health" >/dev/null 2>&1 \
 # pulled — `aipc models sync` handles this; a missing pull here means every
 # request to the alias 404s until someone runs it.
 downloaded=$(podman exec lemonade /opt/lemonade/lemonade list --downloaded 2>/dev/null)
-printf '%s\n' "$downloaded" | grep -q "gemma4-it-e4b-FLM" \
-  || fail "llm-lemonade: gemma4-it-e4b-FLM not pulled — run 'aipc models sync'"
+printf '%s\n' "$downloaded" | grep -q "qwen3.5-4b-FLM" \
+  || fail "llm-lemonade: qwen3.5-4b-FLM not pulled — run 'aipc models sync'"
 printf '%s\n' "$downloaded" | grep -q "Gemma-4-26B-A4B-it-GGUF" \
   || fail "llm-lemonade: Gemma-4-26B-A4B-it-GGUF (coder-agentic) not pulled — run 'aipc models sync'"
-printf '%s\n' "$downloaded" | grep -q "Ornith-1.0-35B-GGUF-Q4_K_M" \
-  || fail "llm-lemonade: Ornith-1.0-35B-GGUF-Q4_K_M (ornith-35b) not pulled — run 'aipc models sync'"
+printf '%s\n' "$downloaded" | grep -q "Ornith-1.0-35B-MTP-APEX-I-Balanced" \
+  || fail "llm-lemonade: Ornith-1.0-35B-MTP-APEX-I-Balanced (ornith-35b) not pulled — run 'aipc models sync'"
+printf '%s\n' "$downloaded" | grep -q "Qwen3.5-122B-A10B-Uncensored-APEX-Compact" \
+  || fail "llm-lemonade: Qwen3.5-122B-A10B-Uncensored-APEX-Compact (coder-122b) not pulled — run 'aipc models sync'"
 
 # llamacpp:vulkan backend must be installed — hardware-verified 2026-07-05
 # to be the fastest backend on this hardware for coder-agentic/ornith-35b
@@ -69,6 +71,7 @@ sys.exit(0 if d.get('max_models', {}).get('llm', 0) >= 3 else 1)
   || [ -x /etc/aipc/llm-lemonade/ensure-resident-small.sh ] \
   || [ -x /var/lib/aipc-lemonade/ensure-resident-small.sh ] \
   || fail "llm-lemonade: ensure-resident-small.sh missing"
+
 [ -x /usr/lib/aipc/llm-lemonade/lemonade-idle-release.py ] \
   || [ -x /etc/aipc/llm-lemonade/lemonade-idle-release.py ] \
   || fail "llm-lemonade: lemonade-idle-release.py missing"
@@ -78,6 +81,7 @@ python3 "${idle_release}" --self-test >/dev/null \
   || fail "llm-lemonade: lemonade-idle-release.py self-test failed"
 systemctl is-enabled --quiet aipc-lemonade-idle-release.timer \
   || fail "llm-lemonade: aipc-lemonade-idle-release.timer not enabled"
+
 printf '%s' "$config_json" | grep -q '"enable_dgpu_gtt": *true' \
   || fail "llm-lemonade: config.json enable_dgpu_gtt != true — restart lemonade.service to reapply, or check jq is installed"
 
@@ -96,7 +100,7 @@ recipe_options=$(podman exec lemonade cat /root/.cache/lemonade/recipe_options.j
 printf '%s' "$recipe_options" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-for key in ('builtin.Gemma-4-26B-A4B-it-GGUF', 'user.Ornith-1.0-35B-GGUF-Q4_K_M'):
+for key in ('builtin.Gemma-4-26B-A4B-it-GGUF', 'user.Ornith-1.0-35B-MTP-APEX-I-Balanced'):
     args = d.get(key, {}).get('llamacpp_args', '')
     if '-np' not in args or '-kvu' not in args:
         sys.exit(1)

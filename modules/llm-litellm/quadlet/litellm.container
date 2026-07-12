@@ -11,8 +11,15 @@ Image=ghcr.io/berriai/litellm@sha256:afdc3cc37493d4f86d485ad7ac4445e7154c568a8d4
 ContainerName=litellm
 Network=host
 Volume=/etc/aipc/litellm/config.yaml:/app/config.yaml:ro,Z
+# 0012 memory scheduler: hook module + manifest it budgets against. litellm
+# imports "scheduler_hook.scheduler" relative to /app (its workdir).
+Volume=/etc/aipc/litellm/scheduler_hook.py:/app/scheduler_hook.py:ro,Z
+Volume=/etc/aipc/models/models.yaml:/app/models.yaml:ro,Z
 Exec=--config /app/config.yaml --host 127.0.0.1 --port 4000
 EnvironmentFile=/etc/aipc/env.d/llm-litellm/cloud-keys.env
+# Scheduler tunables (defaults live in scheduler_hook.py; override here).
+# Budget: GTT ceiling is 122GiB but desktop+services need headroom.
+Environment=AIPC_SCHED_BUDGET_GB=96
 
 [Service]
 Restart=always

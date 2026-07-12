@@ -8,31 +8,55 @@
 # phase-2-memory: mem0 and the RAG watchers need it behind the gateway
 # (see modules/rag-embedder).
 model_list:
-  # Small, always-on general-purpose assistant — see models.yaml for why
-  # gemma4:e4b (MoE, ~4B active) was picked over a dense alternative like
-  # llama3.1:8b. Runs on Lemonade's NPU/FLM backend (gemma4-it-e4b-FLM),
-  # not Ollama — hardware-verified 2026-07-04 end-to-end including
-  # persistence across a service restart, so an always-on model doesn't
-  # permanently compete with big interactive models for iGPU/GTT memory.
+  # Small, always-on general-purpose assistant — swapped 2026-07-12 (0008
+  # fleet refresh item 6) from gemma4-it-e4b-FLM to qwen3.5-4b-FLM, same
+  # resident NPU slot (replacement, not an added resident NPU model — see
+  # models.yaml for the CREATE_HWCTX -22 hardware evidence). model name
+  # below is derived, not yet hardware-confirmed — see models.yaml comment.
+  # enable_thinking: false is REQUIRED here (new for this alias):
+  # qwen3.5:4b is hybrid-thinking; without it, reasoning_content fills and
+  # content stays empty until max_tokens — same failure mode already fixed
+  # for assistant-gemma/coder-agentic. Runs on Lemonade's NPU/FLM backend,
+  # not Ollama — hardware-verified 2026-07-04 end-to-end (prior model)
+  # including persistence across a service restart, so an always-on model
+  # doesn't permanently compete with big interactive models for iGPU/GTT
+  # memory.
   - model_name: resident-small
     litellm_params:
-      model: openai/gemma4-it-e4b-FLM
+      model: openai/qwen3.5-4b-FLM
       api_base: http://127.0.0.1:8001/v1
       api_key: none
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
       # timeout/num_retries: see coder-agentic below for why local
       # (Lemonade-backed) models override the global router_settings.
       timeout: 1800
       num_retries: 0
+    model_info:
+      max_input_tokens: 262144
+      max_output_tokens: 4096
 
-  # Compact / Haiku-tier (2026-07-11): Unsloth Gemma-4-E2B-it QAT on Lemonade
-  # llamacpp:vulkan — faster long prefill than NPU FLM E4B (hardware-bench).
-  # On-demand only: not pinned; lemond loads on first request and may LRU-
-  # evict when max_loaded_models is full (competes with coder-agentic for
-  # iGPU). Train/serve window ~128k. Wire CCS
-  # ANTHROPIC_DEFAULT_HAIKU_MODEL=coder-compact (see modules/ccs README).
+  # Compact / Haiku-tier, swapped 2026-07-12 (0008 fleet refresh): Unsloth
+  # Qwen3.5-4B UD-Q4_K_XL on Lemonade llamacpp:vulkan, replacing the
+  # Gemma-4-E2B QAT quant — see models.yaml for the repo-id correction and
+  # Gated-DeltaNet long-prefill rationale. On-demand only: not pinned;
+  # lemond loads on first request and may LRU-evict when max_loaded_models
+  # is full (competes with coder-agentic for iGPU). Native context 262,144
+  # (up from the prior model's ~128k) — max_input_tokens below bumped to
+  # match. Wire CCS ANTHROPIC_DEFAULT_HAIKU_MODEL=coder-compact (see
+  # modules/ccs README).
+  #
+  # DEFERRED (user 2026-07-11, do not implement yet): "main model + live KV
+  # compact" — run compression as an append on the same llama-server slot
+  # that already holds the chat KV (same model as coder-agentic), so bulk
+  # history prefill is skipped; only the compact instruction is prefilled.
+  # Requires stateful session/slot compact in Hermes (or equivalent), not a
+  # separate aux model re-POST of full messages. Trade-off: occupies agent
+  # -np slots during compact. Current separate lane keeps isolation.
   - model_name: coder-compact
     litellm_params:
-      model: openai/Gemma4-E2B-it-qat-UD-Q4_K_XL
+      model: openai/Qwen3.5-4B-UD-Q4_K_XL
       api_base: http://127.0.0.1:8001/v1
       api_key: none
       extra_body:
@@ -41,7 +65,7 @@ model_list:
       timeout: 600
       num_retries: 0
     model_info:
-      max_input_tokens: 131072
+      max_input_tokens: 262144
       max_output_tokens: 4096
 
   # See models.yaml: 2026-07-09 trial — HauhauCS Qwen3.6-35B-A3B Aggressive
@@ -88,6 +112,11 @@ model_list:
   # HauhauCS Gemma4-26B-A4B QAT Balanced; same lemond :8001 + timeout policy.
   # enable_thinking false: otherwise Gemma hybrid thinking fills
   # reasoning_content and leaves message.content empty until max_tokens.
+  # Registered id unchanged by the 2026-07-12 MTP wiring (0008 fleet
+  # refresh) — same custom checkpoint name, re-pulled with a second `draft`
+  # checkpoint underneath (see models.yaml). Serving now single-stream
+  # (-np 1, was -np 4) while the draft checkpoint is attached — see
+  # models.yaml comment for the confirmed n_parallel=1 MTP constraint.
   - model_name: assistant-gemma
     litellm_params:
       model: openai/Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M
@@ -99,14 +128,26 @@ model_list:
       timeout: 1800
       num_retries: 0
 
-  # Ornith-1.0-35B (deepreinforce-ai/Ornith-1.0-35B-GGUF, Q4_K_M, 19.7GB) —
-  # 35B MoE reasoning + agentic-coding model. Moved from Ollama to Lemonade
-  # (llamacpp:vulkan) 2026-07-05, same reasoning as coder-agentic above.
+  # Ornith-1.0-35B — 35B MoE reasoning + agentic-coding model. Moved from
+  # Ollama to Lemonade (llamacpp:vulkan) 2026-07-05, same reasoning as
+  # coder-agentic above. Default swapped 2026-07-12 again (user-directed)
+  # to SC117's APEX-I-Balanced quant of the original deepreinforce-ai base
+  # (replacing the Heretic decensored quant — stock refusal behaviour is
+  # back). See models.yaml for the tier choice, the MTP -np caveat, the
+  # tool-call re-verification caveat and the idle_unload_after_s: 900
+  # policy.
   - model_name: ornith-35b
     litellm_params:
-      model: openai/Ornith-1.0-35B-GGUF-Q4_K_M
+      model: openai/Ornith-1.0-35B-MTP-APEX-I-Balanced
       api_base: http://127.0.0.1:8001/v1
       api_key: none
+      # Hardware-verified 2026-07-12 on this quant: default (thinking) mode
+      # fills reasoning_content and leaves content empty until max_tokens —
+      # same hybrid-thinking failure mode as assistant-gemma/coder-agentic.
+      # Reasoning consumers flip this per-request.
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
       # timeout/num_retries: see coder-agentic above for why local
       # (Lemonade-backed) models override the global router_settings.
       timeout: 1800
@@ -136,6 +177,28 @@ model_list:
       max_output_tokens: 4096
 
   # qwen35-122b-q3 retired 2026-07-11 (weights removed; see models.yaml).
+
+  # coder-122b (2026-07-12, 0012): SC117 Qwen3.5-122B-A10B APEX I-Compact
+  # (55.1 GiB + mmproj) — heavy coding model, tier: exclusive. Only viable
+  # because of the memory scheduler callback below (see litellm_settings):
+  # admission preempts the agent fleet before this load reaches lemond.
+  # Qwen3.5 hybrid thinking -> enable_thinking false for tool/coding
+  # consumers, same as coder-agentic.
+  - model_name: coder-122b
+    litellm_params:
+      model: openai/Qwen3.5-122B-A10B-Uncensored-APEX-Compact
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+      # timeout/num_retries: see coder-agentic — local Lemonade models
+      # override the global router_settings.
+      timeout: 1800
+      num_retries: 0
+    model_info:
+      max_input_tokens: 262144
+      max_output_tokens: 8192
 
   - model_name: main-cloud
     litellm_params:
@@ -197,11 +260,15 @@ model_list:
       num_retries: 0
 
 
-  # Screen UI / OCR — Qwen2.5-VL-7B (unsloth Q4_K_M + mmproj). Prefer this
-  # for "what's on screen" over heavy Gemma uncensored vision.
+  # Screen UI / OCR, swapped 2026-07-12 (0008 fleet refresh): Qwen3-VL-8B-
+  # Instruct (official Qwen GGUF, Q4_K_M + Q8_0 mmproj), replacing the
+  # Qwen2.5-VL-7B community re-quant — see models.yaml for the mmproj-
+  # quant-pairing note. Prefer this for "what's on screen" over heavy
+  # Gemma uncensored vision. Also newly added to models.yaml itself in this
+  # change (previously only registered here — see that file's comment).
   - model_name: vlm-screen
     litellm_params:
-      model: openai/Qwen2.5-VL-7B-Instruct-Q4_K_M
+      model: openai/Qwen3VL-8B-Instruct-Q4_K_M
       api_base: http://127.0.0.1:8001/v1
       api_key: none
       timeout: 600
@@ -233,3 +300,9 @@ litellm_settings:
   drop_params: true
   num_retries: 2
   request_timeout: 600
+  # 0012 memory scheduler: admission control for Lemonade GPU loads —
+  # budget/priority eviction + request holding happens BEFORE litellm
+  # forwards to lemond. File is mounted at /app/scheduler_hook.py by the
+  # quadlet (alongside /app/models.yaml); degrades open if lemonade health
+  # is unreachable. See openspec/changes/0012-memory-scheduler-coder-122b.
+  callbacks: ["scheduler_hook.scheduler"]

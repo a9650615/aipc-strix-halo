@@ -20,3 +20,13 @@ curl -fsS "${endpoint}/health" >/dev/null 2>&1 \
 # Model namespace is populated
 curl -fsS "${endpoint}/v1/models" | grep -q '"data"' \
   || fail "llm-litellm: /v1/models returned no models"
+
+# 0012 memory scheduler is wired: hook file present, self-test passes, and
+# the shipped config registers the callback. (Runtime effect — preemption /
+# hold — is hardware-verified per the 0012 change, not checkable here.)
+[ -f /etc/aipc/litellm/scheduler_hook.py ] \
+  || fail "llm-litellm: scheduler_hook.py missing from /etc/aipc/litellm"
+python3 /etc/aipc/litellm/scheduler_hook.py --self-test >/dev/null 2>&1 \
+  || fail "llm-litellm: scheduler_hook.py --self-test failed"
+grep -q 'scheduler_hook.scheduler' /etc/aipc/litellm/config.yaml \
+  || fail "llm-litellm: config.yaml does not register scheduler_hook callback"
