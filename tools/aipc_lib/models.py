@@ -37,6 +37,13 @@ class ModelEntry:
     # a big model uses the model-card ctx (262144 for coder-122b), exhausts
     # GTT and DeviceLost-crashes every GPU context on the box.
     recipe_options: dict[str, Any] = field(default_factory=dict)
+    # Provisioning override (0015). "hf_xet" => this model's repo is on HF Xet
+    # content-addressed storage with a stale LFS etag, so `lemonade pull`
+    # fetches content-wrong bytes and verify-loops forever; sync must fetch it
+    # with the hf_xet client instead. Requires `revision` (a pinned commit) so
+    # provisioning is deterministic. Empty => normal `lemonade pull`.
+    provision: str = ""
+    revision: str = ""
 
     @classmethod
     def from_dict(cls, raw: dict) -> "ModelEntry":
@@ -50,6 +57,8 @@ class ModelEntry:
             recipe=str(raw.get("recipe", "")),
             labels=[label] if isinstance(label, str) else [str(x) for x in label],
             recipe_options=dict(raw.get("recipe_options") or {}),
+            provision=str(raw.get("provision", "")),
+            revision=str(raw.get("revision", "")),
         )
 
     @property
@@ -103,6 +112,10 @@ def sync_check(entries: list[ModelEntry], models_root: Path) -> list[ModelEntry]
 
 def pull_command(entry: ModelEntry) -> list[str] | None:
     """argv to fetch this entry's weights, or None if there's nothing to pull."""
+    if entry.provision == "hf_xet":
+        # Fetched by xet_provision_commands (hf_xet client), never lemonade pull
+        # — pull would loop on the stale LFS etag (0015).
+        return None
     if entry.backend == "ollama":
         # Ollama runs as a root-owned system quadlet (modules/llm-ollama),
         # not a host binary — hardware-verified 2026-07-03 that a bare
@@ -178,6 +191,91 @@ def recipe_pin_command(entry: ModelEntry) -> list[str] | None:
     ]
 
 
+# Lemonade's HF cache (container /root/.cache/huggingface, host-mounted) and a
+# user-writable staging cache the hf_xet client (in the invoking user's
+# site-packages, not root's) can actually write to. Both live on the same
+# btrfs here, so the materialise step reflinks (CoW, ~free); cross-fs falls
+# back to a full copy via --reflink=auto.
+LEMONADE_HF_HUB = Path("/var/lib/aipc-models/hf/hub")
+XET_STAGING = Path.home() / ".cache" / "aipc-xet"
+
+# Replicate one hf-CLI-produced HF repo cache dir (blobs + snapshot symlinks +
+# refs) from staging into Lemonade's root-owned cache, reflinking blobs and
+# preserving the relative snapshot symlinks, then force refs/main to the pinned
+# commit and delete any Lemonade `.download_manifest.json`/`*.partial`. That
+# manifest is Lemonade's "download in progress" marker: while it exists,
+# ModelManager treats the model as not-downloaded and hands llama-server the
+# repo DIRECTORY instead of the .gguf ("No such file"). Idempotent: existing
+# blobs are left as-is, symlinks/refs are refreshed.
+_XET_MATERIALIZE_SNIPPET = r'''
+import os, subprocess, sys
+src, dst, commit = sys.argv[1], sys.argv[2], sys.argv[3]
+if not os.path.isdir(src):
+    sys.exit("xet materialise: staging repo missing: " + src)
+for base, _dirs, files in os.walk(src):
+    rel = os.path.relpath(base, src)
+    out = dst if rel == "." else os.path.join(dst, rel)
+    os.makedirs(out, exist_ok=True)
+    for name in files:
+        sp, dp = os.path.join(base, name), os.path.join(out, name)
+        if os.path.islink(sp):
+            if os.path.lexists(dp):
+                os.remove(dp)
+            os.symlink(os.readlink(sp), dp)
+        elif not os.path.exists(dp):
+            if subprocess.run(["cp", "--reflink=auto", sp, dp]).returncode != 0:
+                sys.exit("xet materialise: copy failed: " + sp)
+refs = os.path.join(dst, "refs")
+os.makedirs(refs, exist_ok=True)
+with open(os.path.join(refs, "main"), "w") as fh:
+    fh.write(commit)
+for base, _dirs, files in os.walk(dst):
+    for name in files:
+        if name == ".download_manifest.json" or name.endswith(".partial"):
+            os.remove(os.path.join(base, name))
+'''
+
+
+def _hf_repo_dirname(repo: str) -> str:
+    """HF cache dir name for an owner/repo id (models--owner--repo)."""
+    return "models--" + repo.replace("/", "--")
+
+
+def xet_provision_commands(
+    entry: ModelEntry,
+    staging: Path = XET_STAGING,
+    hub: Path = LEMONADE_HF_HUB,
+) -> list[list[str]] | None:
+    """Command sequence to provision a `provision: hf_xet` Lemonade model, or
+    None if the entry is not hf_xet. Per checkpoint: fetch REPO:FILE with the
+    hf_xet client (as the invoking user, HF_HOME in a user-writable staging
+    dir — never /tmp, which is tmpfs=RAM) at the pinned revision, then reflink
+    the completed cache layout into Lemonade's root-owned cache. Raises
+    ValueError on a malformed hf_xet entry (missing revision / bad checkpoint).
+    """
+    if entry.provision != "hf_xet":
+        return None
+    if entry.backend != "lemonade" or not entry.checkpoints:
+        raise ValueError(f"{entry.alias}: provision hf_xet needs a lemonade entry with checkpoints")
+    if not entry.revision:
+        raise ValueError(f"{entry.alias}: provision hf_xet requires a pinned 'revision'")
+    cmds: list[list[str]] = []
+    materialised: set[str] = set()
+    for ref in entry.checkpoints.values():
+        repo, sep, fname = ref.partition(":")
+        if not sep or not fname:
+            raise ValueError(f"{entry.alias}: checkpoint '{ref}' must be REPO:FILE")
+        cmds.append(["env", f"HF_HOME={staging}", "hf", "download", repo, fname,
+                     "--revision", entry.revision])
+        if repo not in materialised:
+            materialised.add(repo)
+            src = staging / "hub" / _hf_repo_dirname(repo)
+            dst = hub / _hf_repo_dirname(repo)
+            cmds.append(["sudo", "python3", "-c", _XET_MATERIALIZE_SNIPPET,
+                         str(src), str(dst), entry.revision])
+    return cmds
+
+
 def sync_pull(
     entries: list[ModelEntry],
     models_root: Path,
@@ -192,11 +290,18 @@ def sync_pull(
     """
     results: list[tuple[ModelEntry, bool]] = []
     for entry in sync_check(entries, models_root):
-        cmd = pull_command(entry)
-        if cmd is None:
-            continue
-        proc = runner(cmd, check=False)
-        success = proc.returncode == 0
+        if entry.provision == "hf_xet":
+            try:
+                fetch_cmds = xet_provision_commands(entry)
+            except ValueError:
+                results.append((entry, False))  # malformed manifest entry
+                continue
+            success = all(runner(c, check=False).returncode == 0 for c in fetch_cmds)
+        else:
+            cmd = pull_command(entry)
+            if cmd is None:
+                continue
+            success = runner(cmd, check=False).returncode == 0
         pin_cmd = recipe_pin_command(entry)
         if success and pin_cmd is not None:
             success = runner(pin_cmd, check=False).returncode == 0

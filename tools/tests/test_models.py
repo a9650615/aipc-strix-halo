@@ -385,3 +385,137 @@ def test_sync_pull_skips_already_present_entries(tmp_path: Path) -> None:
 
     results = models.sync_pull([entry], root, runner=runner_should_not_be_called)
     assert results == []
+
+
+# --- 0015: hf_xet provisioning ------------------------------------------------
+
+def _xet_entry() -> models.ModelEntry:
+    return models.ModelEntry.from_dict(
+        {
+            "alias": "coder-agentic",
+            "backend": "lemonade",
+            "model_id": "Qwen36-MTP",
+            "checkpoints": {"main": "SC117/Qwen36-MTP-GGUF:Qwen36-MTP-I-Balanced.gguf"},
+            "recipe": "llamacpp",
+            "recipe_options": {"ctx_size": 131072, "llamacpp_args": "-np 1 --no-warmup"},
+            "provision": "hf_xet",
+            "revision": "dc1e5523",
+        }
+    )
+
+
+def test_from_dict_parses_provision_and_revision() -> None:
+    e = _xet_entry()
+    assert e.provision == "hf_xet"
+    assert e.revision == "dc1e5523"
+    plain = models.ModelEntry.from_dict({"alias": "a", "backend": "lemonade", "model_id": "m"})
+    assert plain.provision == "" and plain.revision == ""
+
+
+def test_pull_command_none_for_xet_entry() -> None:
+    # hf_xet models are never lemonade-pulled (would loop on the stale etag).
+    assert models.pull_command(_xet_entry()) is None
+
+
+def test_xet_provision_commands_builds_download_and_materialise() -> None:
+    cmds = models.xet_provision_commands(
+        _xet_entry(), staging=Path("/stg"), hub=Path("/hub")
+    )
+    assert cmds == [
+        ["env", "HF_HOME=/stg", "hf", "download",
+         "SC117/Qwen36-MTP-GGUF", "Qwen36-MTP-I-Balanced.gguf", "--revision", "dc1e5523"],
+        ["sudo", "python3", "-c", models._XET_MATERIALIZE_SNIPPET,
+         "/stg/hub/models--SC117--Qwen36-MTP-GGUF",
+         "/hub/models--SC117--Qwen36-MTP-GGUF", "dc1e5523"],
+    ]
+
+
+def test_xet_provision_commands_none_for_non_xet() -> None:
+    plain = models.ModelEntry(alias="a", backend="lemonade", model_id="m",
+                              checkpoints={"main": "r/x:y.gguf"})
+    assert models.xet_provision_commands(plain) is None
+
+
+def test_xet_provision_commands_requires_revision() -> None:
+    e = _xet_entry()
+    e.revision = ""
+    with pytest.raises(ValueError, match="revision"):
+        models.xet_provision_commands(e)
+
+
+def test_xet_provision_commands_rejects_bad_checkpoint() -> None:
+    e = _xet_entry()
+    e.checkpoints = {"main": "no-colon-ref"}
+    with pytest.raises(ValueError, match="REPO:FILE"):
+        models.xet_provision_commands(e)
+
+
+def test_xet_provision_commands_dedupes_materialise_per_repo() -> None:
+    e = _xet_entry()
+    e.checkpoints = {
+        "main": "SC117/R:main.gguf",
+        "mmproj": "SC117/R:mmproj.gguf",  # same repo -> one materialise
+    }
+    cmds = models.xet_provision_commands(e, staging=Path("/stg"), hub=Path("/hub"))
+    downloads = [c for c in cmds if c[2] == "hf"]
+    materialises = [c for c in cmds if c[0] == "sudo"]
+    assert len(downloads) == 2 and len(materialises) == 1
+
+
+def test_sync_pull_xet_runs_fetch_then_pin_and_marks_present(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    entry = _xet_entry()
+    calls = []
+
+    def ok_runner(cmd, **kwargs):
+        calls.append(cmd)
+        return _FakeCompletedProcess(0)
+
+    results = models.sync_pull([entry], root, runner=ok_runner)
+    assert results == [(entry, True)]
+    # download, materialise, then recipe pin
+    assert calls[0][2] == "hf" and calls[1][0] == "sudo"
+    assert calls[-1][4] == "user.Qwen36-MTP"  # recipe pin last
+    assert models.on_disk_status(entry, root) == "present"
+
+
+def test_sync_pull_xet_fetch_failure_not_marked(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    entry = _xet_entry()
+
+    def dl_fails(cmd, **kwargs):
+        # the hf download fails; materialise/pin must not mark it present
+        return _FakeCompletedProcess(1 if cmd[2:3] == ["hf"] else 0)
+
+    results = models.sync_pull([entry], root, runner=dl_fails)
+    assert results == [(entry, False)]
+    assert models.on_disk_status(entry, root) == "missing"
+
+
+def test_xet_materialise_snippet_builds_completed_cache(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    commit = "dc1e5523"
+    etag = "782636cafeed"
+    # staging: hf-CLI-style repo cache (blob + snapshot symlink + a stray
+    # lemonade download manifest that must be purged).
+    src = tmp_path / "stg" / "hub" / "models--SC117--R"
+    (src / "blobs").mkdir(parents=True)
+    (src / "blobs" / etag).write_text("GGUF-bytes")
+    snap = src / "snapshots" / commit
+    snap.mkdir(parents=True)
+    (snap / "model.gguf").symlink_to(Path("../../blobs") / etag)
+    (snap / ".download_manifest.json").write_text("{}")
+
+    dst = tmp_path / "hub" / "models--SC117--R"
+    subprocess.run(
+        [sys.executable, "-c", models._XET_MATERIALIZE_SNIPPET, str(src), str(dst), commit],
+        check=True,
+    )
+
+    assert (dst / "blobs" / etag).read_text() == "GGUF-bytes"
+    link = dst / "snapshots" / commit / "model.gguf"
+    assert link.is_symlink() and link.resolve() == (dst / "blobs" / etag)
+    assert (dst / "refs" / "main").read_text() == commit
+    assert not (dst / "snapshots" / commit / ".download_manifest.json").exists()
