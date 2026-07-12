@@ -1,0 +1,25 @@
+[Unit]
+Description=Hermes WebUI (NousResearch hermes-agent web console)
+Documentation=https://github.com/nesquena/hermes-webui
+After=network-online.target
+Wants=network-online.target
+# Stay dormant until the home checkout + agent venv exist (first-boot setup
+# clones the checkout; hermes-agent is a user-home tool). No crash-loop.
+ConditionPathExists=%h/.hermes/hermes-webui/bootstrap.py
+ConditionPathExists=%h/.hermes/hermes-agent/venv/bin/python
+
+[Service]
+Type=simple
+Environment=HERMES_WEBUI_HOST=127.0.0.1
+Environment=HERMES_WEBUI_PORT=8788
+Environment=HERMES_WEBUI_AGENT_DIR=%h/.hermes/hermes-agent
+Environment=HERMES_WEBUI_PYTHON=%h/.hermes/hermes-agent/venv/bin/python
+WorkingDirectory=%h/.hermes/hermes-webui
+# bootstrap --foreground os.execv's the real server under HERMES_WEBUI_PYTHON
+# (the agent venv, which carries the in-process agent imports webui needs).
+ExecStart=%h/.hermes/hermes-agent/venv/bin/python bootstrap.py 8788 --host 127.0.0.1 --foreground
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Provision Hermes WebUI home checkout + linger (first boot / pin change)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/lib/aipc/hermes-webui/setup-hermes-webui.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/aipc/hermes-webui/setup-hermes-webui.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
