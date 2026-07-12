@@ -1,0 +1,11 @@
+id: hermes-webui
+title: Hermes WebUI
+module: agent-orchestrator
+kind: agent
+health: http://127.0.0.1:8788/health
+endpoint: http://127.0.0.1:8788
+ui: http://127.0.0.1:8788/
+tags:
+  - agent
+  - hermes
+  - webui
