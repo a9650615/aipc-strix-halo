@@ -15,14 +15,14 @@ Environment=AIPC_SKILL_LEARN=1
 Environment=AIPC_SKILL_LEARN_MODEL=ornith-35b
 Environment=AIPC_SKILL_LEARN_FALLBACK_MODEL=assistant-gemma
 Environment=AIPC_SKILL_LEARN_TIMEOUT=120
-Environment=AIPC_SELF_IMPROVE_MAX=15
+Environment=AIPC_SELF_IMPROVE_MAX=5
 Environment=AIPC_LITELLM_URL=http://127.0.0.1:4000
 # Nice/idle-ish: do not contend with voice critical path
 Nice=15
 IOSchedulingClass=idle
 Environment=PYTHONPATH=/var/lib/aipc-agent
 WorkingDirectory=/var/lib/aipc-agent
-ExecStart=/var/lib/aipc-agent/venv/bin/python -m aipc_agent self-improve --hours 72 --max 15
+ExecStart=/var/lib/aipc-agent/venv/bin/python -m aipc_agent self-improve --hours 72 --max 5
 # Allow long LLM extract batch
 TimeoutStartSec=1800
 

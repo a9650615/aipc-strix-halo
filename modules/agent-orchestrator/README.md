@@ -4,8 +4,8 @@ LangGraph supervisor (D1). Full design dispatches 4 sub-agents (D2):
 - Researcher (default: `coder-fast`)
 - Coder (default: `coder-strong`)
 - Browser (default: `vlm-qwen2vl`)
-- Daily Assistant (default: `intent-3b` per spec; `ornith-35b` in
-  practice, see below)
+- Daily Assistant (default: `intent-3b` per spec; `coder-agentic` in
+  practice — the single resident 35B after change 0011, see below)
 
 ## Closed loop (voice product)
 
@@ -60,6 +60,19 @@ depend on heavy Vulkan agent models. Override with env
   Drop-in: `zzz-skill-learn.conf`. Manual:
   `python -m aipc_agent self-improve --hours 72`.
   See OpenSpec `assistant-self-improvement`.
+- **Lane consolidation + self-improve gating (0011):** `coder-agentic` is
+  the single **resident** 35B (daily/tools, Hermes coding). `ornith-35b`
+  stays the skill-learn mentor and technical-advisor model but is now
+  **on-demand + idle-releasing** (`idle_unload_after_s` in `models.yaml`),
+  not a second resident 35B — it loads into the floating slot and frees it
+  when idle, so it no longer contends with `coder-agentic`/`assistant-gemma`
+  under Lemonade's 4-slot budget. `aipc-self-improve` no longer fires on
+  boot (`OnBootSec` dropped), defaults to `--max 5`, and preflights before
+  any model call: it exits early on battery, when Lemonade `/api/v1/health`
+  is unreachable, or when a model **outside** the resident set ∪
+  {`ornith-35b`} is loaded (floating slot in use by a VLM/compact — the
+  resident set, and the mentor it is about to use anyway, don't count as
+  busy).
 - **Grounding (anti-invent):** product-style codes (`ABC-123`) force
   Hermes/tools. Skill learn / Hermes ok require a **non-homepage URL**
   in trail or reply. Chat invents (fake cast/title + store root only)
@@ -96,15 +109,17 @@ Voice clients should pass a stable `session_id` (default
 Implemented (tasks 1.1, 2.1, 2.2, 2.6, 7.1–7.3):
 - `files/usr/lib/aipc-agent/aipc_agent/graphs.py`: `supervisor()` answers
   directly via LiteLLM. **Default model: `resident-small`** (closed loop;
-  was `ornith-35b` until 2026-07-10). Daily Assistant still uses
-  `ornith-35b` for tool-calling. Keyword route to Daily Assistant:
+  was `ornith-35b` until 2026-07-10). Daily Assistant uses `coder-agentic`
+  for tool-calling (the single resident 35B, change 0011; was `ornith-35b`).
+  Keyword route to Daily Assistant:
   `calendar`, `schedule`, `meeting`, `email`, `inbox`, `mail`, `file`,
   `read` — **not** remember/memory (those stay on supervisor + mem0).
   This is a simple keyword route, not the generic multi-agent router the
   full spec eventually wants — that waits until Researcher/Coder/Browser
   (2.3–2.5) exist too and a real decomposition step is worth the complexity.
 - `files/usr/lib/aipc-agent/aipc_agent/daily_assistant.py` (task 2.6): the
-  Daily Assistant sub-agent graph, model alias `ornith-35b`. Spec default
+  Daily Assistant sub-agent graph, model alias `coder-agentic` (0011; was
+  `ornith-35b`). Spec default
   `intent-3b` doesn't exist post-trim; the next candidate, `resident-small`
   (Lemonade's FastFlowLM NPU backend), was hardware-verified 2026-07-06 to
   reject any request carrying a `tools` list outright (`[json.exception

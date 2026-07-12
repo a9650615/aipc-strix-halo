@@ -6,8 +6,8 @@ Documentation=file:///var/home/birdyo/aipc-strix-halo/openspec/changes/assistant
 # Nightly + a few daytime idle passes
 OnCalendar=*-*-* 03:30:00
 OnCalendar=*-*-* 14:00:00
-# Also run ~15m after boot once stack is up
-OnBootSec=15min
+# No OnBootSec: a post-boot pass thrashed Lemonade on an idle machine (0011).
+# The preflight in self_improve.py additionally skips busy/battery windows.
 Persistent=true
 RandomizedDelaySec=10min
 Unit=aipc-self-improve.service

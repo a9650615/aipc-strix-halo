@@ -24,7 +24,102 @@ LEARN_STATE = Path(
         "/var/lib/aipc-agent/learning/self_improve_state.json",
     )
 )
-MAX_PER_RUN = int(os.environ.get("AIPC_SELF_IMPROVE_MAX", "15"))
+MAX_PER_RUN = int(os.environ.get("AIPC_SELF_IMPROVE_MAX", "5"))
+
+# Preflight gating (0011): never contend with the interactive stack or run on
+# battery. Lemonade health lives on the backend port (8001), not the LiteLLM
+# gateway. AC signal reuses power-guard's sysfs node.
+LEMONADE_URL = os.environ.get("AIPC_LEMONADE_URL", "http://127.0.0.1:8001").rstrip("/")
+AC_ONLINE_PATH = os.environ.get(
+    "AIPC_AC_ONLINE_PATH", "/sys/class/power_supply/AC0/online"
+)
+MODELS_MANIFEST = Path(
+    os.environ.get("AIPC_MODELS_MANIFEST", "/etc/aipc/models/models.yaml")
+)
+
+# Steady-state resident set (0011): loaded on any warmed-up machine, so their
+# presence is NOT contention — gating on them would mean self-improve never
+# runs after first use. ornith-35b also doesn't count as busy: it is the learn
+# mentor this job is about to use anyway. Only a foreign model in the floating
+# slot (VLM, compact, …) means the stack is really in use.
+RESIDENT_ALIASES = frozenset(
+    {"resident-small", "qwythos-9b", "assistant-gemma", "coder-agentic"}
+)
+IDLE_OK_ALIASES = RESIDENT_ALIASES | {"ornith-35b"}
+
+
+def _idle_ok_names() -> frozenset[str]:
+    """Aliases + their lemonade model_ids: health reports registered model
+    ids (models.yaml `model_id`), not aliases — same mapping
+    lemonade-idle-release.py uses. Manifest miss → aliases only (foreign
+    ids then read as busy: fail-closed, like unreachable health)."""
+    names = set(IDLE_OK_ALIASES)
+    try:
+        import yaml
+
+        data = yaml.safe_load(MODELS_MANIFEST.read_text(encoding="utf-8"))
+        for entry in (data.get("models") or []) if isinstance(data, dict) else []:
+            if (
+                isinstance(entry, dict)
+                and entry.get("alias") in IDLE_OK_ALIASES
+                and entry.get("model_id")
+            ):
+                names.add(str(entry["model_id"]))
+    except Exception:  # noqa: BLE001
+        pass
+    return frozenset(names)
+
+
+def _on_ac_power() -> bool:
+    """True when on wall power (power-guard's AC0/online == 1 signal).
+
+    Read miss → assume AC: an unreadable sysfs node must not silently block the
+    nightly pass forever.
+    """
+    try:
+        return Path(AC_ONLINE_PATH).read_text(encoding="utf-8").strip() == "1"
+    except OSError:
+        return True
+
+
+def _foreign_model_loaded() -> str | bool | None:
+    """Query Lemonade health (v1 — hardware-confirmed 2026-07-12 to carry
+    `all_models_loaded`) for a loaded model outside the resident set ∪
+    {ornith-35b}. Returns the foreign model name if one is loaded, False if
+    only known-idle models / none, None if health is unreachable/unparseable.
+    """
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{LEMONADE_URL}/api/v1/health", timeout=5) as resp:
+            data = json.load(resp)
+    except Exception:  # noqa: BLE001 — any failure = cannot confirm idle
+        return None
+    if not isinstance(data, dict):
+        return None
+    models = data.get("all_models_loaded")
+    if not isinstance(models, list):
+        return None
+    ok = _idle_ok_names()
+    for entry in models:
+        if not isinstance(entry, dict) or not entry.get("loaded"):
+            continue
+        name = entry.get("model_name") or entry.get("name") or ""
+        if name not in ok:
+            return str(name) or True
+    return False
+
+
+def preflight_reason() -> str | None:
+    """Return a skip reason if self-improve must not run now, else None."""
+    if not _on_ac_power():
+        return "on battery"
+    busy = _foreign_model_loaded()
+    if busy is None:
+        return "Lemonade health unreachable (cannot confirm idle)"
+    if busy:
+        return f"floating slot in use (loaded: {busy})"
+    return None
 
 
 def _load_state() -> dict[str, Any]:
@@ -154,6 +249,10 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"stats unavailable: {exc}")
         print(f"skills={len(skill_store.list_skills())}")
+        return 0
+    skip = preflight_reason()
+    if skip:
+        print(f"aipc-self-improve: preflight skip — {skip}", flush=True)
         return 0
     n = run_episode_backfill(max_items=args.max, hours=args.hours)
     return 0 if n >= 0 else 1
