@@ -1,6 +1,6 @@
 id: hermes-webui
 title: Hermes WebUI
-module: agent-orchestrator
+module: dev-ai-hermes-webui
 kind: agent
 health: http://127.0.0.1:8788/health
 endpoint: http://127.0.0.1:8788

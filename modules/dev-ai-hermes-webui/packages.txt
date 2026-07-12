@@ -1,0 +1,4 @@
+# git: first-boot setup clones the hermes-webui checkout into the user's home.
+# python3 + the Hermes agent venv (python 3.11, with pyyaml/cryptography) are
+# provided by the user-home hermes-agent install — not this module.
+git
