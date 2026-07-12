@@ -224,6 +224,84 @@ def test_pull_command_lemonade_multi_checkpoint_and_labels() -> None:
     assert cmd.count("--label") == 2
 
 
+def test_recipe_pin_command_for_custom_model() -> None:
+    entry = models.ModelEntry.from_dict(
+        {
+            "alias": "coder-122b",
+            "backend": "lemonade",
+            "model_id": "Q122",
+            "checkpoints": {"main": "SC117/x:y.gguf"},
+            "recipe_options": {"ctx_size": 131072, "llamacpp_backend": "vulkan",
+                               "llamacpp_args": "-np 1 -kvu --no-warmup"},
+        }
+    )
+    cmd = models.recipe_pin_command(entry)
+    assert cmd is not None
+    assert cmd[:3] == ["sudo", "python3", "-c"]
+    assert cmd[4] == "user.Q122"
+    assert "--no-warmup" in cmd[5]
+    assert cmd[6] == models.RECIPE_OPTIONS_PATH
+
+
+def test_recipe_pin_command_none_without_options_or_checkpoints() -> None:
+    plain = models.ModelEntry(alias="a", backend="lemonade", model_id="m")
+    assert models.recipe_pin_command(plain) is None
+    no_ckpt = models.ModelEntry(alias="a", backend="lemonade", model_id="m",
+                                recipe_options={"ctx_size": 1})
+    assert models.recipe_pin_command(no_ckpt) is None
+
+
+def test_recipe_pin_snippet_merges_json(tmp_path: Path) -> None:
+    import json
+    import subprocess
+    import sys
+
+    p = tmp_path / "recipe_options.json"
+    p.write_text(json.dumps({"user.OLD": {"ctx_size": 1}}))
+    subprocess.run(
+        [sys.executable, "-c", models._RECIPE_PIN_SNIPPET,
+         "user.Q122", json.dumps({"ctx_size": 131072}), str(p)],
+        check=True,
+    )
+    d = json.loads(p.read_text())
+    assert d["user.OLD"] == {"ctx_size": 1}
+    assert d["user.Q122"] == {"ctx_size": 131072}
+
+
+def test_sync_pull_pins_recipe_and_requires_pin_success(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    entry = models.ModelEntry.from_dict(
+        {
+            "alias": "coder-122b",
+            "backend": "lemonade",
+            "model_id": "Q122",
+            "size_gb": 59.2,
+            "checkpoints": {"main": "SC117/x:y.gguf"},
+            "recipe_options": {"ctx_size": 131072},
+        }
+    )
+    calls = []
+
+    def ok_runner(cmd, **kwargs):
+        calls.append(cmd)
+        return _FakeCompletedProcess(0)
+
+    results = models.sync_pull([entry], root, runner=ok_runner)
+    assert results == [(entry, True)]
+    assert len(calls) == 2 and calls[1][4] == "user.Q122"  # pull, then pin
+    assert models.on_disk_status(entry, root) == "present"
+
+    # pin failure -> entry FAILED, no marker, retried next sync
+    root2 = tmp_path / "models2"
+
+    def pin_fails(cmd, **kwargs):
+        return _FakeCompletedProcess(1 if cmd[0] == "sudo" and cmd[1] == "python3" else 0)
+
+    results = models.sync_pull([entry], root2, runner=pin_fails)
+    assert results == [(entry, False)]
+    assert models.on_disk_status(entry, root2) == "missing"
+
+
 def test_from_dict_label_string_normalizes_to_list() -> None:
     entry = models.ModelEntry.from_dict(
         {"alias": "a", "backend": "lemonade", "model_id": "m", "label": "tool-calling"}

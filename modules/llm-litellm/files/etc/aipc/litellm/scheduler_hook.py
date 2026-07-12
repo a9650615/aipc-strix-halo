@@ -25,6 +25,24 @@ BUDGET_GB = float(os.environ.get("AIPC_SCHED_BUDGET_GB", "96"))
 COOLDOWN_S = float(os.environ.get("AIPC_SCHED_COOLDOWN_S", "120"))
 HOLD_TIMEOUT_S = float(os.environ.get("AIPC_SCHED_HOLD_TIMEOUT_S", "900"))
 POLL_S = float(os.environ.get("AIPC_SCHED_POLL_S", "2"))
+# Real-memory gate (hardware incident 2026-07-12 18:32: the static ledger
+# admitted a floating load while the desktop's non-model working set had
+# grown past what the ledger assumed — kernel OOM killed plasmashell/zen/
+# hermes-webui). The ledger only counts model weights; this gate checks the
+# host's actual MemAvailable so admission tracks reality: idle desktop =>
+# more room, browser-heavy desktop => scheduler evicts or holds sooner.
+HEADROOM_GB = float(os.environ.get("AIPC_SCHED_HEADROOM_GB", "10"))
+
+
+def mem_available_gb(meminfo_path: str = "/proc/meminfo") -> float | None:
+    """Host MemAvailable in GB (podman shares host /proc/meminfo), or None."""
+    try:
+        for line in open(meminfo_path):
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1024 / 1024
+    except OSError:
+        pass
+    return None
 
 TIER_FLOATING = "floating"
 TIER_RESIDENT = "resident"
@@ -118,7 +136,8 @@ class _SchedulerCore:
 
     def __init__(self, fetch_health, post_unload, budget_gb=BUDGET_GB,
                  cooldown_s=COOLDOWN_S, hold_timeout_s=HOLD_TIMEOUT_S,
-                 poll_s=POLL_S, clock=time.monotonic, sleeper=asyncio.sleep):
+                 poll_s=POLL_S, clock=time.monotonic, sleeper=asyncio.sleep,
+                 headroom_gb=HEADROOM_GB, mem_available=mem_available_gb):
         self.fetch_health = fetch_health
         self.post_unload = post_unload
         self.budget_gb = budget_gb
@@ -127,8 +146,19 @@ class _SchedulerCore:
         self.poll_s = poll_s
         self.clock = clock
         self.sleeper = sleeper
+        self.headroom_gb = headroom_gb
+        self.mem_available = mem_available
         self.lock = asyncio.Lock()
         self.admitted_at: dict[str, float] = {}
+
+    def _fits(self, loaded: list[dict], target: dict) -> bool:
+        if free_gb(loaded, self.budget_gb) < target["size_gb"]:
+            return False
+        avail = self.mem_available()
+        # None => can't read meminfo, degrade to ledger-only (never block on
+        # a broken probe). Weights are mmap'd so an unload returns its pages
+        # to MemAvailable before the next loop iteration re-checks.
+        return avail is None or avail >= target["size_gb"] + self.headroom_gb
 
     async def admit(self, alias: str, manifest: dict[str, dict]) -> None:
         """Return when `alias` may be forwarded; raise TimeoutError on hold expiry."""
@@ -150,7 +180,7 @@ class _SchedulerCore:
                 loaded = gpu_loaded(health, manifest)
                 if any(m["model_id"] == target["model_id"] for m in loaded):
                     break
-                if free_gb(loaded, self.budget_gb) >= target["size_gb"]:
+                if self._fits(loaded, target):
                     break
                 victim = pick_victim(loaded, target, self.admitted_at,
                                      self.clock(), self.cooldown_s)
@@ -161,7 +191,8 @@ class _SchedulerCore:
                 if self.clock() > deadline:
                     raise TimeoutError(
                         f"memory scheduler: cannot fit {alias} "
-                        f"({target['size_gb']}GB) within {self.budget_gb}GB budget"
+                        f"({target['size_gb']}GB) within {self.budget_gb}GB budget "
+                        f"/ {self.headroom_gb}GB real-memory headroom"
                     )
             self.admitted_at[target["model_id"]] = self.clock()
 
@@ -284,7 +315,8 @@ def self_test() -> None:
             state["loaded"].remove(model_id)
 
         core = _SchedulerCore(fake_health, fake_unload, budget_gb=96,
-                              hold_timeout_s=10, poll_s=0)
+                              hold_timeout_s=10, poll_s=0,
+                              mem_available=lambda: 999.0)
         await core.admit("coder-122b", manifest)
         # 69.2 loaded -> free 26.8; evict ORN -> 43.4 free? (96-43.2=52.8)
         # keep evicting oldest until >= 59.2 free: ORN, Q36 -> free 74.6.
@@ -299,7 +331,8 @@ def self_test() -> None:
         async def unload2(model_id):
             state2["unloads"].append(model_id)
 
-        core2 = _SchedulerCore(health2, unload2, budget_gb=96)
+        core2 = _SchedulerCore(health2, unload2, budget_gb=96,
+                               mem_available=lambda: 999.0)
         await core2.admit("coder-122b", manifest)
         assert state2["unloads"] == []
 
@@ -319,7 +352,8 @@ def self_test() -> None:
 
         core3 = _SchedulerCore(health3, unload3, budget_gb=96,
                                hold_timeout_s=20, poll_s=0,
-                               clock=lambda: clock["t"], sleeper=instant_sleep)
+                               clock=lambda: clock["t"], sleeper=instant_sleep,
+                               mem_available=lambda: 999.0)
         # ponytail: manifest lacks a model that fits leftover budget here, so
         # assert the hold/timeout path with everything busy instead.
         try:
@@ -339,6 +373,54 @@ def self_test() -> None:
 
         # Unknown alias (cloud) passes through.
         await core2.admit("main-cloud", manifest)
+
+        # Real-memory gate: ledger says fine (26+15.8 << 96) but the host
+        # has only 12GB available -> evict the floating model anyway, and
+        # admit once MemAvailable recovers (the 18:32 OOM scenario).
+        state5 = {"loaded": ["ORN"], "unloads": []}
+
+        async def health5():
+            return health_for(state5["loaded"])
+
+        async def unload5(model_id):
+            state5["unloads"].append(model_id)
+            state5["loaded"].remove(model_id)
+
+        def avail5():
+            return 12.0 if "ORN" in state5["loaded"] else 40.0
+
+        core5 = _SchedulerCore(health5, unload5, budget_gb=96,
+                               hold_timeout_s=10, poll_s=0,
+                               mem_available=avail5)
+        await core5.admit("assistant-gemma", manifest)
+        assert state5["unloads"] == ["ORN"], state5["unloads"]
+
+        # Real-memory gate with nothing evictable -> hold then timeout.
+        state6 = {"loaded": [], "unloads": []}
+
+        async def health6():
+            return health_for(state6["loaded"])
+
+        clock6 = {"t": 0.0}
+
+        async def sleep6(_s):
+            clock6["t"] += 5.0
+
+        core6 = _SchedulerCore(health6, unload3, budget_gb=96,
+                               hold_timeout_s=20, poll_s=0,
+                               clock=lambda: clock6["t"], sleeper=sleep6,
+                               mem_available=lambda: 8.0)
+        try:
+            await core6.admit("qwythos-9b", manifest)
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("expected real-memory hold timeout")
+
+        # Broken meminfo probe degrades to ledger-only.
+        core7 = _SchedulerCore(health6, unload3, budget_gb=96,
+                               mem_available=lambda: None)
+        await core7.admit("qwythos-9b", manifest)
 
     asyncio.run(run_async_cases())
     print("scheduler_hook self-test passed")

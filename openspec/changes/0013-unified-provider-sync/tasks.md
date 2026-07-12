@@ -3,6 +3,12 @@
 - [x] 0.1 models.py: stale-marker detection (marker file records model_id),
       `checkpoints/recipe/label` manifest fields drive custom Lemonade
       registration pulls; cli list/sync surface "stale"; 26 unit tests.
+- [x] 0.2 models.py: `recipe_options:` manifest field pinned into lemonade's
+      recipe_options.json by sync (pull → pin → marker; failed pin = FAILED,
+      retried next sync); all 7 custom llamacpp entries populated from
+      their load-command comments; 30 unit tests total. Live ornith/122b
+      entries patched to match (pins themselves already hardware-verified
+      in 0012).
 - [x] 1.1 hermes_sync.py: LiteLLM-driven rewrite of custom_providers models
       (atomic write + .bak), unit tests (entry found/missing, override
       preserved, comment-free round-trip).

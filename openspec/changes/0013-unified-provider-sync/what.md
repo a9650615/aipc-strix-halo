@@ -12,6 +12,13 @@ could not pull custom Lemonade registrations at all (the `user.`-prefixed
 - models.yaml entries gain `checkpoints:` (slot → HF `repo:file`/`repo:QUANT`
   ref), `recipe:`, `label:` — `aipc models sync` builds the full custom
   registration pull from them.
+- models.yaml entries gain `recipe_options:` (ctx_size / llamacpp_args /
+  llamacpp_backend) — sync pins them into lemonade's `recipe_options.json`
+  after the pull and before any load; the sync marker requires the pin to
+  succeed. Motivation is a hardware incident, not tidiness: an unpinned
+  first load uses the model-card ctx, and for `coder-122b` (ctx 262144)
+  that exhausted GTT and DeviceLost-crashed every GPU context on the box
+  (2026-07-12, see 0012).
 
 - New `aipc providers sync`: runs every consumer sync (OpenCode, CCS, Hermes)
   against LiteLLM `/v1/models`, reporting per-consumer results; consumers

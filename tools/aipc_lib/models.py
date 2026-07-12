@@ -31,6 +31,12 @@ class ModelEntry:
     checkpoints: dict[str, str] = field(default_factory=dict)
     recipe: str = ""
     labels: list[str] = field(default_factory=list)
+    # Saved llama-server load options (ctx_size, llamacpp_args, ...). Written
+    # into lemonade's recipe_options.json by sync AFTER the pull and BEFORE
+    # any load — hardware-verified 2026-07-12 that an unpinned first load of
+    # a big model uses the model-card ctx (262144 for coder-122b), exhausts
+    # GTT and DeviceLost-crashes every GPU context on the box.
+    recipe_options: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, raw: dict) -> "ModelEntry":
@@ -43,6 +49,7 @@ class ModelEntry:
             checkpoints=dict(raw.get("checkpoints") or {}),
             recipe=str(raw.get("recipe", "")),
             labels=[label] if isinstance(label, str) else [str(x) for x in label],
+            recipe_options=dict(raw.get("recipe_options") or {}),
         )
 
     @property
@@ -131,6 +138,46 @@ def pull_command(entry: ModelEntry) -> list[str] | None:
     return None
 
 
+# Host-side path of lemonade's saved per-model load options (the container
+# volume /root/.cache/lemonade — see modules/llm-lemonade quadlet).
+RECIPE_OPTIONS_PATH = "/var/lib/aipc-lemonade/cache/recipe_options.json"
+
+_RECIPE_PIN_SNIPPET = """\
+import json, sys
+key, patch, path = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3]
+try:
+    d = json.load(open(path))
+except FileNotFoundError:
+    d = {}
+d[key] = patch
+json.dump(d, open(path, "w"), indent=2)
+"""
+
+
+def recipe_pin_command(entry: ModelEntry) -> list[str] | None:
+    """argv that pins this entry's recipe_options into lemonade's saved
+    options file, or None if there is nothing to pin.
+
+    ponytail: only custom (checkpoints-registered, user.-prefixed) lemonade
+    models supported — builtin-catalog keys use a different prefix; add it
+    when a builtin model first needs pinning. Pins are read by lemond at
+    load time; restart lemonade if a load already ran unpinned.
+    """
+    if entry.backend != "lemonade" or not entry.recipe_options or not entry.checkpoints:
+        return None
+    import json
+
+    return [
+        "sudo",
+        "python3",
+        "-c",
+        _RECIPE_PIN_SNIPPET,
+        f"user.{entry.model_id}",
+        json.dumps(entry.recipe_options),
+        RECIPE_OPTIONS_PATH,
+    ]
+
+
 def sync_pull(
     entries: list[ModelEntry],
     models_root: Path,
@@ -139,7 +186,9 @@ def sync_pull(
     """Pull every missing or stale local-backend model. Returns (entry, success) pairs.
 
     Cloud-backend entries and already-present entries are skipped entirely —
-    the runner is never invoked for them.
+    the runner is never invoked for them. Entries carrying recipe_options
+    are pinned after the pull; the marker (and success) requires BOTH, so a
+    failed pin is retried on the next sync instead of silently lost.
     """
     results: list[tuple[ModelEntry, bool]] = []
     for entry in sync_check(entries, models_root):
@@ -148,6 +197,9 @@ def sync_pull(
             continue
         proc = runner(cmd, check=False)
         success = proc.returncode == 0
+        pin_cmd = recipe_pin_command(entry)
+        if success and pin_cmd is not None:
+            success = runner(pin_cmd, check=False).returncode == 0
         if success:
             entry.weights_path(models_root).mkdir(parents=True, exist_ok=True)
             entry.marker_path(models_root).write_text(entry.model_id + "\n")

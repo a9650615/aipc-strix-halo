@@ -41,3 +41,10 @@ declare `checkpoints`/`recipe`/`label`, from which sync SHALL build the
 - **WHEN** a lemonade entry declares `checkpoints:`
 - **THEN** sync issues `lemonade pull user.<model_id> --checkpoint <slot>
   <ref> ... --recipe <recipe>` instead of a bare catalog pull
+
+#### Scenario: Load options are pinned before any first load
+
+- **WHEN** a lemonade entry declares `recipe_options:` and sync pulls it
+- **THEN** the options are written into lemonade's recipe_options.json
+  before the sync marker is recorded, so no consumer request can trigger a
+  first load at the model-card default context

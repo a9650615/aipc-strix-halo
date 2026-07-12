@@ -24,6 +24,12 @@ EnvironmentFile=/etc/aipc/env.d/llm-litellm/cloud-keys.env
 # scheduler to evict down to the 122B + small residents during coding
 # sessions (user directive: never OOM; swap acceptable).
 Environment=AIPC_SCHED_BUDGET_GB=80
+# Real-memory gate headroom (see scheduler_hook.py): admission additionally
+# requires host MemAvailable >= model size + this, because the static
+# budget cannot see the desktop's actual (spiky) working set — the
+# 2026-07-12 18:32 kernel OOM (plasmashell/zen/hermes-webui killed) was a
+# ledger-admitted load on a browser-heavy desktop.
+Environment=AIPC_SCHED_HEADROOM_GB=10
 
 [Service]
 Restart=always

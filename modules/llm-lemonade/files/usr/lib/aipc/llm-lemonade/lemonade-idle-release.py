@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Callable
 
 import yaml
 
@@ -20,6 +21,19 @@ DEFAULT_UNLOAD_PATH = "/api/v0/unload"
 DEFAULT_LOAD_PATH = "/api/v0/load"
 # Same budget the 0012 gateway scheduler uses — re-warm must never evict.
 BUDGET_GB = float(os.environ.get("AIPC_SCHED_BUDGET_GB", "96"))
+# Real-memory headroom, same rationale as scheduler_hook.py (2026-07-12
+# 18:32 OOM: ledger-only admission ignored the desktop's actual usage).
+HEADROOM_GB = float(os.environ.get("AIPC_SCHED_HEADROOM_GB", "10"))
+
+
+def _mem_available_gb() -> float | None:
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1024 / 1024
+    except OSError:
+        pass
+    return None
 
 
 def _load_manifest(path: Path) -> list[dict]:
@@ -128,12 +142,20 @@ def _load_model(base_url: str, model_id: str) -> None:
         resp.read()
 
 
-def _rewarm_candidate(manifest: list[dict], health: dict, budget_gb: float = BUDGET_GB) -> dict | None:
+def _rewarm_candidate(
+    manifest: list[dict],
+    health: dict,
+    budget_gb: float = BUDGET_GB,
+    mem_available: Callable[[], float | None] = _mem_available_gb,
+    headroom_gb: float = HEADROOM_GB,
+) -> dict | None:
     """One resident-tier model to reload, or None (0012 resident restore).
 
     Only when no exclusive-tier model is loaded, and only if the candidate
-    fits the remaining budget without evicting anything — smallest first so
-    the set converges over successive cycles.
+    fits the remaining budget AND the host's real MemAvailable (plus
+    headroom) without evicting anything — smallest first so the set
+    converges over successive cycles. Re-warm is a nicety; it must never be
+    the allocation that OOMs the desktop.
     """
     loaded = _loaded_models(health)
     by_model_id = {spec["model_id"]: spec for spec in manifest}
@@ -155,9 +177,13 @@ def _rewarm_candidate(manifest: list[dict], health: dict, budget_gb: float = BUD
         ),
         key=lambda spec: spec["size_gb"],
     )
+    avail = mem_available()
     for spec in missing:
-        if used + spec["size_gb"] <= budget_gb:
-            return spec
+        if used + spec["size_gb"] > budget_gb:
+            continue
+        if avail is not None and avail < spec["size_gb"] + headroom_gb:
+            continue
+        return spec
     return None
 
 
@@ -240,18 +266,28 @@ def self_test() -> None:
         {"alias": "qwythos-9b", "model_id": "QW9", "idle_unload_after_s": None,
          "tier": "resident", "size_gb": 5.6},
     ]
+    plenty = lambda: 999.0  # noqa: E731
     empty = {"all_models_loaded": []}
-    assert _rewarm_candidate(sched_manifest, empty, budget_gb=96)["alias"] == "qwythos-9b"
+    assert _rewarm_candidate(sched_manifest, empty, budget_gb=96,
+                             mem_available=plenty)["alias"] == "qwythos-9b"
     # ...never while an exclusive model is loaded...
     excl = {"all_models_loaded": [{"model_name": "Q122", "loaded": True}]}
-    assert _rewarm_candidate(sched_manifest, excl, budget_gb=96) is None
-    # ...and never beyond the budget (no eviction from the re-warm path).
-    assert _rewarm_candidate(sched_manifest, empty, budget_gb=5) is None
+    assert _rewarm_candidate(sched_manifest, excl, budget_gb=96,
+                             mem_available=plenty) is None
+    # ...never beyond the budget (no eviction from the re-warm path)...
+    assert _rewarm_candidate(sched_manifest, empty, budget_gb=5,
+                             mem_available=plenty) is None
+    # ...and never past the host's real MemAvailable + headroom.
+    assert _rewarm_candidate(sched_manifest, empty, budget_gb=96,
+                             mem_available=lambda: 12.0) is None
+    assert _rewarm_candidate(sched_manifest, empty, budget_gb=96,
+                             mem_available=lambda: None)["alias"] == "qwythos-9b"
     # Fully warm set -> nothing to do.
     warm = {"all_models_loaded": [
         {"model_name": "Q36", "loaded": True}, {"model_name": "QW9", "loaded": True},
     ]}
-    assert _rewarm_candidate(sched_manifest, warm, budget_gb=96) is None
+    assert _rewarm_candidate(sched_manifest, warm, budget_gb=96,
+                             mem_available=plenty) is None
     print("self-test passed")
 
 
