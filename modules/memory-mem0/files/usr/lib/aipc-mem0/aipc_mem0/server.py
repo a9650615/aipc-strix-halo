@@ -127,8 +127,17 @@ def add_memory(req: AddRequest) -> dict:
 
 @app.post("/search")
 def search_memories(req: SearchRequest) -> dict:
-    result = _get_memory().search(req.query, top_k=req.limit, filters=_scope_filter(req))
-    return {"results": result.get("results", result) if isinstance(result, dict) else result}
+    # Memory.search() refuses filters without one of user_id/agent_id/run_id
+    # (same restriction _scope_filter's docstring notes) -- but a free-text
+    # search across everything is the common case for a management UI, and
+    # PGVector.search()/keyword_search() both tolerate empty filters (no WHERE
+    # clause, verified via source). Call the internal search directly, same
+    # bypass as list_memories uses for _get_all_from_vector_store.
+    results = _get_memory()._search_vector_store(req.query, _scope_filter(req) or {}, req.limit)
+    return {"results": results}
+
+
+_LIST_FETCH_CAP = 10000
 
 
 @app.get("/memories")
@@ -150,8 +159,24 @@ def list_memories(
         for k, v in (("user_id", user_id), ("agent_id", agent_id), ("run_id", run_id), ("app_id", app_id))
         if v
     }
-    results = _get_memory()._get_all_from_vector_store(scope, limit, False, limit)
-    return {"results": results}
+    # PGVector.list() has no ORDER BY (confirmed via mem0ai source) -- a bare
+    # LIMIT returns rows in arbitrary/insertion order, so once the table grows
+    # past `limit` the newest rows silently stop showing up. Over-fetch and
+    # sort by created_at ourselves so callers actually get the most recent N.
+    results = _get_memory()._get_all_from_vector_store(scope, _LIST_FETCH_CAP, False, _LIST_FETCH_CAP)
+    results.sort(key=lambda m: m.get("created_at") or "", reverse=True)
+    return {"results": results[:limit]}
+
+
+@app.get("/memories/facets")
+def memory_facets() -> dict:
+    """Distinct scope values currently in the store, for UI filter dropdowns."""
+    results = _get_memory()._get_all_from_vector_store({}, _LIST_FETCH_CAP, False, _LIST_FETCH_CAP)
+    return {
+        "user_id": sorted({r["user_id"] for r in results if r.get("user_id")}),
+        "agent_id": sorted({r["agent_id"] for r in results if r.get("agent_id")}),
+        "app_id": sorted({(r.get("metadata") or {})["app_id"] for r in results if (r.get("metadata") or {}).get("app_id")}),
+    }
 
 
 @app.delete("/memories/{memory_id}")

@@ -5,9 +5,9 @@ import App from "../layouts/App.astro";
   <section class="hero"><p class="eyebrow">MEM0 · LONG-TERM MEMORY</p><h1>Memory</h1><p id="summary">Loading memories…</p></section>
   <section class="controls" aria-label="Memory filters">
     <input id="query" placeholder="Semantic search…" />
-    <input id="user" placeholder="user_id" />
-    <input id="agent" placeholder="agent_id" />
-    <input id="app" placeholder="app_id" />
+    <select id="user"><option value="">user_id (all)</option></select>
+    <select id="agent"><option value="">agent_id (all)</option></select>
+    <select id="app"><option value="">app_id (all)</option></select>
     <button id="search">Search</button>
     <button id="list">List all</button>
   </section>
@@ -61,9 +61,19 @@ import App from "../layouts/App.astro";
         renderRows(data.results || []);
       } catch { summary.textContent = "Memory service unavailable"; }
     }
+    async function loadFacets() {
+      try {
+        const facets = await fetch("/api/v1/memories/facets").then((r) => r.ok ? r.json() : Promise.reject(r.status));
+        for (const [id, key] of [["user", "user_id"], ["agent", "agent_id"], ["app", "app_id"]]) {
+          const select = document.querySelector(`#${id}`);
+          for (const v of facets[key] || []) select.append(new Option(v, v));
+        }
+      } catch { /* dropdowns just stay empty-but-usable if facets fail */ }
+    }
     document.querySelector("#search").onclick = search;
     document.querySelector("#list").onclick = list;
     document.querySelector("#query").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
+    loadFacets();
     list();
   </script>
 </App>

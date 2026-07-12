@@ -97,9 +97,12 @@ def search_memories(
     limit: int = 5,
 ) -> dict:
     """Semantic search over LOCAL memories (bge-m3 embeddings + pgvector)."""
-    return _get_memory().search(
-        query, top_k=limit, filters=_filter(user_id, agent_id, run_id, app_id)
-    )
+    # Same bypass as aipc_mem0/server.py's search_memories: Memory.search()
+    # refuses filters without one of user_id/agent_id/run_id, but an unscoped
+    # search is a normal call shape here. _search_vector_store has no such
+    # restriction and PGVector tolerates empty filters (no WHERE clause).
+    filters = _filter(user_id, agent_id, run_id, app_id)
+    return {"results": _get_memory()._search_vector_store(query, filters or {}, limit)}
 
 
 @mcp.tool()
@@ -111,9 +114,13 @@ def get_memories(
     limit: int = 20,
 ) -> dict:
     """List memories for a given scope (user/agent/app/run)."""
-    return _get_memory().get_all(
-        filters=_filter(user_id, agent_id, run_id, app_id), top_k=limit
-    )
+    # Same fix as aipc_mem0/server.py's list_memories: PGVector.list() has no
+    # ORDER BY, so a bare top_k=limit silently drops the newest rows once the
+    # scope grows past `limit`. Over-fetch and sort by created_at ourselves.
+    filters = _filter(user_id, agent_id, run_id, app_id)
+    results = _get_memory()._get_all_from_vector_store(filters or {}, 10000, False, 10000)
+    results.sort(key=lambda m: m.get("created_at") or "", reverse=True)
+    return {"results": results[:limit]}
 
 
 @mcp.tool()

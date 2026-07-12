@@ -49,6 +49,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/v1/device/events":
             self._stream_device_events()
             return
+        if path == "/api/v1/memories/facets":
+            self._proxy_mem0("/memories/facets")
+            return
         if path == "/api/v1/memories":
             self._proxy_mem0("/memories" + (f"?{parsed.query}" if parsed.query else ""))
             return
