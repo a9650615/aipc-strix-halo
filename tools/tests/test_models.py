@@ -13,7 +13,8 @@ from aipc_lib import models
 def manifest(tmp_path: Path) -> Path:
     # Mirrors the real schema shipped in
     # modules/llm-models/files/etc/aipc/models/models.yaml: alias, backend,
-    # model_id, size_gb only — there is no on-disk `path` field.
+    # model_id, size_gb, plus optional checkpoints/recipe/label for custom
+    # Lemonade registrations — there is no on-disk `path` field.
     p = tmp_path / "models.yaml"
     p.write_text(
         textwrap.dedent(
@@ -66,11 +67,32 @@ def test_is_cloud_false_for_local_backends() -> None:
     assert entry.is_cloud is False
 
 
+def _mark_synced(entry: models.ModelEntry, root: Path) -> None:
+    entry.weights_path(root).mkdir(parents=True, exist_ok=True)
+    entry.marker_path(root).write_text(entry.model_id + "\n")
+
+
 def test_on_disk_status_present(tmp_path: Path) -> None:
     root = tmp_path / "models"
     entry = models.ModelEntry(alias="router-1b", backend="lemonade", model_id="x", size_gb=1)
-    entry.weights_path(root).mkdir(parents=True)
+    _mark_synced(entry, root)
     assert models.on_disk_status(entry, root) == "present"
+
+
+def test_on_disk_status_stale_when_model_id_changed(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    entry = models.ModelEntry(alias="ornith-35b", backend="lemonade", model_id="old-id", size_gb=20)
+    _mark_synced(entry, root)
+    swapped = models.ModelEntry(alias="ornith-35b", backend="lemonade", model_id="new-id", size_gb=26)
+    assert models.on_disk_status(swapped, root) == "stale"
+
+
+def test_on_disk_status_stale_when_marker_file_absent(tmp_path: Path) -> None:
+    # Pre-marker sync layout: alias dir exists but records no model_id.
+    root = tmp_path / "models"
+    entry = models.ModelEntry(alias="router-1b", backend="lemonade", model_id="x", size_gb=1)
+    entry.weights_path(root).mkdir(parents=True)
+    assert models.on_disk_status(entry, root) == "stale"
 
 
 def test_on_disk_status_missing(tmp_path: Path) -> None:
@@ -91,16 +113,26 @@ def test_sync_check_all_present(manifest: Path, tmp_path: Path) -> None:
     entries = models.load_manifest(manifest)
     for e in entries:
         if not e.is_cloud:
-            e.weights_path(root).mkdir(parents=True)
+            _mark_synced(e, root)
     assert models.sync_check(entries, root) == []
 
 
 def test_sync_check_reports_missing(manifest: Path, tmp_path: Path) -> None:
     root = tmp_path / "models"
     entries = models.load_manifest(manifest)
-    entries[0].weights_path(root).mkdir(parents=True)  # router-1b present
+    _mark_synced(entries[0], root)  # router-1b present
     missing = models.sync_check(entries, root)
     assert [m.alias for m in missing] == ["main-70b"]
+
+
+def test_sync_check_includes_stale(manifest: Path, tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    entries = models.load_manifest(manifest)
+    for e in entries:
+        if not e.is_cloud:
+            _mark_synced(e, root)
+    entries[0].marker_path(root).write_text("some-previous-model-id\n")
+    assert [m.alias for m in models.sync_check(entries, root)] == ["router-1b"]
 
 
 def test_sync_check_excludes_cloud_backends(manifest: Path, tmp_path: Path) -> None:
@@ -108,7 +140,7 @@ def test_sync_check_excludes_cloud_backends(manifest: Path, tmp_path: Path) -> N
     entries = models.load_manifest(manifest)
     for e in entries:
         if not e.is_cloud:
-            e.weights_path(root).mkdir(parents=True)
+            _mark_synced(e, root)
     # main-cloud never appears in sync_check even though nothing was created for it
     assert models.sync_check(entries, root) == []
 
@@ -143,6 +175,62 @@ def test_pull_command_lemonade() -> None:
     ]
 
 
+def test_pull_command_lemonade_custom_checkpoints() -> None:
+    entry = models.ModelEntry(
+        alias="ornith-35b",
+        backend="lemonade",
+        model_id="Ornith-1.0-35B-MTP-APEX-I-Balanced",
+        size_gb=26,
+        checkpoints={"main": "SC117/Ornith-1.0-35B-MTP-APEX-GGUF:Ornith-1.0-35B-MTP-APEX-I-Balanced.gguf"},
+        recipe="llamacpp",
+        labels=["tool-calling"],
+    )
+    assert models.pull_command(entry) == [
+        "sudo",
+        "podman",
+        "exec",
+        "lemonade",
+        "/opt/lemonade/lemonade",
+        "pull",
+        "user.Ornith-1.0-35B-MTP-APEX-I-Balanced",
+        "--checkpoint",
+        "main",
+        "SC117/Ornith-1.0-35B-MTP-APEX-GGUF:Ornith-1.0-35B-MTP-APEX-I-Balanced.gguf",
+        "--recipe",
+        "llamacpp",
+        "--label",
+        "tool-calling",
+    ]
+
+
+def test_pull_command_lemonade_multi_checkpoint_and_labels() -> None:
+    entry = models.ModelEntry.from_dict(
+        {
+            "alias": "assistant-gemma",
+            "backend": "lemonade",
+            "model_id": "Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M",
+            "checkpoints": {
+                "main": "HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M",
+                "draft": "HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:mtp-gemma-4-26B-A4B-it.gguf",
+            },
+            "label": ["tool-calling", "mtp"],
+        }
+    )
+    cmd = models.pull_command(entry)
+    assert cmd is not None
+    assert cmd[6] == "user.Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M"
+    assert cmd.count("--checkpoint") == 2
+    assert cmd[cmd.index("--recipe") + 1] == "llamacpp"
+    assert cmd.count("--label") == 2
+
+
+def test_from_dict_label_string_normalizes_to_list() -> None:
+    entry = models.ModelEntry.from_dict(
+        {"alias": "a", "backend": "lemonade", "model_id": "m", "label": "tool-calling"}
+    )
+    assert entry.labels == ["tool-calling"]
+
+
 def test_pull_command_cloud_backend_is_none() -> None:
     entry = models.ModelEntry(alias="main-cloud", backend="anthropic", model_id="x", size_gb="cloud")
     assert models.pull_command(entry) is None
@@ -168,6 +256,21 @@ def test_sync_pull_invokes_backend_command_and_marks_present(tmp_path: Path) -> 
     assert calls == [["sudo", "podman", "exec", "ollama", "ollama", "pull", "llama3.3:70b"]]
     assert results == [(entries[0], True)]
     assert models.on_disk_status(entries[0], root) == "present"
+    assert entries[0].marker_path(root).read_text().strip() == "llama3.3:70b"
+
+
+def test_sync_pull_repulls_stale_and_refreshes_marker(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    old = models.ModelEntry(alias="ornith-35b", backend="lemonade", model_id="old-id", size_gb=20)
+    _mark_synced(old, root)
+    new = models.ModelEntry(alias="ornith-35b", backend="lemonade", model_id="new-id", size_gb=26)
+
+    def fake_runner(cmd, **kwargs):
+        return _FakeCompletedProcess(0)
+
+    results = models.sync_pull([new], root, runner=fake_runner)
+    assert results == [(new, True)]
+    assert models.on_disk_status(new, root) == "present"
 
 
 def test_sync_pull_reports_failure_without_marking_present(tmp_path: Path) -> None:
@@ -197,7 +300,7 @@ def test_sync_pull_skips_cloud_backends_without_calling_runner(tmp_path: Path) -
 def test_sync_pull_skips_already_present_entries(tmp_path: Path) -> None:
     root = tmp_path / "models"
     entry = models.ModelEntry(alias="main-70b", backend="ollama", model_id="llama3.3:70b", size_gb=40)
-    entry.weights_path(root).mkdir(parents=True)
+    _mark_synced(entry, root)
 
     def runner_should_not_be_called(cmd, **kwargs):
         raise AssertionError("runner must not be called for already-present entries")

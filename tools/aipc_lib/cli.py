@@ -17,6 +17,7 @@ from aipc_lib import config_menu as config_menu_mod
 from aipc_lib import desktop_presets as desktop_presets_mod
 from aipc_lib import doctor as doctor_mod
 from aipc_lib import gate_client as gate_client_mod
+from aipc_lib import hermes_sync as hermes_sync_mod
 from aipc_lib import log_append as log_append_mod
 from aipc_lib import mem0_local_mcp as mem0_local_mcp_mod
 from aipc_lib import mem0_migrate as mem0_migrate_mod
@@ -464,7 +465,7 @@ def models_list(manifest: Path, models_root: Path) -> None:
     for col in ("alias", "backend", "model_id", "size_gb", "on_disk_status"):
         table.add_column(col)
 
-    _STATUS_COLOR = {"present": "green", "missing": "red", "n/a": "dim"}
+    _STATUS_COLOR = {"present": "green", "stale": "yellow", "missing": "red", "n/a": "dim"}
     for e in entries:
         status = models_mod.on_disk_status(e, models_root)
         color = _STATUS_COLOR.get(status, "white")
@@ -476,6 +477,40 @@ def models_list(manifest: Path, models_root: Path) -> None:
             f"[{color}]{status}[/{color}]",
         )
     Console().print(table)
+
+
+def _providers_sync_all() -> bool:
+    """Run every consumer model-list sync (0013). Returns True if any synced.
+
+    Per-consumer failures are reported and skipped — a missing config or
+    unreachable LiteLLM must not take down the other consumers.
+    """
+    consumers = [
+        ("opencode", opencode_sync_mod.sync_config, opencode_sync_mod.DEFAULT_OPENCODE_CONFIG),
+        ("ccs", ccs_sync_mod.sync_extra_models, ccs_sync_mod.DEFAULT_CCS_SETTINGS),
+        ("hermes", hermes_sync_mod.sync_config, hermes_sync_mod.DEFAULT_HERMES_CONFIG),
+    ]
+    any_ok = False
+    for name, sync_fn, target in consumers:
+        try:
+            model_ids = sync_fn()
+        except Exception as e:
+            click.echo(f"{name}: SKIPPED ({e})", err=True)
+            continue
+        any_ok = True
+        click.echo(f"{name}: synced {len(model_ids)} models -> {target}")
+    return any_ok
+
+
+@main.group("providers")
+def providers_cmd() -> None:
+    """Propagate the LiteLLM model namespace to registered consumers."""
+
+
+@providers_cmd.command("sync")
+def providers_sync() -> None:
+    """Sync OpenCode / CCS / Hermes model lists from LiteLLM's live /v1/models."""
+    sys.exit(0 if _providers_sync_all() else 1)
 
 
 @models_cmd.command("sync")
@@ -492,15 +527,21 @@ def models_list(manifest: Path, models_root: Path) -> None:
     default=models_mod.DEFAULT_MODELS_ROOT,
     show_default=True,
 )
-def models_sync(check: bool, manifest: Path, models_root: Path) -> None:
+@click.option(
+    "--providers/--no-providers",
+    default=True,
+    help="Also sync consumer model lists (opencode/ccs/hermes) after a successful pull.",
+)
+def models_sync(check: bool, manifest: Path, models_root: Path, providers: bool) -> None:
     """Sync model weights. --check is a dry-run; pulls nothing and just reports gaps."""
     entries = models_mod.load_manifest(manifest)
     if check:
         missing = models_mod.sync_check(entries, models_root)
         if missing:
-            click.echo("Missing models:", err=True)
+            click.echo("Missing or stale models:", err=True)
             for m in missing:
-                click.echo(f"  - {m.alias} ({m.backend}: {m.model_id})", err=True)
+                status = models_mod.on_disk_status(m, models_root)
+                click.echo(f"  - {m.alias} ({m.backend}: {m.model_id}) [{status}]", err=True)
             sys.exit(1)
         click.echo("All declared models present.")
         sys.exit(0)
@@ -511,6 +552,10 @@ def models_sync(check: bool, manifest: Path, models_root: Path) -> None:
         click.echo(f"{'pulled' if success else 'FAILED'}: {e.alias} ({e.backend}: {e.model_id})")
     if not results:
         click.echo("All declared models present.")
+    if providers and any(success for _, success in results):
+        # 0013: a changed model set must converge consumer configs in the
+        # same command — best-effort, never fails the pull result.
+        _providers_sync_all()
     sys.exit(1 if failed else 0)
 
 
