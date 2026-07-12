@@ -234,12 +234,19 @@ models:
   # ~1.3GB extra at load). Hardware-verified same day: text 1.0s /
   # tool_calls 1.4s / vision 256px correct — MTP tensors + mmproj + -np 4
   # coexist fine when speculative decoding is OFF.
-  # Embedded MTP tested and REJECTED 2026-07-12 (hardware-measured on this
-  # llamacpp:vulkan build): `-np 1 --spec-type draft-mtp` initialized
-  # cleanly and hit 99.2% draft acceptance (mean length 3.6) — but decoded
-  # at 5.4 tok/s vs 73.2 tok/s baseline (185ms/token; the Vulkan
-  # speculative loop's draft-eval overhead swamps the acceptance win).
-  # Keep -np 4, no spec flags; re-test on future llama.cpp builds only.
+  # Embedded MTP tested and REJECTED for THIS model 2026-07-12. FAIR re-test
+  # (both -np 1 -kvu, exclusive GPU, orchestrator paused, temp 0, 500 tok —
+  # correcting a first pass that unfairly compared -np 4 baseline vs -np 1
+  # MTP on a loaded box): no-spec 63 tok/s (66.6/61.1/60.8) vs
+  # `--spec-type draft-mtp --spec-draft-n-max 2` 51 tok/s (61.2/51.1/51.1)
+  # — MTP is ~19% SLOWER here, not the 20-50% faster the SC117 card claims.
+  # WHY the card can still be right: it describes the DIFFERENT Qwen3.6-35B
+  # Native-MTP-Preserved model (20 native MTP layers); ornith's APEX quant
+  # carries only 1 MTP layer, too shallow for the draft to beat its own
+  # eval overhead. So this verdict is ornith-specific, NOT a blanket "MTP
+  # loses on Vulkan". To actually chase the card's win, test that
+  # 20-layer Qwen3.6 model (a coder-agentic upgrade candidate), not ornith.
+  # Keep -np 4, no spec flags; draft path stays available for future builds.
   - alias: ornith-35b
     backend: lemonade
     model_id: Ornith-1.0-35B-MTP-APEX-I-Balanced
