@@ -11,6 +11,7 @@ Goals (2026-07-10+):
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import math
 import os
@@ -46,6 +47,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QRadialGradient,
+    QSessionManager,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -76,6 +78,40 @@ SHOW_STATES = frozenset(
     }
 )
 HIDE_STATES = frozenset({"listening", "muted", "miss", "detecting"})
+
+# Active states carry a client-side watchdog (0014 #2): if the upstream turn
+# dies without a terminal event (done/error), the spinner must fall back to
+# hidden instead of spinning forever. Live upstream progress writes keep
+# resetting the deadline, so a healthy long turn is never cut short.
+WATCHDOG_STATES = frozenset(
+    {"wake", "recording", "thinking", "working", "speaking", "bg_task"}
+)
+# followup keeps ~30s past its own hide so a trailing wake "listening" write
+# cannot race the follow-up hint away (0014 #3).
+FOLLOWUP_GRACE_S = 30.0
+
+
+def _active_timeout_s() -> float:
+    try:
+        v = float(os.environ.get("AIPC_OVERLAY_ACTIVE_TIMEOUT_S", "120"))
+    except ValueError:
+        v = 120.0
+    return max(5.0, v)
+
+
+def _watchdog_deadline(data: dict) -> float:
+    """Anchor the watchdog to the status's own ts, not wall-clock "now".
+
+    A restarted overlay re-reading a stale, never-terminated status.json must
+    not treat it as a fresh turn — otherwise every restart replays up to
+    AIPC_OVERLAY_ACTIVE_TIMEOUT_S of a phantom "answering" spinner. A live
+    turn's ts is always close to now, so this is a no-op for the normal case.
+    """
+    try:
+        ts = float(data.get("ts"))
+    except (TypeError, ValueError):
+        ts = time.time()
+    return ts + _active_timeout_s()
 
 STATE_COLORS = {
     "listening": QColor(120, 140, 180),
@@ -778,7 +814,13 @@ class BodyScroll(QScrollArea):
         # Markdown text + safe media extraction: image URLs go to the gallery,
         # non-image links stay in the rendered text.
         clean, urls = _extract_and_strip_media(text or "", image_urls)
-        self._label.setText(_markdown_to_html(clean))
+        # Caller picks RichText vs PlainText via setTextFormat() right before
+        # calling us (see use_html branch). Respect it: markdown->HTML output
+        # shown in a PlainText label renders as literal tags, not markup.
+        if self._label.textFormat() == Qt.TextFormat.RichText:
+            self._label.setText(_markdown_to_html(clean))
+        else:
+            self._label.setText(clean)
         self.set_images(urls, width=width)
         return self.measure_content_height(width)
 
@@ -980,6 +1022,7 @@ class OverlayPanel(QWidget):
         self._detail = ""
         self._label = ""
         self._hide_at: float | None = None
+        self._hold_until = 0.0  # done/followup window: ignore HIDE_STATES writes
         self._pinned_xy: tuple[int, int] | None = None
         self._source = ""
         self._api: OverlayApiServer | None = None
@@ -1904,6 +1947,11 @@ class OverlayPanel(QWidget):
 
     def apply_status(self, data: dict) -> None:
         state = str(data.get("state") or "listening")
+        # 0014 #3 follow-up hold guard: while the done-hold/followup window is
+        # open, a wake-side "listening" (or other HIDE_STATES) write must not
+        # repaint or hide the answer — it is mic-state noise, not a new turn.
+        if state in HIDE_STATES and time.time() < self._hold_until:
+            return
         detail = str(data.get("detail") or "")
         partial = str(data.get("partial") or "")
         label = str(data.get("label") or "")
@@ -1967,7 +2015,8 @@ class OverlayPanel(QWidget):
             self._apply_text_contrast(body_len=0)
             self._set_title_elided(chip, max_w=max(48, self._card_w - 28 - 12 - 14 - 8))
             self._last_state = state
-            self._hide_at = None
+            if state in WATCHDOG_STATES:
+                self._hide_at = _watchdog_deadline(data)
             return
 
         # Same answer already painted: keep frozen card (no remeasure)
@@ -2116,13 +2165,21 @@ class OverlayPanel(QWidget):
         if state in SHOW_STATES:
             # Animate on mini ↔ answer mode switch, or a right ↔ center dock move
             self._show_passive(force_place=True, animate=mode_switch)
-            if state in (
-                "wake", "recording", "thinking", "working", "speaking", "followup",
-                "bg_task",
-            ):
-                # bg_task must persist until the background job's completion
-                # notify replaces it with a centered "done" card — no auto-hide.
-                self._hide_at = None
+            if state in WATCHDOG_STATES:
+                # Watchdog (0014 #2): even bg_task falls back to hidden after
+                # AIPC_OVERLAY_ACTIVE_TIMEOUT_S without a fresh progress write —
+                # live jobs keep resetting this via their periodic ticks.
+                self._hide_at = _watchdog_deadline(data)
+                self._hold_until = 0.0  # new activity closes the follow-up window
+            elif state == "followup":
+                try:
+                    ttl = float(data.get("ttl_s") or data.get("hold_s") or 0)
+                except (TypeError, ValueError):
+                    ttl = 0.0
+                if ttl <= 0:
+                    ttl = 30.0
+                self._hide_at = time.time() + max(5.0, min(ttl, 240.0))
+                self._hold_until = self._hide_at + FOLLOWUP_GRACE_S
             elif state == "done":
                 try:
                     ttl = float(data.get("ttl_s") or data.get("hold_s") or 0)
@@ -2132,6 +2189,9 @@ class OverlayPanel(QWidget):
                 if ttl <= 0:
                     ttl = 90.0 if len(body) > 200 else (60.0 if len(body) > 12 else 8.0)
                 self._hide_at = time.time() + max(8.0, min(ttl, 240.0))
+                # Hold guard window covers the done hold + a follow-up ttl so
+                # the follow-up hint that replaces this card is not raced away.
+                self._hold_until = self._hide_at + FOLLOWUP_GRACE_S
             elif state == "no_speech":
                 self._hide_at = time.time() + 1.2
             elif state in ("detecting", "miss"):
@@ -2216,6 +2276,54 @@ class OverlayPanel(QWidget):
             self._raise_top()
 
 
+def _existing_overlay_alive(sock_path: Path | None = None) -> bool:
+    """True when a live overlay already answers ping on the control socket.
+
+    Single-instance guard (0014 #1): a KDE-session-restored or duplicate copy
+    must exit instead of fighting the systemd-launched instance for the HUD.
+    """
+    path = sock_path or overlay_sock_path()
+    if not path.exists():
+        return False
+    try:
+        c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        c.settimeout(1.0)
+        c.connect(str(path))
+        c.sendall(b'{"cmd": "ping"}\n')
+        data = c.recv(8192)
+        c.close()
+    except OSError:
+        return False  # stale socket file — a fresh instance may bind it
+    return b'"ok": true' in data or b'"ok":true' in data
+
+
+def _acquire_singleton_lock(sock_path: Path | None = None):
+    """Atomic single-instance guard: flock, not ping-then-bind.
+
+    _existing_overlay_alive() has a TOCTOU race — two launchers starting in
+    the same instant (the systemd unit and a leftover KDE autostart entry
+    both fired on session restore, in the wild) can both see "no live
+    responder yet" and both proceed to bind the socket. flock is atomic: the
+    kernel lets exactly one holder through and releases automatically if
+    that process dies for any reason, so it closes the race the ping check
+    can't. Returns the open file (keep it referenced for the process
+    lifetime) or None if another instance already holds it.
+    """
+    path = (sock_path or overlay_sock_path()).with_suffix(".lock")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(path, "w")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return None
+    return fh
+
+
+def _no_restart(sm: QSessionManager) -> None:
+    """Opt out of KDE session restore — systemd user unit is the only launcher."""
+    sm.setRestartHint(QSessionManager.RestartHint.RestartNever)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
@@ -2224,9 +2332,27 @@ def main(argv: list[str] | None = None) -> int:
     elif os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("QT_QPA_PLATFORM"):
         # XWayland so top-center pin works under KDE Wayland
         os.environ["QT_QPA_PLATFORM"] = "xcb"
+    if _existing_overlay_alive():
+        print(
+            "aipc-voice-overlay: live instance already owns the control socket "
+            "— exiting (single-instance guard)",
+            flush=True,
+        )
+        return 0
+    lock_fh = _acquire_singleton_lock()
+    if lock_fh is None:
+        print(
+            "aipc-voice-overlay: another instance holds the singleton lock "
+            "— exiting (race with the ping check above)",
+            flush=True,
+        )
+        return 0
     app = QApplication(argv)
     app.setApplicationName("aipc-voice-overlay")
     app.setQuitOnLastWindowClosed(False)
+    # Qt requires DirectConnection for session-manager signals.
+    app.saveStateRequest.connect(_no_restart, Qt.ConnectionType.DirectConnection)
+    app.commitDataRequest.connect(_no_restart, Qt.ConnectionType.DirectConnection)
 
     panel = OverlayPanel()
 
