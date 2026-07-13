@@ -7,6 +7,7 @@ chmod +x /usr/bin/aipc-voice-once
 chmod +x /usr/bin/aipc-voice-stream
 chmod +x /usr/bin/aipc-voice-template
 chmod +x /usr/bin/aipc-voice-say
+chmod +x /etc/aipc/aipc-bluetooth-audio-recover
 mkdir -p /var/lib/aipc-voice/persona/templates
 
 # Enable the overlay user service declaratively (build-time symlink, no daemon).
@@ -16,3 +17,5 @@ mkdir -p /var/lib/aipc-voice/persona/templates
 mkdir -p /usr/lib/systemd/user/default.target.wants
 ln -sf ../aipc-voice-overlay.service \
     /usr/lib/systemd/user/default.target.wants/aipc-voice-overlay.service
+ln -sf ../aipc-bluetooth-audio-recover.service \
+    /usr/lib/systemd/user/default.target.wants/aipc-bluetooth-audio-recover.service
