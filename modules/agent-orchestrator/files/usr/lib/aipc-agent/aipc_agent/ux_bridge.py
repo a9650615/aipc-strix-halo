@@ -291,22 +291,49 @@ def progress(
     print(f"aipc-agent-ux: {state} — {shown} ({tag})", flush=True)
 
 
-def finish_answer(detail: str, *, source: str = "agent", hold_s: float = 60.0) -> None:
+_FAREWELL_RE = re.compile(
+    r"(先休息|先這樣|先这样|先掛|先挂|先下線|先下线|晚安|再見|再见|掰掰|拜拜"
+    r"|bye|goodnight|good night|see you|talk to you later)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_farewell(text: str) -> bool:
+    """A closing remark ("好的，那我就先休息了") invites no follow-up — showing
+    the "可接話" pill after one just to let it sit there for a fixed ttl reads
+    as "it won't close". Skip the invite outright instead of guessing a
+    shorter timer for it."""
+    return bool(_FAREWELL_RE.search(text or ""))
+
+
+def finish_answer(detail: str, *, source: str = "agent", hold_s: float = 20.0) -> None:
     """Show final reply as done (not stuck on 回答中). Keep answer readable for feedback.
 
-    hold_s: how long overlay should keep the answer (default 60s). After that we
-    go to followup (可接话 / 可说不对) rather than instantly vanishing.
+    hold_s: how long overlay should keep the answer before moving to followup
+    (可接话 / 可说不对) instead of instantly vanishing. A farewell-style reply
+    skips the followup invite entirely — nothing to follow up on, and the
+    ambient wake-listening state already waits for the next thing you say.
     A generation token ensures a later Hermes run is not wiped by this clear.
     """
     text = (detail or "完成").strip()
+    farewell = _looks_like_farewell(text)
     hold = hold_s
     try:
         hold = float(os.environ.get("AIPC_UX_DONE_HOLD_S", str(hold_s)))
     except ValueError:
         pass
-    hold = max(12.0, hold)
+    if farewell:
+        try:
+            hold = float(os.environ.get("AIPC_UX_FAREWELL_HOLD_S", "8"))
+        except ValueError:
+            hold = 8.0
+        hold = max(5.0, hold)
+    else:
+        hold = max(12.0, hold)
     # Terminal push bumps gen
     progress(text, state="done", source=source, priority=95, ttl_s=hold, force=True)
+    if farewell:
+        return
     my_gen = current_gen()
 
     def _clear() -> None:
@@ -315,12 +342,16 @@ def finish_answer(detail: str, *, source: str = "agent", hold_s: float = 60.0) -
             # Only clear if nothing newer took the HUD
             if current_gen() != my_gen:
                 return
+            try:
+                followup_ttl = float(os.environ.get("AIPC_UX_FOLLOWUP_TTL_S", "15"))
+            except ValueError:
+                followup_ttl = 15.0
             progress(
                 "可说「不对」反馈，或直接说下一句",
                 state="followup",
                 source=source,
                 priority=45,
-                ttl_s=30.0,
+                ttl_s=max(5.0, followup_ttl),
                 force=True,
                 gen=my_gen,
             )

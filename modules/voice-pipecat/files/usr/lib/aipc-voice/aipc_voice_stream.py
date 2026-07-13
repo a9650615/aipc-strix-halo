@@ -9,11 +9,14 @@ import json
 import os
 import queue
 import re
+import subprocess
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 # SSE schema (mirrors agent-orchestrator stream_chat; task 1.1 freeze).
@@ -230,6 +233,158 @@ class TtsChunkQueue:
                 self._errors += 1
             if self._cancel.is_set():
                 break
+
+
+# --- Batch-style turn ending for the stream path (0014 #4) ---------------
+# The stream worker exits right after TTS; the done→followup sequence must
+# survive that exit, so the delayed followup write runs in a small detached
+# child instead of a daemon thread.
+
+_IDLE_STATES = frozenset({"listening", "muted", "miss", "detecting", "no_speech"})
+_FOLLOWUP_DETAIL = "可说「不对」反馈，或直接说下一句"
+_FAREWELL_RE = re.compile(
+    r"(先休息|先這樣|先这样|先掛|先挂|先下線|先下线|晚安|再見|再见|掰掰|拜拜"
+    r"|bye|goodnight|good night|see you|talk to you later)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_farewell(text: str) -> bool:
+    """See aipc_agent.ux_bridge._looks_like_farewell — same idea, same list:
+    a closing remark gets no followup invite, just a short readable hold."""
+    return bool(_FAREWELL_RE.search(text or ""))
+
+
+def _ux_status_path() -> Path:
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        return Path(xdg) / "aipc-voice-state.json"
+    return Path(os.environ.get("HOME", "/tmp")) / ".cache/aipc/voice-state.json"
+
+
+def done_hold_s() -> float:
+    """Overlay hold for the final answer (same env knob as ux_bridge)."""
+    try:
+        hold = float(os.environ.get("AIPC_UX_DONE_HOLD_S", "20"))
+    except ValueError:
+        hold = 20.0
+    return max(12.0, hold)
+
+
+def farewell_hold_s() -> float:
+    try:
+        hold = float(os.environ.get("AIPC_UX_FAREWELL_HOLD_S", "8"))
+    except ValueError:
+        hold = 8.0
+    return max(5.0, hold)
+
+
+def followup_ttl_s() -> float:
+    try:
+        ttl = float(os.environ.get("AIPC_UX_FOLLOWUP_TTL_S", "15"))
+    except ValueError:
+        ttl = 15.0
+    return max(5.0, ttl)
+
+
+def write_turn_state(
+    state: str,
+    detail: str = "",
+    *,
+    ttl_s: float | None = None,
+    path: Path | None = None,
+) -> float:
+    """Write overlay status payload directly (announce() cannot carry ttl_s)."""
+    p = path or _ux_status_path()
+    ts = time.time()
+    payload: dict[str, Any] = {
+        "state": state,
+        "detail": detail,
+        "partial": detail,
+        "label": "",
+        "source": "voice-stream",
+        "ts": ts,
+    }
+    if ttl_s is not None and ttl_s > 0:
+        payload["ttl_s"] = float(ttl_s)
+        payload["hold_s"] = float(ttl_s)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    except OSError as exc:
+        print(f"aipc-voice-stream: ux write fail: {exc}", file=sys.stderr, flush=True)
+    return ts
+
+
+def _followup_should_write(cur: dict, done_ts: float) -> bool:
+    """Only follow up on OUR done. Idle/mic-noise states (the wake service
+    writes `listening` after the worker exits) do not cancel the follow-up;
+    any newer active turn or a different done does."""
+    state = str(cur.get("state") or "")
+    try:
+        ts = float(cur.get("ts") or 0)
+    except (TypeError, ValueError):
+        ts = 0.0
+    if state == "done":
+        return abs(ts - done_ts) <= 0.5
+    return state in _IDLE_STATES
+
+
+def _followup_main(args: list[str]) -> int:
+    """Detached child: sleep the done hold, then show the follow-up hint."""
+    path, done_ts, hold, ttl = Path(args[0]), float(args[1]), float(args[2]), float(args[3])
+    if hold > 0:
+        time.sleep(hold)
+    try:
+        cur = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        cur = {}
+    if not isinstance(cur, dict) or not _followup_should_write(cur, done_ts):
+        return 0
+    write_turn_state("followup", _FOLLOWUP_DETAIL, ttl_s=ttl, path=path)
+    return 0
+
+
+def finish_turn_ux(detail: str, *, spawn=None) -> float:
+    """End a stream turn batch-style: done (hold) → followup (ttl).
+
+    A farewell-style reply ("好的，那我就先休息了") skips the followup invite
+    entirely — nothing to follow up on, and no child gets spawned to write it.
+
+    Returns the done timestamp. spawn is injectable for tests; the default
+    detaches a tiny python child so the followup write survives worker exit.
+    """
+    text = (detail or "完成").strip()
+    farewell = _looks_like_farewell(text)
+    hold = farewell_hold_s() if farewell else done_hold_s()
+    ts = write_turn_state("done", text, ttl_s=hold)
+    if farewell:
+        return ts
+    argv = [
+        sys.executable,
+        "-c",
+        "import sys; sys.path.insert(0, sys.argv[1]); "
+        "import aipc_voice_stream as m; "
+        "raise SystemExit(m._followup_main(sys.argv[2:]))",
+        str(Path(__file__).resolve().parent),
+        str(_ux_status_path()),
+        f"{ts:.6f}",
+        f"{hold:.1f}",
+        f"{followup_ttl_s():.1f}",
+    ]
+    try:
+        if spawn is not None:
+            spawn(argv)
+        else:
+            subprocess.Popen(
+                argv,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+    except OSError as exc:
+        print(f"aipc-voice-stream: followup spawn fail: {exc}", file=sys.stderr, flush=True)
+    return ts
 
 
 def self_test() -> int:

@@ -42,6 +42,16 @@ def _overlay_mod():
     return _load_source("aipc_voice_overlay", OVL)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_overlay_socket(tmp_path, monkeypatch):
+    """OverlayPanel() binds overlay_sock_path() (from $XDG_RUNTIME_DIR) as its
+    control socket. Without this, every test in this file that constructs a
+    panel unlinks-and-rebinds the REAL production socket on any machine
+    where the live aipc-voice-overlay service happens to be running —
+    kicking the real overlay off its own socket. Isolate it per test."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+
+
 def _panel(m):
     from PySide6.QtWidgets import QApplication
 
