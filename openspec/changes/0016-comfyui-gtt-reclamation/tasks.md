@@ -18,6 +18,13 @@
       `--cache-none` recommendation for `~/ComfyUI`.
 - [x] 1.6 Static + render: self-test/ruff green, `aipc render bootc`,
       `aipc render ansible --check` both green and in sync (§4).
+- [x] 1.7 大哥 review fixes: (a) move `_comfy_reclaimed = False` INSIDE
+      `async with self.lock:` before the `while True` loop — the current
+      pre-lock reset is defeated by a concurrent `admit()` (double `/free`);
+      (b) add the reclaim-fired log line (what.md Diagnostics, no-silent-caps);
+      (c) extend self-test with a concurrent-admit case proving the latch holds
+      across two overlapping admissions (exactly one reclaim). Re-run the four
+      static/render gates.
 - [ ] 2.1 HW (physical AI PC): ComfyUI idle at high GTT → gateway LLM request
       that does not fit → exactly one `/free` fired, ComfyUI GTT dropped, LLM
       admitted without swap-thrash (GPU busy > 0, RAM not pinned 100%).

@@ -225,7 +225,6 @@ class _SchedulerCore:
         target = manifest.get(alias)
         if target is None:
             return
-        self._comfy_reclaimed = False
         health = await self.fetch_health()
         if health is None:
             return  # degrade open: scheduler must never become the outage
@@ -233,6 +232,7 @@ class _SchedulerCore:
         if any(m["model_id"] == target["model_id"] for m in loaded):
             return  # fast path, no lock
         async with self.lock:
+            self._comfy_reclaimed = False
             deadline = self.clock() + self.hold_timeout_s
             while True:
                 health = await self.fetch_health()
@@ -249,6 +249,8 @@ class _SchedulerCore:
                     await self.post_unload(victim)
                 elif not self._comfy_reclaimed and await self._try_comfy_reclaim():
                     self._comfy_reclaimed = True
+                    print(f"[sched] reclaimed idle ComfyUI cache before "
+                          f"admitting {alias}", flush=True)
                     await self.sleeper(self.poll_s)  # let /free release pages
                 elif self._swap_admits(loaded, target):
                     break  # no evictable LLM left; only non-LLM memory (e.g.
@@ -684,6 +686,50 @@ def self_test() -> None:
         await core13.admit("qwythos-9b", manifest)
         assert comfy_calls13["reclaim"] == 0, comfy_calls13
         assert state13["unloads"] == []
+
+        # Concurrent admits: A holds the lock, reclaims once (insufficient →
+        # holds to timeout); B enters concurrently targeting an already-loaded
+        # model (fast path, no lock). The latch reset lives under the lock, so
+        # B's entry cannot clear A's latch — reclaim fires exactly once total.
+        # (Pre-lock reset regression would let A /free twice → count 2.)
+        clock14 = {"t": 0.0}
+
+        async def sleep14(_s):
+            clock14["t"] += 5.0
+            await asyncio.sleep(0)  # real yield so B can interleave
+
+        comfy_calls14 = {"reclaim": 0}
+
+        async def comfy_idle_true14():
+            return True
+
+        async def comfy_reclaim_track14():
+            comfy_calls14["reclaim"] += 1
+            return True
+
+        async def health14():
+            return health_for(["QW9"])  # QW9 = qwythos-9b, B's target
+
+        async def unload14(model_id):
+            raise AssertionError("no eviction expected in concurrent case")
+
+        core14 = _SchedulerCore(health14, unload14, budget_gb=96,
+                                hold_timeout_s=20, poll_s=0,
+                                clock=lambda: clock14["t"], sleeper=sleep14,
+                                mem_available=lambda: 8.0, swap_free=lambda: 1.0,
+                                comfy_idle=comfy_idle_true14,
+                                comfy_reclaim=comfy_reclaim_track14)
+
+        async def admit_a():
+            try:
+                await core14.admit("assistant-gemma", manifest)
+            except TimeoutError:
+                pass
+            else:
+                raise AssertionError("expected A hold timeout")
+
+        await asyncio.gather(admit_a(), core14.admit("qwythos-9b", manifest))
+        assert comfy_calls14["reclaim"] == 1, comfy_calls14
 
         COMFY_BASE = orig_comfy_base
 
