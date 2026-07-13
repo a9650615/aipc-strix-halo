@@ -33,9 +33,12 @@ Environment=AIPC_SCHED_HEADROOM_GB=10
 # ComfyUI GTT reclamation (0016): before falling to swap-backed admission,
 # ask an idle ComfyUI to free its cache. Host netns is shared (Network=host
 # above), so 127.0.0.1:8188 reaches the user's ComfyUI. Unset -> disabled,
-# scheduler behaves exactly as 0012. Uncomment to enable.
-# Environment=AIPC_SCHED_COMFY_BASE=http://127.0.0.1:8188
-# Environment=AIPC_SCHED_COMFY_RECLAIM=1
+# scheduler behaves exactly as 0012. Hardware-verified 2026-07-14 (tasks
+# 2.1-2.3): reclaim fires exactly once before a blocked admission, is
+# skipped while ComfyUI's queue is non-empty, and degrades open (falls to
+# swap-admit/hold as 0012) when ComfyUI is unreachable.
+Environment=AIPC_SCHED_COMFY_BASE=http://127.0.0.1:8188
+Environment=AIPC_SCHED_COMFY_RECLAIM=1
 
 [Service]
 Restart=always

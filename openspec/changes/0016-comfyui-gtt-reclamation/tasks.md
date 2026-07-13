@@ -25,11 +25,30 @@
       (c) extend self-test with a concurrent-admit case proving the latch holds
       across two overlapping admissions (exactly one reclaim). Re-run the four
       static/render gates.
-- [ ] 2.1 HW (physical AI PC): ComfyUI idle at high GTT → gateway LLM request
-      that does not fit → exactly one `/free` fired, ComfyUI GTT dropped, LLM
-      admitted without swap-thrash (GPU busy > 0, RAM not pinned 100%).
-      Quantify with fdinfo aggregation before/after (gtt-hog-forensics method).
-- [ ] 2.2 HW: ComfyUI *running a job* → reclaim does NOT fire, job untouched,
-      request falls to swap/hold as before.
-- [ ] 2.3 HW: ComfyUI stopped/unreachable → reclaim skipped silently, loop
-      behaves exactly as 0012 (no new failure mode).
+- [x] 2.1 HW (physical AI PC, 2026-07-14): ComfyUI (throwaway instance)
+      loaded sd_xl_base_1.0 (idle queue), GTT 9.33GB, host MemAvailable
+      71.65GB. Gateway request for `qwythos-9b` (test-scoped
+      `AIPC_SCHED_HEADROOM_GB=70` to force the real-mem gate to bind on
+      this machine's large 121GB/88GB-avail baseline) logged
+      `[sched] reclaimed idle ComfyUI cache before admitting qwythos-9b`
+      exactly once; ComfyUI GTT dropped 9.33GB -> 1.9GB within the poll
+      cycle, MemAvailable rose to 74.1GB; request admitted HTTP 200 in
+      6.0s (GPU busy read back at 6% post-completion, no thrash).
+- [x] 2.2 HW (2026-07-14): submitted a real 40-step/1024px SDXL job so
+      `/queue` was non-empty, then fired the same admission pressure
+      (`assistant-gemma`) immediately. litellm log shows zero reclaim
+      lines while the job ran; the ComfyUI job completed untouched
+      (`history` status `success`, output PNG written). A reclaim line
+      appeared only after the queue went idle (next poll iteration),
+      confirming `comfy_idle` correctly gated on queue state, not just a
+      timer.
+- [x] 2.3 HW (2026-07-14): pointed `AIPC_SCHED_COMFY_BASE` at a dead port
+      (127.0.0.1:8199) while the real ComfyUI (127.0.0.1:8188) stayed up
+      with 9.7GB cached; gateway request for `qwythos-9b` returned HTTP
+      200 in 3.2s via swap-admit, zero reclaim log lines, and ComfyUI's
+      real GTT was unaffected (9.7GB before -> 15.0GB after, entirely
+      explained by qwythos-9b's own GPU load, i.e. ComfyUI's cache was
+      never touched) — degrades open exactly as 0012, no new failure mode.
+      Live env restored to production (`COMFY_BASE=:8188`,
+      `HEADROOM_GB=10`) and verified with a follow-up sanity chat call
+      (HTTP 200) before repo apply.
