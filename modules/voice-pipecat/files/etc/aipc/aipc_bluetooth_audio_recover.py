@@ -11,6 +11,8 @@ import time
 
 DEFAULT_MAC = "68:52:10:35:29:44"
 SINK_TIMEOUT = 45.0
+CONNECT_RETRY_TIMEOUT = 30.0
+CONNECT_RETRY_DELAY = 2.0
 
 
 def sink_name(mac: str) -> str:
@@ -113,6 +115,24 @@ def connect_with_bluez_fallback(
     return refreshed if run(connect_args).returncode == 0 else ""
 
 
+def connect_with_retries(
+    device: str,
+    *,
+    timeout: float = CONNECT_RETRY_TIMEOUT,
+    run=_run,
+    clock=time.monotonic,
+    sleep=time.sleep,
+) -> bool:
+    connect_args = ["busctl", "call", "org.bluez", device, "org.bluez.Device1", "Connect"]
+    deadline = clock() + timeout
+    while True:
+        if run(connect_args).returncode == 0:
+            return True
+        if clock() >= deadline:
+            return False
+        sleep(CONNECT_RETRY_DELAY)
+
+
 def power_cycle_adapter(device: str, *, run=_run) -> bool:
     adapter = device.rsplit("/", 1)[0]
     prefix = [
@@ -142,8 +162,7 @@ def recover(mac: str = DEFAULT_MAC, timeout: float = SINK_TIMEOUT) -> int:
         return 0
 
     if not connected:
-        direct = _run(["busctl", "call", "org.bluez", device, "org.bluez.Device1", "Connect"])
-        if direct.returncode != 0:
+        if not connect_with_retries(device, timeout=min(timeout, CONNECT_RETRY_TIMEOUT)):
             return 0
         sink = sink_name(mac)
         if _wait(

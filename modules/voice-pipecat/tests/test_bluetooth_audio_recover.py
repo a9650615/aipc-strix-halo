@@ -4,6 +4,7 @@ from subprocess import CompletedProcess
 
 from aipc_bluetooth_audio_recover import (
     connect_with_bluez_fallback,
+    connect_with_retries,
     device_path_from_tree,
     has_sink,
     needs_recovery,
@@ -142,6 +143,61 @@ class BluetoothAudioRecoveryTests(unittest.TestCase):
                 mac="68:52:10:35:29:44",
             )
         )
+
+    def test_retries_connect_until_a2dp_endpoints_are_ready(self):
+        attempts = {"n": 0}
+
+        def run(argv):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                return CompletedProcess(argv, 1, "", "Protocol not available")
+            return CompletedProcess(argv, 0, "", "")
+
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+
+        self.assertTrue(
+            connect_with_retries(
+                "/org/bluez/hci1/dev_68_52_10_35_29_44",
+                timeout=30.0,
+                run=run,
+                clock=lambda: 0.0,
+                sleep=sleep,
+            )
+        )
+        self.assertEqual(attempts["n"], 2)
+        self.assertEqual(sleeps, [2.0])
+
+    def test_gives_up_after_bounded_window_when_connect_never_succeeds(self):
+        attempts = {"n": 0}
+
+        def run(argv):
+            attempts["n"] += 1
+            return CompletedProcess(argv, 1, "", "Protocol not available")
+
+        clock_values = iter([0.0, 5.0, 35.0])
+
+        def clock():
+            return next(clock_values)
+
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+
+        self.assertFalse(
+            connect_with_retries(
+                "/org/bluez/hci1/dev_68_52_10_35_29_44",
+                timeout=30.0,
+                run=run,
+                clock=clock,
+                sleep=sleep,
+            )
+        )
+        self.assertEqual(attempts["n"], 2)
+        self.assertEqual(sleeps, [2.0])
 
     def test_sets_default_sink_by_name(self):
         calls = []
