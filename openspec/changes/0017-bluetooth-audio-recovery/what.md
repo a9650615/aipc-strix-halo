@@ -9,8 +9,9 @@ existing `voice-pipecat` module.
   WirePlumber are available.
 - Treat a Bluetooth audio device as needing attention when it is paired and
   its expected `bluez_output.<MAC>.1` sink is absent.
-- If it is merely disconnected, try one normal BlueZ connection without
-  restarting audio.
+- If it is merely disconnected, retry a normal BlueZ connection every 2s for
+  up to 30s (bounded window, to survive the early-boot race with WirePlumber
+  registering A2DP endpoints) without restarting audio.
 - If it is half-connected, restart the user audio services, disconnect/
   reconnect the device, and, if needed, restart Bluetooth and power-cycle the
   adapter before one final reconnect attempt.
