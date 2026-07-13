@@ -42,6 +42,11 @@ HEADROOM_GB = float(os.environ.get("AIPC_SCHED_HEADROOM_GB", "10"))
 # lean on swap (zram 48G + nvme 30G) rather than OOM or block. This only
 # bypasses the real-memory gate, never the logical BUDGET_GB ledger.
 RAM_FLOOR_GB = float(os.environ.get("AIPC_SCHED_RAM_FLOOR_GB", "4"))
+# ComfyUI reclaim (0016): before falling to swap-backed admission, ask an idle
+# ComfyUI to release its cache — cheaper than grinding swap for GTT it isn't
+# using right now. Unset base -> disabled, loop is identical to 0012.
+COMFY_BASE = os.environ.get("AIPC_SCHED_COMFY_BASE")
+COMFY_RECLAIM = os.environ.get("AIPC_SCHED_COMFY_RECLAIM", "1") not in ("0", "")
 
 
 def mem_available_gb(meminfo_path: str = "/proc/meminfo") -> float | None:
@@ -159,7 +164,8 @@ class _SchedulerCore:
                  cooldown_s=COOLDOWN_S, hold_timeout_s=HOLD_TIMEOUT_S,
                  poll_s=POLL_S, clock=time.monotonic, sleeper=asyncio.sleep,
                  headroom_gb=HEADROOM_GB, mem_available=mem_available_gb,
-                 ram_floor_gb=RAM_FLOOR_GB, swap_free=swap_free_gb):
+                 ram_floor_gb=RAM_FLOOR_GB, swap_free=swap_free_gb,
+                 comfy_idle=None, comfy_reclaim=None):
         self.fetch_health = fetch_health
         self.post_unload = post_unload
         self.budget_gb = budget_gb
@@ -172,8 +178,13 @@ class _SchedulerCore:
         self.mem_available = mem_available
         self.ram_floor_gb = ram_floor_gb
         self.swap_free = swap_free
+        self.comfy_idle = comfy_idle if comfy_idle is not None else _http_comfy_idle
+        self.comfy_reclaim = (
+            comfy_reclaim if comfy_reclaim is not None else _http_comfy_reclaim
+        )
         self.lock = asyncio.Lock()
         self.admitted_at: dict[str, float] = {}
+        self._comfy_reclaimed = False
 
     def _fits(self, loaded: list[dict], target: dict) -> bool:
         if free_gb(loaded, self.budget_gb) < target["size_gb"]:
@@ -197,11 +208,24 @@ class _SchedulerCore:
             return False  # can't reason about swap → stay conservative, hold
         return avail >= self.ram_floor_gb and swap >= target["size_gb"] + self.headroom_gb
 
+    async def _try_comfy_reclaim(self) -> bool:
+        """True iff an idle ComfyUI was asked to free its cache this call.
+        Degrades open: disabled, unreachable, busy, or erroring -> False."""
+        if not COMFY_BASE or not COMFY_RECLAIM:
+            return False
+        try:
+            if not await self.comfy_idle():
+                return False
+            return bool(await self.comfy_reclaim())
+        except Exception:
+            return False
+
     async def admit(self, alias: str, manifest: dict[str, dict]) -> None:
         """Return when `alias` may be forwarded; raise TimeoutError on hold expiry."""
         target = manifest.get(alias)
         if target is None:
             return
+        self._comfy_reclaimed = False
         health = await self.fetch_health()
         if health is None:
             return  # degrade open: scheduler must never become the outage
@@ -223,6 +247,9 @@ class _SchedulerCore:
                                      self.clock(), self.cooldown_s)
                 if victim is not None:
                     await self.post_unload(victim)
+                elif not self._comfy_reclaimed and await self._try_comfy_reclaim():
+                    self._comfy_reclaimed = True
+                    await self.sleeper(self.poll_s)  # let /free release pages
                 elif self._swap_admits(loaded, target):
                     break  # no evictable LLM left; only non-LLM memory (e.g.
                     # ComfyUI) blocks the RAM gate — swap absorbs it, admit
@@ -266,6 +293,38 @@ async def _http_unload(model_id: str) -> None:
                               json={"model_name": model_id})
     except Exception:
         pass  # next loop iteration re-reads health and retries or holds
+
+
+async def _http_comfy_idle() -> bool:
+    if not COMFY_BASE:
+        return False
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{COMFY_BASE}/queue")
+            if resp.status_code != 200:
+                return False
+            data = resp.json()
+            return not data.get("queue_running") and not data.get("queue_pending")
+    except Exception:
+        return False
+
+
+async def _http_comfy_reclaim() -> bool:
+    if not COMFY_BASE:
+        return False
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(
+                f"{COMFY_BASE}/free",
+                json={"unload_models": True, "free_memory": True},
+            )
+            return resp.status_code == 200
+    except Exception:
+        return False
 
 
 try:
@@ -501,6 +560,132 @@ def self_test() -> None:
         core7 = _SchedulerCore(health6, unload3, budget_gb=96,
                                mem_available=lambda: None)
         await core7.admit("qwythos-9b", manifest)
+
+        # ComfyUI reclaim (0016), disabled: AIPC_SCHED_COMFY_BASE unset ->
+        # comfy_reclaim is never invoked, swap-admit path is untouched.
+        global COMFY_BASE
+        orig_comfy_base = COMFY_BASE
+        COMFY_BASE = None
+        comfy_calls = {"idle": 0, "reclaim": 0}
+
+        async def comfy_idle_true():
+            comfy_calls["idle"] += 1
+            return True
+
+        async def comfy_reclaim_track():
+            comfy_calls["reclaim"] += 1
+            return True
+
+        state10 = {"loaded": [], "unloads": []}
+
+        async def health10():
+            return health_for(state10["loaded"])
+
+        core10 = _SchedulerCore(health10, unload3, budget_gb=96,
+                                hold_timeout_s=10, poll_s=0,
+                                mem_available=lambda: 8.0, swap_free=lambda: 60.0,
+                                comfy_idle=comfy_idle_true,
+                                comfy_reclaim=comfy_reclaim_track)
+        await core10.admit("qwythos-9b", manifest)
+        assert comfy_calls == {"idle": 0, "reclaim": 0}, comfy_calls
+        assert state10["unloads"] == []
+
+        COMFY_BASE = "http://127.0.0.1:8188"
+
+        # Reclaim precedes swap: an evictable LLM victim still wins, reclaim
+        # is not consulted on that iteration.
+        state11 = {"loaded": ["ORN"], "unloads": []}
+
+        async def health11():
+            return health_for(state11["loaded"])
+
+        async def unload11(model_id):
+            state11["unloads"].append(model_id)
+            state11["loaded"].remove(model_id)
+
+        comfy_calls11 = {"idle": 0, "reclaim": 0}
+
+        async def comfy_idle_true11():
+            comfy_calls11["idle"] += 1
+            return True
+
+        async def comfy_reclaim_track11():
+            comfy_calls11["reclaim"] += 1
+            return True
+
+        def avail11():
+            return 12.0 if "ORN" in state11["loaded"] else 40.0
+
+        core11 = _SchedulerCore(health11, unload11, budget_gb=96,
+                                hold_timeout_s=10, poll_s=0,
+                                mem_available=avail11,
+                                comfy_idle=comfy_idle_true11,
+                                comfy_reclaim=comfy_reclaim_track11)
+        await core11.admit("assistant-gemma", manifest)
+        assert state11["unloads"] == ["ORN"], state11["unloads"]
+        assert comfy_calls11 == {"idle": 0, "reclaim": 0}, comfy_calls11
+
+        # Reclaim fires once then latches: idle ComfyUI + nothing evictable ->
+        # exactly one comfy_reclaim call across every poll iteration until
+        # the hold deadline (reclaim alone did not free real memory here).
+        clock12 = {"t": 0.0}
+
+        async def sleep12(_s):
+            clock12["t"] += 5.0
+
+        comfy_calls12 = {"idle": 0, "reclaim": 0}
+
+        async def comfy_idle_true12():
+            comfy_calls12["idle"] += 1
+            return True
+
+        async def comfy_reclaim_track12():
+            comfy_calls12["reclaim"] += 1
+            return True
+
+        async def health12():
+            return health_for([])
+
+        core12 = _SchedulerCore(health12, unload3, budget_gb=96,
+                                hold_timeout_s=20, poll_s=0,
+                                clock=lambda: clock12["t"], sleeper=sleep12,
+                                mem_available=lambda: 5.0, swap_free=lambda: 1.0,
+                                comfy_idle=comfy_idle_true12,
+                                comfy_reclaim=comfy_reclaim_track12)
+        try:
+            await core12.admit("qwythos-9b", manifest)
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("expected hold timeout (reclaim alone insufficient)")
+        assert comfy_calls12["reclaim"] == 1, comfy_calls12
+
+        # Degrade open: comfy_idle raising never blocks admission and falls
+        # through to swap-admit exactly as 0012 (no reclaim attempted).
+        async def comfy_idle_raises():
+            raise RuntimeError("comfyui unreachable")
+
+        comfy_calls13 = {"reclaim": 0}
+
+        async def comfy_reclaim_unexpected():
+            comfy_calls13["reclaim"] += 1
+            return True
+
+        state13 = {"loaded": [], "unloads": []}
+
+        async def health13():
+            return health_for(state13["loaded"])
+
+        core13 = _SchedulerCore(health13, unload3, budget_gb=96,
+                                hold_timeout_s=10, poll_s=0,
+                                mem_available=lambda: 8.0, swap_free=lambda: 60.0,
+                                comfy_idle=comfy_idle_raises,
+                                comfy_reclaim=comfy_reclaim_unexpected)
+        await core13.admit("qwythos-9b", manifest)
+        assert comfy_calls13["reclaim"] == 0, comfy_calls13
+        assert state13["unloads"] == []
+
+        COMFY_BASE = orig_comfy_base
 
     asyncio.run(run_async_cases())
     print("scheduler_hook self-test passed")

@@ -63,6 +63,27 @@ Lemonade's model unload policy and Ollama's `OLLAMA_KEEP_ALIVE` are the
 equivalent knobs for those two backends. See the `# ponytail:` comment next
 to `router_settings` in `config.yaml` for the inline pointer.
 
+## Memory scheduler
+
+`etc/aipc/litellm/scheduler_hook.py` is a `litellm_settings.callbacks` pre-call
+hook (0012) gating Lemonade GPU admission on a logical budget ledger plus the
+host's real `MemAvailable`, evicting eligible LLM victims and, failing that,
+admitting via swap rather than holding or OOMing.
+
+0016 adds a step between eviction and swap-admit: if `AIPC_SCHED_COMFY_BASE`
+is set and the ComfyUI at that address reports an empty queue, the scheduler
+asks it to free its cache (`POST /free`) once per admission before falling
+back to swap — cheaper than grinding swap for GTT ComfyUI isn't using right
+now. A busy ComfyUI, an unset/unreachable base, or any `/queue`/`/free` error
+is skipped silently (degrade open); the 0012 evict → swap → hold path is
+unchanged when reclaim doesn't apply. Disabled unless
+`AIPC_SCHED_COMFY_BASE` is uncommented in `quadlet/litellm.container`.
+
+Complementary user-side fix, not owned by this repo: launch `~/ComfyUI` with
+`--cache-none` so it releases models after each workflow instead of
+accumulating a large GTT + CPU-copy footprint. The gateway reclaim above is
+the backstop for when it isn't run that way.
+
 ## Unit placement
 
 `quadlet/litellm.container` is placed by the bootc/ansible renderer into

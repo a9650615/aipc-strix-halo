@@ -30,6 +30,12 @@ Environment=AIPC_SCHED_BUDGET_GB=80
 # 2026-07-12 18:32 kernel OOM (plasmashell/zen/hermes-webui killed) was a
 # ledger-admitted load on a browser-heavy desktop.
 Environment=AIPC_SCHED_HEADROOM_GB=10
+# ComfyUI GTT reclamation (0016): before falling to swap-backed admission,
+# ask an idle ComfyUI to free its cache. Host netns is shared (Network=host
+# above), so 127.0.0.1:8188 reaches the user's ComfyUI. Unset -> disabled,
+# scheduler behaves exactly as 0012. Uncomment to enable.
+# Environment=AIPC_SCHED_COMFY_BASE=http://127.0.0.1:8188
+# Environment=AIPC_SCHED_COMFY_RECLAIM=1
 
 [Service]
 Restart=always
