@@ -235,6 +235,20 @@ Response: 200 {"text": "..."}
   machine, verified installed via the image's package set for the target
   build.
 
+## Bluetooth audio recovery
+
+The user unit `aipc-bluetooth-audio-recover.service` runs once after login.
+It is intentionally a no-op when the paired speaker already has a
+`bluez_output` sink, or when the speaker is not connected. If BlueZ reports a
+paired, connected device but PipeWire has no matching sink, it restarts the
+user audio services, disconnects/reconnects the device, waits for the sink,
+and sets it as default. The default target is the known LG-XT7S address
+`68:52:10:35:29:44`; set `AIPC_BLUETOOTH_AUDIO_MAC` for another speaker.
+
+The WirePlumber routing file keeps Bluetooth preferred when present and the
+built-in analog output ahead of HDMI when Bluetooth is unavailable. It does
+not unconditionally restart audio or delete pairings.
+
 ## Speak only (TTS, no think)
 
 ```sh

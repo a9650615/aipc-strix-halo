@@ -77,4 +77,28 @@ python3 "$timing_lib" >/dev/null || {
     exit 1
 }
 
+bluetooth_recovery="$this_dir/files/etc/aipc/aipc_bluetooth_audio_recover.py"
+python3 -c "import ast; ast.parse(open('$bluetooth_recovery').read())" || {
+    echo "voice-pipecat: Bluetooth recovery syntax error" >&2
+    exit 1
+}
+PYTHONPATH="$this_dir/files/etc/aipc" \
+    python3 "$this_dir/tests/test_bluetooth_audio_recover.py" >/dev/null || {
+    echo "voice-pipecat: Bluetooth recovery tests failed" >&2
+    exit 1
+}
+python3 "$this_dir/files/etc/aipc/aipc-bluetooth-audio-recover" --self-test >/dev/null || {
+    echo "voice-pipecat: Bluetooth recovery self-test failed" >&2
+    exit 1
+}
+
+[ -f "$this_dir/files/usr/lib/systemd/user/aipc-bluetooth-audio-recover.service" ] || {
+    echo "voice-pipecat: missing Bluetooth recovery unit" >&2
+    exit 1
+}
+[ -f "$this_dir/files/etc/wireplumber/wireplumber.conf.d/51-aipc-audio-routing.conf" ] || {
+    echo "voice-pipecat: missing audio routing config" >&2
+    exit 1
+}
+
 exit 0

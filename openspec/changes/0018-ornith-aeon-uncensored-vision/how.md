@@ -26,8 +26,14 @@ vulkan) survived the re-pull; no `recipe_pin` needed.
 | OCR | text inside the red box | `VISION 7291` (exact) | 2.2s |
 | Scene | shapes + colors, left→right | blue circle / red square / green triangle (all correct) | 1.7s |
 
-The abliterate/uncensor fine-tune did **not** degrade vision on these tasks —
-the projector aligns into AEON's embedding space fine. MTP tensors + mmproj +
+Extended pass (2026-07-14, harder tasks, all correct): count 7 scattered dots
+→ 7; 4-line small-text OCR → exact; spatial relation (green circle vs red
+square) → below+right; bar chart A/B/C/D → tallest B, shortest C; tic-tac-toe
+center cell → X (with full grid transcribed).
+
+The abliterate/uncensor fine-tune did **not** degrade vision on any of these —
+the projector aligns into AEON's embedding space fine, including fine-grained
+counting, chart reading, and grid transcription. MTP tensors + mmproj +
 `-np 4` coexist (consistent with the APEX finding, speculative decoding off).
 
 ## Repo edits (this change)
