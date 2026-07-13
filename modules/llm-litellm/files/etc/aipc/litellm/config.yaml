@@ -131,16 +131,15 @@ model_list:
       num_retries: 0
 
   # Ornith-1.0-35B — 35B MoE reasoning + agentic-coding model. Moved from
-  # Ollama to Lemonade (llamacpp:vulkan) 2026-07-05, same reasoning as
-  # coder-agentic above. Default swapped 2026-07-12 again (user-directed)
-  # to SC117's APEX-I-Balanced quant of the original deepreinforce-ai base
-  # (replacing the Heretic decensored quant — stock refusal behaviour is
-  # back). See models.yaml for the tier choice, the MTP -np caveat, the
-  # tool-call re-verification caveat and the idle_unload_after_s: 900
-  # policy.
+  # Ollama to Lemonade (llamacpp:vulkan) 2026-07-05. Default is the uncensored
+  # AEON fine-tune (0018, user-directed, hardware-verified 2026-07-14):
+  # mrexodia's Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M, with SC117
+  # APEX's mmproj-F16.gguf borrowed for vision (same Qwen3.5-35B-A3B base).
+  # See models.yaml for the mmproj graft, the MTP -np caveat and the
+  # idle_unload_after_s: 900 policy.
   - model_name: ornith-35b
     litellm_params:
-      model: openai/Ornith-1.0-35B-MTP-APEX-I-Balanced
+      model: openai/Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M
       api_base: http://127.0.0.1:8001/v1
       api_key: none
       # Hardware-verified 2026-07-12 on this quant: default (thinking) mode

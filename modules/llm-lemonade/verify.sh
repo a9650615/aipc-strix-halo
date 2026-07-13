@@ -29,8 +29,8 @@ printf '%s\n' "$downloaded" | grep -q "qwen3.5-4b-FLM" \
   || fail "llm-lemonade: qwen3.5-4b-FLM not pulled — run 'aipc models sync'"
 printf '%s\n' "$downloaded" | grep -q "Gemma-4-26B-A4B-it-GGUF" \
   || fail "llm-lemonade: Gemma-4-26B-A4B-it-GGUF (coder-agentic) not pulled — run 'aipc models sync'"
-printf '%s\n' "$downloaded" | grep -q "Ornith-1.0-35B-MTP-APEX-I-Balanced" \
-  || fail "llm-lemonade: Ornith-1.0-35B-MTP-APEX-I-Balanced (ornith-35b) not pulled — run 'aipc models sync'"
+printf '%s\n' "$downloaded" | grep -q "Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M" \
+  || fail "llm-lemonade: Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M (ornith-35b) not pulled — run 'aipc models sync'"
 printf '%s\n' "$downloaded" | grep -q "Qwen3.5-122B-A10B-Uncensored-APEX-Compact" \
   || fail "llm-lemonade: Qwen3.5-122B-A10B-Uncensored-APEX-Compact (coder-122b) not pulled — run 'aipc models sync'"
 
@@ -100,7 +100,7 @@ recipe_options=$(podman exec lemonade cat /root/.cache/lemonade/recipe_options.j
 printf '%s' "$recipe_options" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-for key in ('builtin.Gemma-4-26B-A4B-it-GGUF', 'user.Ornith-1.0-35B-MTP-APEX-I-Balanced'):
+for key in ('builtin.Gemma-4-26B-A4B-it-GGUF', 'user.Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M'):
     args = d.get(key, {}).get('llamacpp_args', '')
     if '-np' not in args or '-kvu' not in args:
         sys.exit(1)

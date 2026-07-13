@@ -160,8 +160,8 @@ def self_test() -> None:
     manifest = [
         {"alias": "coder-compact", "model_id": model_id, "idle_unload_after_s": 300,
          "tier": "floating", "size_gb": 2.7},
-        {"alias": "ornith-35b", "model_id": "Ornith-1.0-35B-MTP-APEX-I-Balanced",
-         "idle_unload_after_s": None, "tier": "floating", "size_gb": 26.0},
+        {"alias": "ornith-35b", "model_id": "Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M",
+         "idle_unload_after_s": None, "tier": "floating", "size_gb": 22.0},
     ]
     health = {"all_models_loaded": [
         {"model_name": model_id, "loaded": True, "pinned": False, "last_use": 650_000.0},

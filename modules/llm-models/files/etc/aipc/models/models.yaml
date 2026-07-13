@@ -220,69 +220,56 @@ models:
   # ~58.6 tok/s vs Ollama's ~38.8 tok/s (+51%) for this exact model,
   # tool-calling re-verified structured on the new backend.
   #
-  # Default swapped 2026-07-12 again (user-directed, same day as the
-  # heretic swap): SC117/Ornith-1.0-35B-MTP-APEX-GGUF — APEX MoE-aware
-  # mixed-precision quant of the ORIGINAL deepreinforce-ai/Ornith-1.0-35B
-  # (uploader claims APEX beats Q8_0 perplexity at half the size), with a
-  # baked-in MTP layer (from Qwen3.5-35B-A3B) and an optional vision
-  # mmproj-F16.gguf in the same repo. NOTE this reverts the Heretic
-  # decensoring — refusal behaviour goes back to stock Ornith.
-  # Tier picked: APEX-I-Balanced (uploader's "recommended all-rounder",
-  # 24.2 GiB) — 128GB unified memory fits it alongside coder-agentic
-  # (21.8GB) under max_loaded_models=2. Alternatives in the same repo if
-  # headroom ever matters: I-Quality 21.9 GiB, I-Compact 15.9 GiB,
-  # I-Mini 13.4 GiB.
-  # MTP caveat (NOT hardware-verified): the known Lemonade/llamacpp MTP
-  # constraint is n_parallel=1 (see assistant-gemma above). If the embedded
-  # MTP layer engages and the load fails or complains about -np 4, drop to
-  # -np 1 like assistant-gemma. Tool-call reliability on this quant also
-  # needs the usual streaming tool_calls + multi-turn re-verification
-  # before permanent promotion. idle_unload_after_s below is change 0007's
-  # planned headroom policy for this alias, written now rather than
-  # waiting for 0007 (not yet implemented) to land.
+  # Default is the uncensored AEON fine-tune (0018, user-directed,
+  # hardware-verified 2026-07-14): mrexodia's
+  # Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M GGUF — an uncensored
+  # fine-tune of the ORIGINAL deepreinforce-ai/Ornith-1.0-35B, with a baked-in
+  # MTP layer (from Qwen3.5-35B-A3B). Q4_K_M, ~21.5 GiB; 128GB unified memory
+  # fits it alongside coder-agentic (21.8GB) under max_loaded_models=2.
+  # History: this alias ran SC117's stock APEX-I-Balanced until a live swap to
+  # AEON (for uncensored behaviour) that was never written back — 0018 syncs
+  # the repo to that reality.
   #
-  # Community repo, not Lemonade's built-in catalog — needs the same
-  # user.-prefixed custom registration as coder-agentic/assistant-gemma.
-  # APEX tiers are not standard quant tags, so the checkpoint targets the
-  # exact .gguf file, not a :QUANT ref:
-  #   lemonade pull user.Ornith-1.0-35B-MTP-APEX-I-Balanced \
-  #     --checkpoint main SC117/Ornith-1.0-35B-MTP-APEX-GGUF:Ornith-1.0-35B-MTP-APEX-I-Balanced.gguf \
+  # VISION: the AEON GGUF ships text-only (no mmproj in mrexodia's repo). We
+  # borrow SC117 APEX's mmproj-F16.gguf as the mmproj checkpoint — dimensionally
+  # compatible because AEON and APEX share the Qwen3.5-35B-A3B base (same
+  # n_embd). Hardware-verified 2026-07-14 via litellm ornith-35b: OCR read
+  # "VISION 7291" exactly (2.2s) and a shapes/colors scene correctly (1.7s);
+  # the abliterate fine-tune did not degrade vision. MTP tensors + mmproj +
+  # -np 4 coexist with speculative decoding OFF.
+  #
+  # Community repos, not Lemonade's built-in catalog — both checkpoints need
+  # the user.-prefixed custom registration. mmproj targets the exact .gguf file:
+  #   lemonade pull user.Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M \
+  #     --checkpoint main mrexodia/Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-GGUF:Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M.gguf \
   #     --checkpoint mmproj SC117/Ornith-1.0-35B-MTP-APEX-GGUF:mmproj-F16.gguf \
-  #     --recipe llamacpp --label tool-calling
-  #   lemonade load Ornith-1.0-35B-MTP-APEX-I-Balanced \
+  #     --recipe llamacpp --label tool-calling --label mtp --label vision
+  # (--label custom is rejected by the CLI — it is auto-applied.)
+  #   lemonade load Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M \
   #     --llamacpp vulkan --ctx-size 131072 \
   #     --llamacpp-args "-np 4 -kvu" --save-options
-  # Vision wired 2026-07-12 (user-directed): mmproj-F16.gguf (0.9GB file,
-  # ~1.3GB extra at load). Hardware-verified same day: text 1.0s /
-  # tool_calls 1.4s / vision 256px correct — MTP tensors + mmproj + -np 4
-  # coexist fine when speculative decoding is OFF.
-  # Embedded MTP tested and REJECTED for THIS model 2026-07-12. FAIR re-test
-  # (both -np 1 -kvu, exclusive GPU, orchestrator paused, temp 0, 500 tok —
-  # correcting a first pass that unfairly compared -np 4 baseline vs -np 1
-  # MTP on a loaded box): no-spec 63 tok/s (66.6/61.1/60.8) vs
-  # `--spec-type draft-mtp --spec-draft-n-max 2` 51 tok/s (61.2/51.1/51.1)
-  # — MTP is ~19% SLOWER here, not the 20-50% faster the SC117 card claims.
-  # WHY the card can still be right: it describes the DIFFERENT Qwen3.6-35B
-  # Native-MTP-Preserved model (20 native MTP layers); ornith's APEX quant
-  # carries only 1 MTP layer, too shallow for the draft to beat its own
-  # eval overhead. So this verdict is ornith-specific, NOT a blanket "MTP
-  # loses on Vulkan". To actually chase the card's win, test that
-  # 20-layer Qwen3.6 model (a coder-agentic upgrade candidate), not ornith.
-  # Keep -np 4, no spec flags; draft path stays available for future builds.
+  # MTP caveat (NOT re-verified on AEON): the known Lemonade/llamacpp MTP
+  # constraint is n_parallel=1 (see assistant-gemma). If the embedded MTP layer
+  # fails or complains about -np 4, drop to -np 1. Embedded-MTP speculative
+  # decoding was tested and REJECTED on the APEX quant (only 1 MTP layer, too
+  # shallow to beat its own eval overhead — ~19% slower on Vulkan); keep -np 4,
+  # no spec flags. idle_unload_after_s below is change 0007's headroom policy.
   - alias: ornith-35b
     backend: lemonade
-    model_id: Ornith-1.0-35B-MTP-APEX-I-Balanced
-    size_gb: 26.0
+    model_id: Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M
+    size_gb: 22.0
     idle_unload_after_s: 900
     checkpoints:
-      main: SC117/Ornith-1.0-35B-MTP-APEX-GGUF:Ornith-1.0-35B-MTP-APEX-I-Balanced.gguf
+      main: mrexodia/Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-GGUF:Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M.gguf
       mmproj: SC117/Ornith-1.0-35B-MTP-APEX-GGUF:mmproj-F16.gguf
     recipe: llamacpp
     recipe_options:
       ctx_size: 131072
       llamacpp_backend: vulkan
       llamacpp_args: "-np 4 -kvu"
-    label: tool-calling
+    label:
+      - tool-calling
+      - vision
 
   # Qwythos-9B-Claude-Mythos-5-1M (empero-ai, Q4_K_M GGUF, 5.6GB) — Hermes's
   # decision + tool-call brain (NOT the chat responder). Full-param Qwen3.5-9B
