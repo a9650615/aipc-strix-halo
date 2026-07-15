@@ -371,8 +371,9 @@ def phrase_hit(transcript: str, phrases: list[str]) -> str | None:
                     if "assistant" in _norm(p) and "assist" in an:
                         return p
 
-    # 3) structured: 嘿/嗨/黑 + 助/理/嘴 (not 嘿 alone)
-    if re.search(r"(嘿|嗨|黑)(助|理|嘴|自)", hay) or re.search(
+    # 3) structured: 嘿/嗨/黑 + 助/理/嘴 (not 嘿 alone). 我/咯/咳 accept the
+    # RNNoise-mangled wake word (嘿→我, hw 2026-07-14) so denoise-on still wakes.
+    if re.search(r"(嘿|嗨|黑|我|咯|咳)(助|理|嘴|自)", hay) or re.search(
         r"(hey|hei|hi)(assistant|assist|julie|jarvis)", hay
     ):
         for p in phrases:
@@ -988,9 +989,16 @@ def _calibrate_noise(proc: subprocess.Popen, seconds: float = 1.5) -> float:
         return ENERGY_THRESHOLD
     vals.sort()
     noise = vals[max(0, len(vals) // 5)]
-    # Sit above quiet ambient but leave room for normal speech (~1.5–3× noise).
-    adaptive = max(ENERGY_THRESHOLD, noise * 1.35 + 600.0)
-    adaptive = min(adaptive, max(5500.0, noise + 2800.0), 10000.0)
+    # With RNNoise denoise ON the noise floor is low (~2k) but speech is also
+    # attenuated toward it — measured hw 2026-07-14: ambient ~2182, spoken
+    # 嘿助理 p95 only ~3086. The old 1.35×+600 (=3546) sat ABOVE speech p95, so
+    # the gate almost never opened (3/266 frames > thr). Sit just above ambient
+    # so attenuated speech still trips it; the 1.5s miss-cooldown absorbs the
+    # extra ambient false-opens cleanly. Tunable: AIPC_WAKE_CALIB_RATIO / _OFFSET.
+    ratio = float(os.environ.get("AIPC_WAKE_CALIB_RATIO", "1.15"))
+    offset = float(os.environ.get("AIPC_WAKE_CALIB_OFFSET", "100.0"))
+    adaptive = max(ENERGY_THRESHOLD, noise * ratio + offset)
+    adaptive = min(adaptive, max(4000.0, noise + 1800.0), 8000.0)
 
     print(
         f"aipc-voice-wake: calibrated noise_rms={noise:.0f} "
@@ -1090,7 +1098,7 @@ def run_phrase_loop() -> int:
         last_submit_usable = False
         if reason:
             print(f"aipc-voice-wake: follow-up closed ({reason})", flush=True)
-        if hide and was:
+        if hide:
             # No "请再说" linger — go straight to idle hide.
             _ux("listening", force=True)
 
@@ -1220,9 +1228,14 @@ def run_phrase_loop() -> int:
                 force=True,
             )
 
-    # ponytail: rollback escape hatch for the turn-state contract below —
-    # default off; set truthy to restore "open follow-up on every answer".
-    _FOLLOWUP_ALWAYS = os.environ.get("AIPC_WAKE_FOLLOWUP_ALWAYS", "").strip().lower() in (
+    # Default ON (2026-07-14): the rc==3 (expect_reply) turn-state contract was
+    # dead in practice — 0 follow-up opens in 12h of journal, so every reply
+    # ended the turn and the user had to re-wake/PTT to continue (回覆後不給再
+    # 回覆). _begin_followup() opens a SHORT, silence-closed window (~3s of
+    # quiet dismisses it), not the old 60s+30s "always listening" the user
+    # rejected before. A real farewell still short-circuits via rc=2 above.
+    # Set AIPC_WAKE_FOLLOWUP_ALWAYS=0 to revert to rc==3-only.
+    _FOLLOWUP_ALWAYS = os.environ.get("AIPC_WAKE_FOLLOWUP_ALWAYS", "1").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -1883,13 +1896,32 @@ def run_phrase_loop() -> int:
                     if text and not hit:
                         # Quiet miss — no overlay spam; raise thr / cooldown if spammy
                         miss_streak += 1
+                        # Misses while media plays are music/bleed hearing 「。」,
+                        # not real speech failing. Raising energy_thr on those races
+                        # it past human voice and deafens wake (root of 喚不醒,
+                        # hw 2026-07-14: 152 gate-opens, 0 wake hits, all playback).
+                        _miss_in_playback = _playback_active(include_tts=False)
                         if miss_streak >= 3:
-                            # Cap 7500: 12000 made command start deaf (thr raced past voice).
-                            energy_thr = min(max(energy_thr * 1.08, energy_thr + 200), 7500)
-                            last_wake_check = time.monotonic() + min(4.0, COOLDOWN_S)
+                            if not _miss_in_playback:
+                                # Cap 7500: 12000 made command start deaf.
+                                energy_thr = min(
+                                    max(energy_thr * 1.08, energy_thr + 200), 7500
+                                )
+                            # ponytail: the old `now + min(4,COOLDOWN_S)` set a
+                            # FUTURE timestamp; the gate check then blacked the
+                            # mic out for ~10-12s, ignoring real speech the whole
+                            # time. A miss is STT hearing noise, not a wake — a
+                            # short cooldown just stops re-firing on the same burst.
+                            _miss_cd = float(
+                                os.environ.get("AIPC_WAKE_MISS_COOLDOWN_S", "1.5")
+                            )
+                            last_wake_check = time.monotonic() - max(
+                                0.0, COOLDOWN_S - _miss_cd
+                            )
                             print(
                                 f"aipc-voice-wake: miss streak={miss_streak} "
-                                f"thr→{energy_thr:.0f} cooldown+",
+                                f"thr→{energy_thr:.0f} cooldown≤{_miss_cd:.1f}s"
+                                f"{' (playback: no thr raise)' if _miss_in_playback else ''}",
                                 flush=True,
                             )
                         if voice_ux:
@@ -2133,14 +2165,25 @@ def run_phrase_loop() -> int:
             if high < ENERGY_FRAMES or (now - last_wake_check) < COOLDOWN_S:
                 continue
 
-            # Final playback re-check: media just started → don't open wake STT on bleed
-            if ECHO_GATE and _playback_active(include_tts=False) and rms < gate_thr * 1.05:
+            # Final playback re-check: while media plays the mic is full of music
+            # (logs: 12-18k RMS → STT hears only 「。」). The old 1.05× bar still
+            # fired STT on loud music, burning cycles and feeding the miss spiral
+            # that deafened wake. Only attempt wake STT on energy clearly above
+            # the gate — likely voice-over-music; sustained music is skipped.
+            _pb_gate_ratio = float(
+                os.environ.get("AIPC_WAKE_PLAYBACK_GATE_RATIO", "1.4")
+            )
+            if (
+                ECHO_GATE
+                and _playback_active(include_tts=False)
+                and rms < gate_thr * _pb_gate_ratio
+            ):
                 high = 0
                 if now - playback_gate_log_t > 8.0:
                     playback_gate_log_t = now
                     print(
                         f"aipc-voice-wake: playback gate (skip wake STT) "
-                        f"rms={rms:.0f} thr={gate_thr:.0f}",
+                        f"rms={rms:.0f} thr={gate_thr:.0f} ratio={_pb_gate_ratio:.2f}",
                         flush=True,
                     )
                 continue
