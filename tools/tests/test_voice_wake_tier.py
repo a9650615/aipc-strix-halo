@@ -95,6 +95,25 @@ def test_junk_capture_reprompt_once_when_intentional(wake):
     assert wake.junk_capture_action(intentional=False, reprompt_used=0) == "idle"
 
 
+def test_next_mode_after_empty_capture_wiring(wake):
+    """Live loop must leave command on idle; stay command on reprompt.
+
+    Regression: idle only cleared UX and left mode=command → start-timeout loop.
+    """
+    assert wake.next_mode_after_empty_capture("reprompt") == "command"
+    assert wake.next_mode_after_empty_capture("idle") == "listen"
+    # Full intentional path: first junk → reprompt/command; second → idle/listen
+    a1 = wake.junk_capture_action(intentional=True, reprompt_used=0)
+    assert a1 == "reprompt"
+    assert wake.next_mode_after_empty_capture(a1) == "command"
+    a2 = wake.junk_capture_action(intentional=True, reprompt_used=1)
+    assert a2 == "idle"
+    assert wake.next_mode_after_empty_capture(a2) == "listen"
+    # Non-intentional (follow-up noise): immediate listen
+    a0 = wake.junk_capture_action(intentional=False, reprompt_used=0)
+    assert wake.next_mode_after_empty_capture(a0) == "listen"
+
+
 def test_end_to_end_decision_matrix(wake):
     """Drive classify → score → decide like the live wake path."""
     # ambient STT particle + weak pcm → no arm

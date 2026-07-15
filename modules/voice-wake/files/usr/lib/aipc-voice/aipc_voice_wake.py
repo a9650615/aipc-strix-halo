@@ -596,6 +596,17 @@ def junk_capture_action(
     return "idle"
 
 
+def next_mode_after_empty_capture(action: str) -> str:
+    """Mic loop mode after empty/junk handling (shipped policy for live wiring).
+
+    reprompt keeps command capture open; idle must return to listen or
+    start-timeout re-fires every frame while mode stays command.
+    """
+    if action == "reprompt":
+        return "command"
+    return "listen"
+
+
 def _desktop_user_env() -> dict[str, str]:
     """Inject the active graphical session so TTS/notify path works."""
     import pwd
@@ -1323,7 +1334,7 @@ def run_phrase_loop() -> int:
 
     def _drop_empty_capture(reason: str) -> None:
         """Empty/junk after command: intentional → REPROMPT once; else idle hide."""
-        nonlocal followup_junk, session_intentional, reprompt_used
+        nonlocal followup_junk, session_intentional, reprompt_used, mode
         followup_junk += 1
         action = junk_capture_action(
             intentional=session_intentional,
@@ -1347,8 +1358,10 @@ def run_phrase_loop() -> int:
             )
             _ux("recording", force=True)
             _rearm_command_capture()
+            mode = next_mode_after_empty_capture(action)  # "command"
             return
-        # Follow-up noise / second intentional fail: silent idle (no more spam)
+        # Idle: must leave command mode or start-timeout re-fires every frame.
+        mode = next_mode_after_empty_capture(action)  # "listen"
         _clear_followup(reason, hide=True)
 
     def _audio_front_ignore(wav_path: str) -> bool:
@@ -2661,6 +2674,8 @@ def _self_test() -> int:
     assert junk_capture_action(intentional=True, reprompt_used=0) == "reprompt"
     assert junk_capture_action(intentional=True, reprompt_used=1) == "idle"
     assert junk_capture_action(intentional=False, reprompt_used=0) == "idle"
+    assert next_mode_after_empty_capture("reprompt") == "command"
+    assert next_mode_after_empty_capture("idle") == "listen"
     # synthetic speech-shaped PCM scores above click
     frame = SAMPLE_RATE * FRAME_MS // 1000
     silence = struct.pack("<h", 0) * frame
