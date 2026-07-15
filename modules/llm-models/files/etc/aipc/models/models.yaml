@@ -154,7 +154,7 @@ models:
     revision: dc1e5523d5924b641adb0fabb4ecde27fc261b0b
     recipe: llamacpp
     recipe_options:
-      ctx_size: 65536  # work profile; 131k reserved for long later
+      ctx_size: 98304  # ~96k: long sessions need room; 131k thrash on UMA  # work profile; 131k reserved for long later
       llamacpp_backend: vulkan
       llamacpp_args: "-np 1 -kvu --spec-type draft-mtp --spec-draft-n-max 2 --no-warmup"
     label: tool-calling
@@ -268,7 +268,7 @@ models:
       mmproj: SC117/Ornith-1.0-35B-MTP-APEX-GGUF:mmproj-F16.gguf
     recipe: llamacpp
     recipe_options:
-      ctx_size: 65536
+      ctx_size: 98304  # ~96k: long sessions need room; 131k thrash on UMA
       llamacpp_backend: vulkan
       llamacpp_args: "-np 4 -kvu"
     label:
