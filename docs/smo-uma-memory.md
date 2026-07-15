@@ -74,3 +74,14 @@ Hermes default is `coder-agentic` → LiteLLM `:4000` → Lemonade Vulkan.
 | Background chat/classify/learn | `resident-small` NPU | drop-in `zzzz-smo-memory-guard` |
 
 Do **not** set Hermes default to blocked models (assistant-gemma/ornith).
+
+## Load-wait (ready before forward)
+
+SMO now `POST /api/v1/load` and polls health until the target GPU model is
+present before returning from `admit`. Evidence: Hermes `coder-compact` raced
+to chat before lemond finished auto-load → 500 "No model loaded".
+
+## Switch rate-limit default 0
+
+With GPU allowlist blocking casual mid models, a 5–30s switch delay only
+hurt Hermes compact↔agentic. Default `AIPC_SCHED_MIN_GPU_SWITCH_S=0`.

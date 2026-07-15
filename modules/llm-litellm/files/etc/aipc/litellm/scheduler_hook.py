@@ -59,7 +59,7 @@ GPU_ALLOW = {a.strip() for a in _GPU_ALLOW_RAW.split(",") if a.strip()}
 # Exclusive 122B bypasses. 0 disables.
 # Mild anti-storm only; blocked aliases already 403. Hermes needs free
 # compact↔agentic switches; 30s was too harsh once allowlist is on.
-MIN_GPU_SWITCH_S = float(os.environ.get("AIPC_SCHED_MIN_GPU_SWITCH_S", "5"))
+MIN_GPU_SWITCH_S = float(os.environ.get("AIPC_SCHED_MIN_GPU_SWITCH_S", "0"))
 # Workhorse (Hermes default) is never delayed by switch rate-limit.
 _WORKHORSE_RAW = os.environ.get("AIPC_SCHED_WORKHORSE", "coder-agentic")
 WORKHORSE = {a.strip() for a in _WORKHORSE_RAW.split(",") if a.strip()}
@@ -213,6 +213,7 @@ class _SchedulerCore:
         self,
         fetch_health,
         post_unload,
+        post_load=None,
         budget_gb=BUDGET_GB,
         cooldown_s=COOLDOWN_S,
         hold_timeout_s=HOLD_TIMEOUT_S,
@@ -233,6 +234,7 @@ class _SchedulerCore:
     ):
         self.fetch_health = fetch_health
         self.post_unload = post_unload
+        self.post_load = post_load if post_load is not None else _http_load
         self.budget_gb = budget_gb
         self.cooldown_s = cooldown_s
         self.hold_timeout_s = hold_timeout_s
@@ -391,6 +393,24 @@ class _SchedulerCore:
                         f"gtt={self.gtt_used()} loaded={[m['model_id'] for m in loaded]}",
                         flush=True,
                     )
+                    # Explicit load + wait-ready: forwarding before lemond finishes
+                    # auto-load races to "No model loaded" (Hermes compact 500).
+                    print(f"[smo] load {target['model_id']} for {alias}", flush=True)
+                    await self.post_load(target["model_id"])
+                    while self.clock() <= deadline:
+                        health = await self.fetch_health()
+                        if health is None:
+                            return  # degrade open mid-load
+                        loaded = gpu_loaded(health, manifest)
+                        if any(m["model_id"] == target["model_id"] for m in loaded):
+                            print(f"[smo] ready {alias}", flush=True)
+                            break
+                        await self.sleeper(self.poll_s)
+                    else:
+                        raise TimeoutError(
+                            f"SMO: load timeout for {alias} "
+                            f"({target['model_id']})"
+                        )
                     break
                 victim = pick_victim(
                     loaded, target, self.admitted_at, self.clock(), self.cooldown_s
@@ -457,6 +477,26 @@ async def _http_unload(model_id: str) -> None:
         pass
 
 
+async def _http_load(model_id: str) -> None:
+    """Ask Lemonade to load a model; ignore errors (poll health for readiness)."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=180) as client:
+            # v1 load is used by ensure-resident-small; v0 may alias.
+            resp = await client.post(
+                f"{LEMONADE_BASE}/api/v1/load",
+                json={"model_name": model_id},
+            )
+            if resp.status_code >= 400:
+                await client.post(
+                    f"{LEMONADE_BASE}/api/v0/load",
+                    json={"model_name": model_id},
+                )
+    except Exception:
+        pass
+
+
 async def _http_comfy_idle() -> bool:
     if not COMFY_BASE:
         return False
@@ -497,7 +537,7 @@ except ImportError:
 
 class MemoryScheduler(CustomLogger):
     def __init__(self):
-        self.core = _SchedulerCore(_http_health, _http_unload)
+        self.core = _SchedulerCore(_http_health, _http_unload, _http_load)
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         if call_type not in ("completion", "acompletion", "text_completion"):
@@ -577,7 +617,7 @@ def self_test() -> None:
 
     async def run_async_cases():
         # 122B: must clear ALL others (single exclusive slot).
-        state = {"loaded": ["Q36", "ORN", "G26", "QW9"], "unloads": []}
+        state = {"loaded": ["Q36", "ORN", "G26", "QW9"], "unloads": [], "loads": []}
 
         async def fake_health():
             return health_for(state["loaded"])
@@ -586,15 +626,21 @@ def self_test() -> None:
             state["unloads"].append(model_id)
             state["loaded"].remove(model_id)
 
+        async def fake_load(model_id):
+            state["loads"].append(model_id)
+            if model_id not in state["loaded"]:
+                state["loaded"].append(model_id)
+
         core = _SchedulerCore(
-            fake_health, fake_unload, budget_gb=80,
+            fake_health, fake_unload, fake_load, budget_gb=80,
             hold_timeout_s=10, poll_s=0,
             mem_available=lambda: 999.0, gtt_used=lambda: 5.0,
             allow_swap_admit=False,
         )
         await core.admit("coder-122b", manifest)
         assert set(state["unloads"]) == {"ORN", "Q36", "G26", "QW9"}, state["unloads"]
-        assert state["loaded"] == []
+        assert state["loads"] == ["Q122"], state["loads"]
+        assert state["loaded"] == ["Q122"], state["loaded"]
 
         # Fast path: already alone.
         state2 = {"loaded": ["Q122"], "unloads": []}
@@ -623,14 +669,19 @@ def self_test() -> None:
             state5["unloads"].append(model_id)
             state5["loaded"].remove(model_id)
 
+        async def load5(model_id):
+            if model_id not in state5["loaded"]:
+                state5["loaded"].append(model_id)
+
         core5 = _SchedulerCore(
-            health5, unload5, budget_gb=80,
+            health5, unload5, load5, budget_gb=80,
             hold_timeout_s=10, poll_s=0,
             mem_available=lambda: 50.0, gtt_used=lambda: 20.0,
             allow_swap_admit=False,
         )
         await core5.admit("coder-agentic", manifest)
         assert state5["unloads"] == ["ORN"], state5["unloads"]
+        assert "Q36" in state5["loaded"]
 
         # Hold: in-use exclusive blocks agent.
         state3 = {"loaded": ["Q122"], "unloads": []}
@@ -716,8 +767,17 @@ def self_test() -> None:
             raise AssertionError("swap admit must be off by default")
 
         # Swap-admit ON only for tiny models: still requires slot ok.
+        loaded8b = {"ids": []}
+
+        async def health8b():
+            return health_for(loaded8b["ids"])
+
+        async def load8b(mid):
+            if mid not in loaded8b["ids"]:
+                loaded8b["ids"].append(mid)
+
         core8b = _SchedulerCore(
-            health_empty, unload3, budget_gb=80,
+            health8b, unload3, load8b, budget_gb=80,
             hold_timeout_s=10, poll_s=0,
             mem_available=lambda: 13.0, swap_free=lambda: 60.0,
             gtt_used=lambda: 1.0, ram_floor_gb=12.0,
@@ -751,8 +811,17 @@ def self_test() -> None:
             raise AssertionError("exclusive must not swap-admit")
 
         # Broken meminfo degrades to ledger+slot only.
+        loaded7 = {"ids": []}
+
+        async def health7():
+            return health_for(loaded7["ids"])
+
+        async def load7(mid):
+            if mid not in loaded7["ids"]:
+                loaded7["ids"].append(mid)
+
         core7 = _SchedulerCore(
-            health_empty, unload3, budget_gb=80,
+            health7, unload3, load7, budget_gb=80,
             mem_available=lambda: None, gtt_used=lambda: None,
             allow_swap_admit=False,
         )
@@ -854,8 +923,17 @@ def self_test() -> None:
         async def unload_noop(_m):
             pass
 
+        loaded_a = {"ids": []}
+
+        async def health_a():
+            return health_for(loaded_a["ids"])
+
+        async def load_a(mid):
+            if mid not in loaded_a["ids"]:
+                loaded_a["ids"].append(mid)
+
         core = _SchedulerCore(
-            health_empty, unload_noop, budget_gb=80,
+            health_a, unload_noop, load_a, budget_gb=80,
             mem_available=lambda: 999.0, gtt_used=lambda: 1.0,
             allow_swap_admit=False,
         )
