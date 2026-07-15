@@ -46,3 +46,17 @@ Use only via gateway alias `coder-122b`. Work ctx **65536**. Expect unload of ag
 | `coder-agentic` chat | HTTP 200; GPU = Qwen3.6-35B only |
 | `coder-122b` chat | HTTP 200; GPU = 122B only (agentic unloaded) |
 | Isolation | `PASS ok_one ok_122 ok_no_mid` |
+
+## Anti-casual-load (service thrash guard)
+
+Background services (voice/agent/learn) previously cold-loaded `assistant-gemma`,
+`qwythos-9b`, and `ornith-35b` on every chat. That is now blocked:
+
+| Layer | Control |
+|-------|---------|
+| LiteLLM SMO | `AIPC_SCHED_GPU_ALLOW=coder-agentic,coder-compact,coder-122b` — others → HTTP 403 |
+| LiteLLM SMO | `AIPC_SCHED_MIN_GPU_SWITCH_S=30` — rapid multi-model switching → 503 |
+| Agent drop-in | `zzzz-smo-memory-guard.conf` — supervisor/classifier/learn → `resident-small` |
+| Hermes | `discover_models: false` |
+
+Expand allowlist only deliberately (e.g. temporary `ornith-35b` for research).

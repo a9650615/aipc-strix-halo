@@ -45,6 +45,19 @@ GTT_BUDGET_GB = float(os.environ.get("AIPC_SCHED_GTT_BUDGET_GB", "70"))
 ALLOW_SWAP_ADMIT = os.environ.get("AIPC_SCHED_ALLOW_SWAP_ADMIT", "0") not in ("0", "")
 # Even if swap admit is on, never use it for models larger than this (GiB).
 SWAP_ADMIT_MAX_SIZE_GB = float(os.environ.get("AIPC_SCHED_SWAP_ADMIT_MAX_SIZE_GB", "8"))
+# GPU aliases that may be *loaded* by any client. Everything else is refused
+# at the gateway so background services cannot thrash UMA by casually
+# warming assistant-gemma / ornith / qwythos. Comma-separated; empty = allow all
+# (escape hatch). Default is the deliberate work set only.
+# NPU resident-small is not in this list (pool=npu, SMO skips it).
+_GPU_ALLOW_RAW = os.environ.get(
+    "AIPC_SCHED_GPU_ALLOW",
+    "coder-agentic,coder-compact,coder-122b",
+)
+GPU_ALLOW = {a.strip() for a in _GPU_ALLOW_RAW.split(",") if a.strip()}
+# Min seconds between switching to a *different* GPU model (anti-storm).
+# Exclusive 122B bypasses. 0 disables.
+MIN_GPU_SWITCH_S = float(os.environ.get("AIPC_SCHED_MIN_GPU_SWITCH_S", "30"))
 COMFY_BASE = os.environ.get("AIPC_SCHED_COMFY_BASE")
 COMFY_RECLAIM = os.environ.get("AIPC_SCHED_COMFY_RECLAIM", "1") not in ("0", "")
 
@@ -237,6 +250,9 @@ class _SchedulerCore:
         self.lock = asyncio.Lock()
         self.admitted_at: dict[str, float] = {}
         self._comfy_reclaimed = False
+        self._last_gpu_alias: str | None = None
+        self._last_gpu_admit_at: float = 0.0
+        self.min_gpu_switch_s = MIN_GPU_SWITCH_S
 
     def _slot_ok(self, loaded: list[dict], target: dict) -> bool:
         """GPU pool has room for target under MAX_GPU / exclusive rules."""
@@ -310,10 +326,20 @@ class _SchedulerCore:
             return False
 
     async def admit(self, alias: str, manifest: dict[str, dict]) -> None:
-        """Return when `alias` may be forwarded; raise TimeoutError on hold expiry."""
+        """Return when `alias` may be forwarded; raise TimeoutError on hold expiry.
+
+        PermissionError: alias not in GPU_ALLOW (service thrash guard).
+        """
         target = manifest.get(alias)
         if target is None:
             return
+        # Service thrash guard: only deliberate GPU aliases may load.
+        if GPU_ALLOW and alias not in GPU_ALLOW:
+            raise PermissionError(
+                f"SMO: GPU model {alias!r} is not in allowlist "
+                f"{sorted(GPU_ALLOW)}; background services must use "
+                f"resident-small (NPU). Set AIPC_SCHED_GPU_ALLOW to expand."
+            )
         health = await self.fetch_health()
         if health is None:
             return  # degrade open
@@ -336,6 +362,22 @@ class _SchedulerCore:
                 already = any(m["model_id"] == target["model_id"] for m in loaded)
                 if already and self._slot_ok(loaded, target):
                     break
+                # Anti-storm: refuse rapid switches between different GPU models
+                # (voice+hermes+agent racing). Exclusive bypasses.
+                if (
+                    not already
+                    and target["tier"] != TIER_EXCLUSIVE
+                    and self.min_gpu_switch_s > 0
+                    and self._last_gpu_alias
+                    and self._last_gpu_alias != alias
+                    and (self.clock() - self._last_gpu_admit_at) < self.min_gpu_switch_s
+                ):
+                    raise TimeoutError(
+                        f"SMO: GPU switch rate-limit "
+                        f"({self._last_gpu_alias!r} -> {alias!r} within "
+                        f"{self.min_gpu_switch_s:.0f}s); retry later or use "
+                        f"resident-small"
+                    )
                 if not already and self._fits(loaded, target):
                     print(
                         f"[smo] admit {alias} size={target['size_gb']}Gi "
@@ -370,7 +412,10 @@ class _SchedulerCore:
                         f"gtt_budget={self.gtt_budget_gb}GB "
                         f"loaded={[m['model_id'] for m in loaded]}"
                     )
-            self.admitted_at[target["model_id"]] = self.clock()
+            now = self.clock()
+            self.admitted_at[target["model_id"]] = now
+            self._last_gpu_alias = alias
+            self._last_gpu_admit_at = now
 
 
 def _load_manifest_file(path: Path) -> dict[str, dict]:
@@ -457,6 +502,10 @@ class MemoryScheduler(CustomLogger):
         manifest = _load_manifest_file(MANIFEST_PATH)
         try:
             await self.core.admit(alias, manifest)
+        except PermissionError as exc:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=403, detail=str(exc))
         except TimeoutError as exc:
             from fastapi import HTTPException
 
@@ -468,6 +517,10 @@ scheduler = MemoryScheduler()
 
 
 def self_test() -> None:
+    # Self-test uses many aliases; clear allowlist for core cases then
+    # re-enable for the allowlist-specific check at the end.
+    global GPU_ALLOW
+    GPU_ALLOW = set()  # allow all during unit tests
     manifest = parse_manifest({"models": [
         {"alias": "coder-122b", "backend": "lemonade",
          "model_id": "Q122", "size_gb": 59.2, "tier": "exclusive"},
@@ -783,6 +836,33 @@ def self_test() -> None:
         COMFY_BASE = orig_comfy_base
 
     asyncio.run(run_async_cases())
+
+    # Allowlist: assistant-gemma blocked by default GPU_ALLOW.
+    prev_allow = GPU_ALLOW
+    GPU_ALLOW = {"coder-agentic", "coder-122b"}
+
+    async def allow_cases():
+        async def health_empty():
+            return health_for([])
+
+        async def unload_noop(_m):
+            pass
+
+        core = _SchedulerCore(
+            health_empty, unload_noop, budget_gb=80,
+            mem_available=lambda: 999.0, gtt_used=lambda: 1.0,
+            allow_swap_admit=False,
+        )
+        try:
+            await core.admit("assistant-gemma", manifest)
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("expected PermissionError for blocked alias")
+        await core.admit("coder-agentic", manifest)
+
+    asyncio.run(allow_cases())
+    GPU_ALLOW = prev_allow
     print("scheduler_hook self-test passed (SMO)")
 
 
