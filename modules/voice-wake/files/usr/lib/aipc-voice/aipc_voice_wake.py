@@ -328,6 +328,17 @@ def phrase_hit(transcript: str, phrases: list[str]) -> str | None:
     from difflib import SequenceMatcher
 
     hay = _norm(transcript)
+    # SenseVoice STT mis-recognises the spoken wake word 嘿助理 as 我。 — and
+    # does so IDENTICALLY on raw and denoised paths (hw A/B 2026-07-16: both
+    # → 我。), so this is an STT-model issue, not denoise. The mapping is stable,
+    # so accept the mangled form. Restricted to captures that normalise to
+    # essentially just this token (no other content) — a real command like
+    # 我要查... stays longer and won't match here, keeping false wakes low.
+    _MANGLED_WAKE = {"我", "我呀", "我啊", "嘿", "嗨", "黑", "咯"}
+    if hay in _MANGLED_WAKE:
+        for p in phrases:
+            if "助理" in _norm(p) or "assistant" in _norm(p).lower():
+                return p
     if not hay or len(hay) < 2:
         return None
 
