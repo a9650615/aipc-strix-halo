@@ -107,3 +107,10 @@ is empty (allow all registered aliases). Gates:
 - exclusive 122B still alone; lemonade `max_loaded_models=3` (NPU+2 GPU)
 
 Hard allowlist is optional emergency only.
+
+## Keep-warm idle unload (2026-07-16)
+
+`lemonade-idle-release` skips unload when `MemAvailable >= 25Gi`
+(`AIPC_IDLE_KEEP_WARM_MEM_FLOOR_GB`). Work models use longer
+`idle_unload_after_s` (agentic/ornith 2h) so they are only ejected when
+RAM is actually tight, not on a short timer while free memory remains.
