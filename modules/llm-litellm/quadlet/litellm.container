@@ -30,6 +30,7 @@ Environment=AIPC_SCHED_ALLOW_SWAP_ADMIT=0
 # Blocks voice/agent casual loads of assistant-gemma/ornith/qwythos.
 Environment=AIPC_SCHED_MIN_GPU_SWITCH_S=0
 Environment=AIPC_SCHED_WORKHORSE=coder-agentic
+Environment=AIPC_SCHED_LOAD_TIMEOUT_S=180
 # ComfyUI GTT reclamation (0016): before hold, ask idle ComfyUI to free cache.
 Environment=AIPC_SCHED_COMFY_BASE=http://127.0.0.1:8188
 Environment=AIPC_SCHED_COMFY_RECLAIM=1

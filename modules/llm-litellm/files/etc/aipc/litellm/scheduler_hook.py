@@ -31,6 +31,8 @@ LEMONADE_BASE = os.environ.get("AIPC_SCHED_LEMONADE", "http://127.0.0.1:8001")
 BUDGET_GB = float(os.environ.get("AIPC_SCHED_BUDGET_GB", "80"))
 COOLDOWN_S = float(os.environ.get("AIPC_SCHED_COOLDOWN_S", "120"))
 HOLD_TIMEOUT_S = float(os.environ.get("AIPC_SCHED_HOLD_TIMEOUT_S", "900"))
+# Max seconds to wait for a single lemonade load (prevents global admit lock hang).
+LOAD_TIMEOUT_S = float(os.environ.get("AIPC_SCHED_LOAD_TIMEOUT_S", "180"))
 POLL_S = float(os.environ.get("AIPC_SCHED_POLL_S", "2"))
 # Real-memory headroom: admit only if MemAvailable >= size + headroom.
 HEADROOM_GB = float(os.environ.get("AIPC_SCHED_HEADROOM_GB", "12"))
@@ -404,10 +406,14 @@ class _SchedulerCore:
                     # auto-load races to "No model loaded" (Hermes compact 500).
                     print(f"[smo] load {target['model_id']} for {alias}", flush=True)
                     await self.post_load(target["model_id"])
-                    while self.clock() <= deadline:
+                    load_deadline = min(deadline, self.clock() + LOAD_TIMEOUT_S)
+                    while self.clock() <= load_deadline:
                         health = await self.fetch_health()
                         if health is None:
-                            return  # degrade open mid-load
+                            # backend blip: do not hold lock forever
+                            raise TimeoutError(
+                                f"SMO: lemonade health lost while loading {alias}"
+                            )
                         loaded = gpu_loaded(health, manifest)
                         if any(m["model_id"] == target["model_id"] for m in loaded):
                             print(f"[smo] ready {alias}", flush=True)
@@ -415,7 +421,7 @@ class _SchedulerCore:
                         await self.sleeper(self.poll_s)
                     else:
                         raise TimeoutError(
-                            f"SMO: load timeout for {alias} "
+                            f"SMO: load timeout ({LOAD_TIMEOUT_S:.0f}s) for {alias} "
                             f"({target['model_id']})"
                         )
                     break
@@ -425,6 +431,19 @@ class _SchedulerCore:
                 if victim is not None:
                     print(f"[smo] unload {victim} for {alias}", flush=True)
                     await self.post_unload(victim)
+                    # Wait until victim actually leaves health (bounded).
+                    u_deadline = self.clock() + min(60.0, LOAD_TIMEOUT_S)
+                    while self.clock() <= u_deadline:
+                        health = await self.fetch_health()
+                        if health is None:
+                            break
+                        still = any(
+                            m["model_id"] == victim
+                            for m in gpu_loaded(health, manifest)
+                        )
+                        if not still:
+                            break
+                        await self.sleeper(self.poll_s)
                 elif not self._comfy_reclaimed and await self._try_comfy_reclaim():
                     self._comfy_reclaimed = True
                     print(
