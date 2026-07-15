@@ -52,7 +52,7 @@ SWAP_ADMIT_MAX_SIZE_GB = float(os.environ.get("AIPC_SCHED_SWAP_ADMIT_MAX_SIZE_GB
 # NPU resident-small is not in this list (pool=npu, SMO skips it).
 _GPU_ALLOW_RAW = os.environ.get(
     "AIPC_SCHED_GPU_ALLOW",
-    "coder-agentic,coder-compact,coder-122b",
+    "coder-agentic,coder-compact,coder-122b,ornith-35b,vlm-qwen2vl",
 )
 GPU_ALLOW = {a.strip() for a in _GPU_ALLOW_RAW.split(",") if a.strip()}
 # Min seconds between switching to a *different* GPU model (anti-storm).

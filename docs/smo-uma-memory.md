@@ -85,3 +85,12 @@ to chat before lemond finished auto-load → 500 "No model loaded".
 
 With GPU allowlist blocking casual mid models, a 5–30s switch delay only
 hurt Hermes compact↔agentic. Default `AIPC_SCHED_MIN_GPU_SWITCH_S=0`.
+
+## Imagine Chat product path (2026-07-16)
+
+`Projects/chat_comfyUI` defaults `IMAGINE_LLM_MODEL=ornith-35b` and may set
+`IMAGINE_LLM_VISION_MODEL=vlm-qwen2vl`. Those are intentional product loads,
+not casual voice/agent warmups. After agent skill-learn/supervisor moved to
+NPU `resident-small`, allowlist includes `ornith-35b` and `vlm-qwen2vl` so
+Imagine Web stops getting HTTP 403 while still blocking `assistant-gemma` /
+`qwythos-9b` casual classifier/chat paths.
