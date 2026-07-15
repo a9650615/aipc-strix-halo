@@ -17,26 +17,15 @@ Volume=/etc/aipc/litellm/scheduler_hook.py:/app/scheduler_hook.py:ro,Z
 Volume=/etc/aipc/models/models.yaml:/app/models.yaml:ro,Z
 Exec=--config /app/config.yaml --host 127.0.0.1 --port 4000
 EnvironmentFile=/etc/aipc/env.d/llm-litellm/cloud-keys.env
-# Scheduler tunables (defaults live in scheduler_hook.py; override here).
-# Budget: GTT ceiling is 122GiB, but hardware-observed 2026-07-12 the
-# non-model working set (desktop + hermes + services) runs ~47GB, so 96
-# would let ornith+coder-122b coexist and OOM real RAM. 80 forces the
-# scheduler to evict down to the 122B + small residents during coding
-# sessions (user directive: never OOM; swap acceptable).
+# SMO tunables (defaults in scheduler_hook.py). 2026-07-16 complete fix:
+# single GPU slot, no swap-admit, real MemAvailable + GTT gates.
 Environment=AIPC_SCHED_BUDGET_GB=80
-# Real-memory gate headroom (see scheduler_hook.py): admission additionally
-# requires host MemAvailable >= model size + this, because the static
-# budget cannot see the desktop's actual (spiky) working set — the
-# 2026-07-12 18:32 kernel OOM (plasmashell/zen/hermes-webui killed) was a
-# ledger-admitted load on a browser-heavy desktop.
-Environment=AIPC_SCHED_HEADROOM_GB=10
-# ComfyUI GTT reclamation (0016): before falling to swap-backed admission,
-# ask an idle ComfyUI to free its cache. Host netns is shared (Network=host
-# above), so 127.0.0.1:8188 reaches the user's ComfyUI. Unset -> disabled,
-# scheduler behaves exactly as 0012. Hardware-verified 2026-07-14 (tasks
-# 2.1-2.3): reclaim fires exactly once before a blocked admission, is
-# skipped while ComfyUI's queue is non-empty, and degrades open (falls to
-# swap-admit/hold as 0012) when ComfyUI is unreachable.
+Environment=AIPC_SCHED_HEADROOM_GB=12
+Environment=AIPC_SCHED_RAM_FLOOR_GB=12
+Environment=AIPC_SCHED_MAX_GPU=1
+Environment=AIPC_SCHED_GTT_BUDGET_GB=70
+Environment=AIPC_SCHED_ALLOW_SWAP_ADMIT=0
+# ComfyUI GTT reclamation (0016): before hold, ask idle ComfyUI to free cache.
 Environment=AIPC_SCHED_COMFY_BASE=http://127.0.0.1:8188
 Environment=AIPC_SCHED_COMFY_RECLAIM=1
 

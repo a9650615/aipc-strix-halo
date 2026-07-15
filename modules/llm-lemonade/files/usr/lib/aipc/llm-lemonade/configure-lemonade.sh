@@ -51,24 +51,13 @@ if [ -f "$CFG" ]; then
   # this repo file, see docs/live-hotfix-workflow.md) rather than a real
   # 10.8.1 schema change requiring a new key.
   #
-  # 8 -> 4 (hardware-verified OOM 2026-07-11 22:49): with 8 slots nothing
-  # ever evicts, so LLMs accumulate — observed 5 resident (35B + 26B +
-  # VL-7B + E2B + NPU FLM) = 60 GiB GTT; with ComfyUI alongside, RAM hit
-  # 121/121 + swap 15/15 full and the kernel OOM killer fired
-  # (llama-server invoked oom-killer). 4 = pinned NPU FLM + coder-agentic
-  # (35B) + coder-compact (E2B) + one floating slot (ornith-35b advisor /
-  # vlm / daily); a 5th load LRU-evicts the floater (~5-12s reload) instead
-  # of OOMing the box. Derive this number from the memory budget, never
-  # set it "generously".
-  # max_loaded_models stays 4 — do NOT raise: 8 was hardware-verified to OOM
-  # the 128 GB unified memory on 2026-07-11 (see the note above). 0011.
-  # global_timeout 600 -> 1800 (0012, hardware-verified 2026-07-12): it is
-  # the llama-server ready-wait; coder-122b's 55GiB load blew past 600s
-  # (warmup alone measured 8.5 min) and lemonade fell into a
-  # timeout-kill-retry loop. 1800 matches litellm's local-model timeout.
-  # Big-model recipes should still carry --no-warmup so ready comes fast
-  # and the first real request pays the warmup instead.
-  jq '.max_loaded_models = 4 | .enable_dgpu_gtt = true | .llamacpp.backend = "vulkan" | .global_timeout = 1800' "$CFG" > "$tmp"
+  # 8 -> 4 (OOM 2026-07-11) -> 2 (SMO 2026-07-16): multi-auto-load thrash
+  # with 122B + mid models left MemAvailable~0 / GTT 70Gi+ / swap 60Gi+.
+  # FLM (resident-small, NPU) counts as type=llm in lemond 10.8.1, so
+  # max_loaded_models=2 == pinned NPU + ONE GPU LLM. Gateway SMO enforces
+  # the same single-GPU-slot policy; do not raise without re-proving UMA.
+  # global_timeout 1800: coder-122b ready-wait (0012).
+  jq '.max_loaded_models = 2 | .enable_dgpu_gtt = true | .llamacpp.backend = "vulkan" | .global_timeout = 1800' "$CFG" > "$tmp"
   mv "$tmp" "$CFG"
 fi
 

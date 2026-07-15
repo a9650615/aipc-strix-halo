@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Gateway memory scheduler (0012): admission control for Lemonade GPU loads.
+"""Gateway Single Memory Owner (SMO) — UMA admission control for Lemonade.
 
-Mounted into the litellm container as /app/scheduler_hook.py and registered
-via litellm_settings.callbacks. Every chat request targeting a local Lemonade
-GPU model passes budget/priority admission BEFORE litellm forwards it, so
-lemond only ever receives loads that fit physical memory — this is the
-structural thrash fix (see openspec/changes/0012-memory-scheduler-coder-122b).
+Successor to 0012 memory-scheduler. Every chat request for a local Lemonade
+GPU model is admitted HERE before LiteLLM forwards it. Lemonade is the
+executor (load/unload/infer); this module is the only policy owner.
 
-Pure scheduling logic is kept free of litellm/network imports so
+Policy (Strix Halo / 121 Gi UMA, hardware-verified thrash 2026-07-16):
+  * At most ONE GPU LLM loaded (NPU/FLM resident is out of this pool).
+  * exclusive-tier (coder-122b) requires the GPU pool empty of others first.
+  * Real gates: static weight ledger + MemAvailable + GTT used.
+  * Swap is never a ticket to load a large model (thrash legalization).
+  * Global asyncio.Lock serializes all admits that need a load.
+  * Idle ComfyUI reclaim runs before giving up (0016).
+
+Pure scheduling logic stays free of litellm/network so
 `python3 scheduler_hook.py --self-test` runs anywhere.
 """
 
@@ -21,36 +27,41 @@ from pathlib import Path
 
 MANIFEST_PATH = Path(os.environ.get("AIPC_SCHED_MANIFEST", "/app/models.yaml"))
 LEMONADE_BASE = os.environ.get("AIPC_SCHED_LEMONADE", "http://127.0.0.1:8001")
-BUDGET_GB = float(os.environ.get("AIPC_SCHED_BUDGET_GB", "96"))
+# Logical weight budget (GiB). Live quadlet sets 80.
+BUDGET_GB = float(os.environ.get("AIPC_SCHED_BUDGET_GB", "80"))
 COOLDOWN_S = float(os.environ.get("AIPC_SCHED_COOLDOWN_S", "120"))
 HOLD_TIMEOUT_S = float(os.environ.get("AIPC_SCHED_HOLD_TIMEOUT_S", "900"))
 POLL_S = float(os.environ.get("AIPC_SCHED_POLL_S", "2"))
-# Real-memory gate (hardware incident 2026-07-12 18:32: the static ledger
-# admitted a floating load while the desktop's non-model working set had
-# grown past what the ledger assumed — kernel OOM killed plasmashell/zen/
-# hermes-webui). The ledger only counts model weights; this gate checks the
-# host's actual MemAvailable so admission tracks reality: idle desktop =>
-# more room, browser-heavy desktop => scheduler evicts or holds sooner.
-HEADROOM_GB = float(os.environ.get("AIPC_SCHED_HEADROOM_GB", "10"))
-# Swap-backed admission (user directive 2026-07-13: "swap is fine, OOM is
-# not; auto-unload OTHER LLM models when memory is tight"). The loop already
-# evicts eligible LLM victims first. But when the only thing still blocking
-# the real-memory gate is NON-LLM memory the scheduler cannot evict (e.g.
-# ComfyUI's resident diffusion model, which the user keeps), holding until
-# HOLD_TIMEOUT just fails the request. Instead, once no evictable LLM remains,
-# admit if free swap can absorb the model and a hard RAM floor stays intact —
-# lean on swap (zram 48G + nvme 30G) rather than OOM or block. This only
-# bypasses the real-memory gate, never the logical BUDGET_GB ledger.
-RAM_FLOOR_GB = float(os.environ.get("AIPC_SCHED_RAM_FLOOR_GB", "4"))
-# ComfyUI reclaim (0016): before falling to swap-backed admission, ask an idle
-# ComfyUI to release its cache — cheaper than grinding swap for GTT it isn't
-# using right now. Unset base -> disabled, loop is identical to 0012.
+# Real-memory headroom: admit only if MemAvailable >= size + headroom.
+HEADROOM_GB = float(os.environ.get("AIPC_SCHED_HEADROOM_GB", "12"))
+# Hard floor: never admit if MemAvailable below this (even small models).
+RAM_FLOOR_GB = float(os.environ.get("AIPC_SCHED_RAM_FLOOR_GB", "12"))
+# GPU slot count (non-NPU). UMA policy: 1.
+MAX_GPU_LOADED = int(os.environ.get("AIPC_SCHED_MAX_GPU", "1"))
+# GTT used upper bound after which we refuse new loads until eviction frees it.
+GTT_BUDGET_GB = float(os.environ.get("AIPC_SCHED_GTT_BUDGET_GB", "70"))
+# Swap-backed admit is OFF by default (2026-07-16 thrash root cause).
+# Set AIPC_SCHED_ALLOW_SWAP_ADMIT=1 only for emergency experiments.
+ALLOW_SWAP_ADMIT = os.environ.get("AIPC_SCHED_ALLOW_SWAP_ADMIT", "0") not in ("0", "")
+# Even if swap admit is on, never use it for models larger than this (GiB).
+SWAP_ADMIT_MAX_SIZE_GB = float(os.environ.get("AIPC_SCHED_SWAP_ADMIT_MAX_SIZE_GB", "8"))
 COMFY_BASE = os.environ.get("AIPC_SCHED_COMFY_BASE")
 COMFY_RECLAIM = os.environ.get("AIPC_SCHED_COMFY_RECLAIM", "1") not in ("0", "")
 
+TIER_FLOATING = "floating"
+TIER_RESIDENT = "resident"
+TIER_EXCLUSIVE = "exclusive"
+
+# Host sysfs (podman --network host + host /proc; GTT needs host mount or
+# shared sysfs — lemonade/litellm on this box see host /sys via default).
+_GTT_PATHS = (
+    "/sys/class/drm/card1/device/mem_info_gtt_used",
+    "/sys/class/drm/card0/device/mem_info_gtt_used",
+)
+
 
 def mem_available_gb(meminfo_path: str = "/proc/meminfo") -> float | None:
-    """Host MemAvailable in GB (podman shares host /proc/meminfo), or None."""
+    """Host MemAvailable in GB, or None if unreadable."""
     try:
         for line in open(meminfo_path):
             if line.startswith("MemAvailable:"):
@@ -61,7 +72,7 @@ def mem_available_gb(meminfo_path: str = "/proc/meminfo") -> float | None:
 
 
 def swap_free_gb(meminfo_path: str = "/proc/meminfo") -> float | None:
-    """Host SwapFree in GB (zram + nvme swap), or None if unreadable."""
+    """Host SwapFree in GB, or None if unreadable."""
     try:
         for line in open(meminfo_path):
             if line.startswith("SwapFree:"):
@@ -70,9 +81,15 @@ def swap_free_gb(meminfo_path: str = "/proc/meminfo") -> float | None:
         pass
     return None
 
-TIER_FLOATING = "floating"
-TIER_RESIDENT = "resident"
-TIER_EXCLUSIVE = "exclusive"
+
+def gtt_used_gb(paths: tuple[str, ...] = _GTT_PATHS) -> float | None:
+    """AMD GTT (system RAM used as GPU memory) in GB, or None."""
+    for p in paths:
+        try:
+            return int(open(p).read().strip()) / 1024 / 1024 / 1024
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def parse_manifest(data: dict) -> dict[str, dict]:
@@ -87,9 +104,14 @@ def parse_manifest(data: dict) -> dict[str, dict]:
         size = entry.get("size_gb")
         if not model_id or not isinstance(size, (int, float)):
             continue
+        # Optional work profile size (preferred for admission); falls back to size_gb.
+        work = entry.get("size_work_gb", size)
+        if not isinstance(work, (int, float)):
+            work = size
         out[str(entry.get("alias", model_id))] = {
             "model_id": str(model_id),
-            "size_gb": float(size),
+            "size_gb": float(work),  # admission uses work cost
+            "size_full_gb": float(size),
             "tier": str(entry.get("tier", TIER_FLOATING)),
         }
     return out
@@ -120,6 +142,10 @@ def free_gb(loaded: list[dict], budget_gb: float) -> float:
     return budget_gb - sum(m["size_gb"] for m in loaded)
 
 
+def others_loaded(loaded: list[dict], target_id: str) -> list[dict]:
+    return [m for m in loaded if m["model_id"] != target_id]
+
+
 def pick_victim(
     loaded: list[dict],
     target: dict,
@@ -129,10 +155,10 @@ def pick_victim(
 ) -> str | None:
     """Next model_id to evict for `target`, or None if nothing is eligible.
 
-    Floating tier before resident tier, oldest last_use first. In-use models
-    are never victims. Residents fall only to an exclusive-tier target.
-    Cooldown (recently admitted by this scheduler) is bypassed only by an
-    exclusive-tier target.
+    Floating before resident, oldest last_use first. In-use never victims.
+    Residents fall only to exclusive targets. Exclusive idle models are
+    only victims for another exclusive (or same) target — agent traffic
+    must wait for idle-release, not pre-empt mid exclusive session.
     """
     exclusive = target["tier"] == TIER_EXCLUSIVE
 
@@ -140,12 +166,17 @@ def pick_victim(
         if m["model_id"] == target["model_id"] or m["in_use"]:
             return False
         if m["tier"] == TIER_EXCLUSIVE:
-            # An idle exclusive model is released by the idle-release daemon,
-            # not preempted mid-session by agent traffic.
             return exclusive
         if m["tier"] == TIER_RESIDENT and not exclusive:
             return False
-        if not exclusive and now - admitted_at.get(m["model_id"], 0.0) < cooldown_s:
+        # Cooldown only for models this scheduler admitted (key present).
+        # Missing key must NOT default to epoch 0 — that blocked every victim
+        # when now < COOLDOWN_S (and permanently for now=0 in tests).
+        if (
+            not exclusive
+            and m["model_id"] in admitted_at
+            and now - admitted_at[m["model_id"]] < cooldown_s
+        ):
             return False
         return True
 
@@ -160,12 +191,28 @@ def pick_victim(
 class _SchedulerCore:
     """Async admission loop over pluggable health/unload I/O (testable)."""
 
-    def __init__(self, fetch_health, post_unload, budget_gb=BUDGET_GB,
-                 cooldown_s=COOLDOWN_S, hold_timeout_s=HOLD_TIMEOUT_S,
-                 poll_s=POLL_S, clock=time.monotonic, sleeper=asyncio.sleep,
-                 headroom_gb=HEADROOM_GB, mem_available=mem_available_gb,
-                 ram_floor_gb=RAM_FLOOR_GB, swap_free=swap_free_gb,
-                 comfy_idle=None, comfy_reclaim=None):
+    def __init__(
+        self,
+        fetch_health,
+        post_unload,
+        budget_gb=BUDGET_GB,
+        cooldown_s=COOLDOWN_S,
+        hold_timeout_s=HOLD_TIMEOUT_S,
+        poll_s=POLL_S,
+        clock=time.monotonic,
+        sleeper=asyncio.sleep,
+        headroom_gb=HEADROOM_GB,
+        mem_available=mem_available_gb,
+        ram_floor_gb=RAM_FLOOR_GB,
+        swap_free=swap_free_gb,
+        gtt_used=gtt_used_gb,
+        gtt_budget_gb=GTT_BUDGET_GB,
+        max_gpu=MAX_GPU_LOADED,
+        allow_swap_admit=ALLOW_SWAP_ADMIT,
+        swap_admit_max_size_gb=SWAP_ADMIT_MAX_SIZE_GB,
+        comfy_idle=None,
+        comfy_reclaim=None,
+    ):
         self.fetch_health = fetch_health
         self.post_unload = post_unload
         self.budget_gb = budget_gb
@@ -178,6 +225,11 @@ class _SchedulerCore:
         self.mem_available = mem_available
         self.ram_floor_gb = ram_floor_gb
         self.swap_free = swap_free
+        self.gtt_used = gtt_used
+        self.gtt_budget_gb = gtt_budget_gb
+        self.max_gpu = max_gpu
+        self.allow_swap_admit = allow_swap_admit
+        self.swap_admit_max_size_gb = swap_admit_max_size_gb
         self.comfy_idle = comfy_idle if comfy_idle is not None else _http_comfy_idle
         self.comfy_reclaim = (
             comfy_reclaim if comfy_reclaim is not None else _http_comfy_reclaim
@@ -186,31 +238,68 @@ class _SchedulerCore:
         self.admitted_at: dict[str, float] = {}
         self._comfy_reclaimed = False
 
+    def _slot_ok(self, loaded: list[dict], target: dict) -> bool:
+        """GPU pool has room for target under MAX_GPU / exclusive rules."""
+        others = others_loaded(loaded, target["model_id"])
+        if target["tier"] == TIER_EXCLUSIVE:
+            return len(others) == 0
+        # Non-exclusive: at most max_gpu total including target once loaded.
+        return len(others) < self.max_gpu
+
+    def _mem_ok(self, target: dict) -> bool:
+        avail = self.mem_available()
+        if avail is None:
+            return True  # degrade open on broken probe
+        if avail < self.ram_floor_gb:
+            return False
+        return avail >= target["size_gb"] + self.headroom_gb
+
+    def _gtt_ok(self, loaded: list[dict], target: dict) -> bool:
+        """Hard-fail only when GTT is already above budget on an empty slot
+        (stuck thrash). If other models remain, eviction handles it.
+        """
+        gtt = self.gtt_used()
+        if gtt is None:
+            return True
+        others = others_loaded(loaded, target["model_id"])
+        if others:
+            return True
+        return gtt <= self.gtt_budget_gb
+
     def _fits(self, loaded: list[dict], target: dict) -> bool:
         if free_gb(loaded, self.budget_gb) < target["size_gb"]:
             return False
-        avail = self.mem_available()
-        # None => can't read meminfo, degrade to ledger-only (never block on
-        # a broken probe). Weights are mmap'd so an unload returns its pages
-        # to MemAvailable before the next loop iteration re-checks.
-        return avail is None or avail >= target["size_gb"] + self.headroom_gb
+        if not self._slot_ok(loaded, target):
+            return False
+        if not self._mem_ok(target):
+            return False
+        if not self._gtt_ok(loaded, target):
+            return False
+        return True
 
     def _swap_admits(self, loaded: list[dict], target: dict) -> bool:
-        """Last resort once no evictable LLM remains: admit iff free swap can
-        absorb the model and MemAvailable is still above the RAM floor. Only
-        the real-memory gate is bypassed — the logical budget ledger is not,
-        so a genuine over-subscription of model weights still holds."""
+        """Optional last resort — disabled by default. Never for exclusive
+        or large models; never bypasses ledger or slot rules."""
+        if not self.allow_swap_admit:
+            return False
+        if target["tier"] == TIER_EXCLUSIVE:
+            return False
+        if target["size_gb"] > self.swap_admit_max_size_gb:
+            return False
+        if not self._slot_ok(loaded, target):
+            return False
         if free_gb(loaded, self.budget_gb) < target["size_gb"]:
             return False
         avail = self.mem_available()
         swap = self.swap_free()
         if avail is None or swap is None:
-            return False  # can't reason about swap → stay conservative, hold
-        return avail >= self.ram_floor_gb and swap >= target["size_gb"] + self.headroom_gb
+            return False
+        return (
+            avail >= self.ram_floor_gb
+            and swap >= target["size_gb"] + self.headroom_gb
+        )
 
     async def _try_comfy_reclaim(self) -> bool:
-        """True iff an idle ComfyUI was asked to free its cache this call.
-        Degrades open: disabled, unreachable, busy, or erroring -> False."""
         if not COMFY_BASE or not COMFY_RECLAIM:
             return False
         try:
@@ -227,10 +316,15 @@ class _SchedulerCore:
             return
         health = await self.fetch_health()
         if health is None:
-            return  # degrade open: scheduler must never become the outage
+            return  # degrade open
         loaded = gpu_loaded(health, manifest)
         if any(m["model_id"] == target["model_id"] for m in loaded):
-            return  # fast path, no lock
+            # Already loaded: serve unless exclusive isolation is broken.
+            if not (
+                target["tier"] == TIER_EXCLUSIVE
+                and others_loaded(loaded, target["model_id"])
+            ):
+                return
         async with self.lock:
             self._comfy_reclaimed = False
             deadline = self.clock() + self.hold_timeout_s
@@ -239,29 +333,42 @@ class _SchedulerCore:
                 if health is None:
                     return
                 loaded = gpu_loaded(health, manifest)
-                if any(m["model_id"] == target["model_id"] for m in loaded):
+                already = any(m["model_id"] == target["model_id"] for m in loaded)
+                if already and self._slot_ok(loaded, target):
                     break
-                if self._fits(loaded, target):
+                if not already and self._fits(loaded, target):
+                    print(
+                        f"[smo] admit {alias} size={target['size_gb']}Gi "
+                        f"tier={target['tier']} avail={self.mem_available()} "
+                        f"gtt={self.gtt_used()} loaded={[m['model_id'] for m in loaded]}",
+                        flush=True,
+                    )
                     break
-                victim = pick_victim(loaded, target, self.admitted_at,
-                                     self.clock(), self.cooldown_s)
+                victim = pick_victim(
+                    loaded, target, self.admitted_at, self.clock(), self.cooldown_s
+                )
                 if victim is not None:
+                    print(f"[smo] unload {victim} for {alias}", flush=True)
                     await self.post_unload(victim)
                 elif not self._comfy_reclaimed and await self._try_comfy_reclaim():
                     self._comfy_reclaimed = True
-                    print(f"[sched] reclaimed idle ComfyUI cache before "
-                          f"admitting {alias}", flush=True)
-                    await self.sleeper(self.poll_s)  # let /free release pages
-                elif self._swap_admits(loaded, target):
-                    break  # no evictable LLM left; only non-LLM memory (e.g.
-                    # ComfyUI) blocks the RAM gate — swap absorbs it, admit
+                    print(
+                        f"[smo] reclaimed idle ComfyUI cache before admitting {alias}",
+                        flush=True,
+                    )
+                    await self.sleeper(self.poll_s)
+                elif self._swap_admits(loaded, target) and not already:
+                    print(f"[smo] swap-admit {alias} (legacy path)", flush=True)
+                    break
                 else:
                     await self.sleeper(self.poll_s)
                 if self.clock() > deadline:
                     raise TimeoutError(
-                        f"memory scheduler: cannot fit {alias} "
-                        f"({target['size_gb']}GB) within {self.budget_gb}GB budget "
-                        f"/ {self.headroom_gb}GB real-memory headroom"
+                        f"SMO: cannot fit {alias} ({target['size_gb']}GB) "
+                        f"budget={self.budget_gb}GB headroom={self.headroom_gb}GB "
+                        f"ram_floor={self.ram_floor_gb}GB max_gpu={self.max_gpu} "
+                        f"gtt_budget={self.gtt_budget_gb}GB "
+                        f"loaded={[m['model_id'] for m in loaded]}"
                     )
             self.admitted_at[target["model_id"]] = self.clock()
 
@@ -290,11 +397,13 @@ async def _http_unload(model_id: str) -> None:
     import httpx
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            await client.post(f"{LEMONADE_BASE}/api/v0/unload",
-                              json={"model_name": model_id})
+        async with httpx.AsyncClient(timeout=60) as client:
+            await client.post(
+                f"{LEMONADE_BASE}/api/v0/unload",
+                json={"model_name": model_id},
+            )
     except Exception:
-        pass  # next loop iteration re-reads health and retries or holds
+        pass
 
 
 async def _http_comfy_idle() -> bool:
@@ -331,7 +440,7 @@ async def _http_comfy_reclaim() -> bool:
 
 try:
     from litellm.integrations.custom_logger import CustomLogger
-except ImportError:  # self-test / render environments
+except ImportError:
     CustomLogger = object
 
 
@@ -363,21 +472,24 @@ def self_test() -> None:
         {"alias": "coder-122b", "backend": "lemonade",
          "model_id": "Q122", "size_gb": 59.2, "tier": "exclusive"},
         {"alias": "coder-agentic", "backend": "lemonade",
-         "model_id": "Q36", "size_gb": 21.8, "tier": "resident"},
+         "model_id": "Q36", "size_gb": 24.2, "tier": "floating"},
         {"alias": "assistant-gemma", "backend": "lemonade",
-         "model_id": "G26", "size_gb": 15.8, "tier": "resident"},
+         "model_id": "G26", "size_gb": 15.6, "tier": "floating"},
         {"alias": "qwythos-9b", "backend": "lemonade",
-         "model_id": "QW9", "size_gb": 5.6, "tier": "resident"},
+         "model_id": "QW9", "size_gb": 5.6, "tier": "floating"},
         {"alias": "ornith-35b", "backend": "lemonade",
-         "model_id": "ORN", "size_gb": 26.0},
+         "model_id": "ORN", "size_gb": 22.5, "tier": "floating"},
         {"alias": "resident-small", "backend": "lemonade",
-         "model_id": "FLM", "size_gb": 2.5, "pool": "npu"},
+         "model_id": "FLM", "size_gb": 9.6, "pool": "npu"},
         {"alias": "main-cloud", "backend": "anthropic",
          "model_id": "claude", "size_gb": "cloud"},
     ]})
-    assert set(manifest) == {"coder-122b", "coder-agentic", "assistant-gemma",
-                             "qwythos-9b", "ornith-35b"}
+    assert set(manifest) == {
+        "coder-122b", "coder-agentic", "assistant-gemma",
+        "qwythos-9b", "ornith-35b",
+    }
     assert manifest["ornith-35b"]["tier"] == "floating"
+    assert manifest["coder-122b"]["tier"] == "exclusive"
 
     def health_for(ids, in_use=()):
         return {"all_models_loaded": [
@@ -386,26 +498,26 @@ def self_test() -> None:
             for n, i in enumerate(ids)
         ]}
 
-    # Exclusive target evicts floating (oldest) before residents.
+    # Exclusive evicts floating oldest last_use first (enumerate order).
     loaded = gpu_loaded(health_for(["Q36", "ORN", "G26"]), manifest)
-    assert pick_victim(loaded, manifest["coder-122b"], {}, now=0.0) == "ORN"
-    # ...then residents, oldest first.
-    loaded = gpu_loaded(health_for(["Q36", "G26"]), manifest)
     assert pick_victim(loaded, manifest["coder-122b"], {}, now=0.0) == "Q36"
-    # Non-exclusive target may not evict residents.
-    loaded = gpu_loaded(health_for(["Q36", "G26", "QW9"]), manifest)
-    assert pick_victim(loaded, manifest["ornith-35b"], {}, now=0.0) is None
-    # In-use exclusive model is not a victim for agent traffic.
+    # Second pass.
+    loaded = gpu_loaded(health_for(["ORN", "G26"]), manifest)
+    assert pick_victim(loaded, manifest["coder-122b"], {}, now=0.0) == "ORN"
+    # Floating can evict other floating (single-slot).
+    loaded = gpu_loaded(health_for(["Q36"]), manifest)
+    assert pick_victim(loaded, manifest["ornith-35b"], {}, now=0.0) == "Q36"
+    # In-use exclusive not a victim for agent.
     loaded = gpu_loaded(health_for(["Q122"], in_use={"Q122"}), manifest)
     assert pick_victim(loaded, manifest["coder-agentic"], {}, now=0.0) is None
-    # Cooldown blocks non-exclusive eviction, exclusive bypasses it.
+    # Cooldown blocks non-exclusive eviction of recent admit.
     loaded = gpu_loaded(health_for(["ORN", "QW9"]), manifest)
     recent = {"ORN": 100.0}
     assert pick_victim(loaded, manifest["qwythos-9b"], recent, now=150.0) is None
     assert pick_victim(loaded, manifest["coder-122b"], recent, now=150.0) == "ORN"
 
     async def run_async_cases():
-        # 122B admission: evicts ORN then residents until 59.2 fits in 96.
+        # 122B: must clear ALL others (single exclusive slot).
         state = {"loaded": ["Q36", "ORN", "G26", "QW9"], "unloads": []}
 
         async def fake_health():
@@ -415,15 +527,17 @@ def self_test() -> None:
             state["unloads"].append(model_id)
             state["loaded"].remove(model_id)
 
-        core = _SchedulerCore(fake_health, fake_unload, budget_gb=96,
-                              hold_timeout_s=10, poll_s=0,
-                              mem_available=lambda: 999.0)
+        core = _SchedulerCore(
+            fake_health, fake_unload, budget_gb=80,
+            hold_timeout_s=10, poll_s=0,
+            mem_available=lambda: 999.0, gtt_used=lambda: 5.0,
+            allow_swap_admit=False,
+        )
         await core.admit("coder-122b", manifest)
-        # 69.2 loaded -> free 26.8; evict ORN -> 43.4 free? (96-43.2=52.8)
-        # keep evicting oldest until >= 59.2 free: ORN, Q36 -> free 74.6.
-        assert state["unloads"] == ["ORN", "Q36"], state["unloads"]
+        assert set(state["unloads"]) == {"ORN", "Q36", "G26", "QW9"}, state["unloads"]
+        assert state["loaded"] == []
 
-        # Fast path: already loaded -> no unloads, no lock contention.
+        # Fast path: already alone.
         state2 = {"loaded": ["Q122"], "unloads": []}
 
         async def health2():
@@ -432,52 +546,15 @@ def self_test() -> None:
         async def unload2(model_id):
             state2["unloads"].append(model_id)
 
-        core2 = _SchedulerCore(health2, unload2, budget_gb=96,
-                               mem_available=lambda: 999.0)
+        core2 = _SchedulerCore(
+            health2, unload2, budget_gb=80,
+            mem_available=lambda: 999.0, gtt_used=lambda: 40.0,
+            allow_swap_admit=False,
+        )
         await core2.admit("coder-122b", manifest)
         assert state2["unloads"] == []
 
-        # Hold: in-use 122B + gemma request that cannot fit -> TimeoutError.
-        state3 = {"loaded": ["Q122", "Q36", "G26"], "unloads": []}
-
-        async def health3():
-            return health_for(state3["loaded"], in_use={"Q122", "Q36", "G26"})
-
-        async def unload3(model_id):
-            state3["unloads"].append(model_id)
-
-        clock = {"t": 0.0}
-
-        async def instant_sleep(_s):
-            clock["t"] += 5.0
-
-        core3 = _SchedulerCore(health3, unload3, budget_gb=96,
-                               hold_timeout_s=20, poll_s=0,
-                               clock=lambda: clock["t"], sleeper=instant_sleep,
-                               mem_available=lambda: 999.0)
-        # ponytail: manifest lacks a model that fits leftover budget here, so
-        # assert the hold/timeout path with everything busy instead.
-        try:
-            await core3.admit("ornith-35b", manifest)
-        except TimeoutError:
-            pass
-        else:
-            raise AssertionError("expected hold timeout")
-        assert state3["unloads"] == []
-
-        # Degrade open: health unreachable -> admit without action.
-        async def health_none():
-            return None
-
-        core4 = _SchedulerCore(health_none, unload3, budget_gb=96)
-        await core4.admit("coder-122b", manifest)
-
-        # Unknown alias (cloud) passes through.
-        await core2.admit("main-cloud", manifest)
-
-        # Real-memory gate: ledger says fine (26+15.8 << 96) but the host
-        # has only 12GB available -> evict the floating model anyway, and
-        # admit once MemAvailable recovers (the 18:32 OOM scenario).
+        # Single-slot: agentic request evicts ornith.
         state5 = {"loaded": ["ORN"], "unloads": []}
 
         async def health5():
@@ -487,31 +564,70 @@ def self_test() -> None:
             state5["unloads"].append(model_id)
             state5["loaded"].remove(model_id)
 
-        def avail5():
-            return 12.0 if "ORN" in state5["loaded"] else 40.0
-
-        core5 = _SchedulerCore(health5, unload5, budget_gb=96,
-                               hold_timeout_s=10, poll_s=0,
-                               mem_available=avail5)
-        await core5.admit("assistant-gemma", manifest)
+        core5 = _SchedulerCore(
+            health5, unload5, budget_gb=80,
+            hold_timeout_s=10, poll_s=0,
+            mem_available=lambda: 50.0, gtt_used=lambda: 20.0,
+            allow_swap_admit=False,
+        )
+        await core5.admit("coder-agentic", manifest)
         assert state5["unloads"] == ["ORN"], state5["unloads"]
 
-        # Real-memory gate, nothing evictable, AND swap too small to absorb
-        # -> hold then timeout (the only true out-of-room case left).
-        state6 = {"loaded": [], "unloads": []}
+        # Hold: in-use exclusive blocks agent.
+        state3 = {"loaded": ["Q122"], "unloads": []}
 
-        async def health6():
-            return health_for(state6["loaded"])
+        async def health3():
+            return health_for(state3["loaded"], in_use={"Q122"})
 
+        async def unload3(model_id):
+            state3["unloads"].append(model_id)
+
+        clock = {"t": 0.0}
+
+        async def instant_sleep(_s):
+            clock["t"] += 5.0
+
+        core3 = _SchedulerCore(
+            health3, unload3, budget_gb=80,
+            hold_timeout_s=20, poll_s=0,
+            clock=lambda: clock["t"], sleeper=instant_sleep,
+            mem_available=lambda: 999.0, gtt_used=lambda: 40.0,
+            allow_swap_admit=False,
+        )
+        try:
+            await core3.admit("coder-agentic", manifest)
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("expected hold timeout against in-use exclusive")
+        assert state3["unloads"] == []
+
+        # Degrade open: health unreachable.
+        async def health_none():
+            return None
+
+        core4 = _SchedulerCore(health_none, unload3, budget_gb=80)
+        await core4.admit("coder-122b", manifest)
+
+        # Unknown alias (cloud) passes.
+        await core2.admit("main-cloud", manifest)
+
+        # Real-memory floor: too little RAM, nothing loaded -> timeout.
         clock6 = {"t": 0.0}
 
         async def sleep6(_s):
             clock6["t"] += 5.0
 
-        core6 = _SchedulerCore(health6, unload3, budget_gb=96,
-                               hold_timeout_s=20, poll_s=0,
-                               clock=lambda: clock6["t"], sleeper=sleep6,
-                               mem_available=lambda: 8.0, swap_free=lambda: 2.0)
+        async def health_empty():
+            return health_for([])
+
+        core6 = _SchedulerCore(
+            health_empty, unload3, budget_gb=80,
+            hold_timeout_s=20, poll_s=0,
+            clock=lambda: clock6["t"], sleeper=sleep6,
+            mem_available=lambda: 8.0, gtt_used=lambda: 1.0,
+            ram_floor_gb=12.0, allow_swap_admit=False,
+        )
         try:
             await core6.admit("qwythos-9b", manifest)
         except TimeoutError:
@@ -519,206 +635,139 @@ def self_test() -> None:
         else:
             raise AssertionError("expected real-memory hold timeout")
 
-        # Swap-backed admit: real memory short, nothing evictable (only non-LLM
-        # memory like ComfyUI is the blocker), but free swap can absorb the
-        # model and RAM stays above the floor -> admit without unloading, don't
-        # hold (user directive: swap ok, keep ComfyUI). Ledger still fits.
-        state8 = {"loaded": [], "unloads": []}
+        # Swap-admit OFF: even with huge swap, short MemAvailable holds.
+        clock8 = {"t": 0.0}
 
-        async def health8():
-            return health_for(state8["loaded"])
+        async def sleep8(_s):
+            clock8["t"] += 5.0
 
-        core8 = _SchedulerCore(health8, unload3, budget_gb=96,
-                               hold_timeout_s=10, poll_s=0,
-                               mem_available=lambda: 8.0, swap_free=lambda: 60.0)
-        await core8.admit("qwythos-9b", manifest)
-        assert state8["unloads"] == [], state8["unloads"]
+        core8 = _SchedulerCore(
+            health_empty, unload3, budget_gb=80,
+            hold_timeout_s=20, poll_s=0,
+            clock=lambda: clock8["t"], sleeper=sleep8,
+            mem_available=lambda: 8.0, swap_free=lambda: 60.0,
+            gtt_used=lambda: 1.0, ram_floor_gb=12.0,
+            allow_swap_admit=False,
+        )
+        try:
+            await core8.admit("qwythos-9b", manifest)
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("swap admit must be off by default")
 
-        # ...but swap-admit never bypasses the logical budget: an over-budget
-        # ledger (63.6GB in-use loaded, 59.2GB target -> only 32.4GB free)
-        # holds even with ample swap and RAM floor intact.
-        state9 = {"loaded": ["ORN", "G26", "Q36"], "unloads": []}
+        # Swap-admit ON only for tiny models: still requires slot ok.
+        core8b = _SchedulerCore(
+            health_empty, unload3, budget_gb=80,
+            hold_timeout_s=10, poll_s=0,
+            mem_available=lambda: 13.0, swap_free=lambda: 60.0,
+            gtt_used=lambda: 1.0, ram_floor_gb=12.0,
+            allow_swap_admit=True, swap_admit_max_size_gb=8,
+            headroom_gb=4,
+        )
+        await core8b.admit("qwythos-9b", manifest)
 
-        async def health9():
-            return health_for(state9["loaded"], in_use={"ORN", "G26", "Q36"})
-
+        # Exclusive never swap-admits.
         clock9 = {"t": 0.0}
 
         async def sleep9(_s):
             clock9["t"] += 5.0
 
-        core9 = _SchedulerCore(health9, unload3, budget_gb=96,
-                               hold_timeout_s=20, poll_s=0,
-                               clock=lambda: clock9["t"], sleeper=sleep9,
-                               mem_available=lambda: 200.0, swap_free=lambda: 200.0)
+        core9 = _SchedulerCore(
+            health_empty, unload3, budget_gb=80,
+            hold_timeout_s=20, poll_s=0,
+            clock=lambda: clock9["t"], sleeper=sleep9,
+            mem_available=lambda: 13.0, swap_free=lambda: 200.0,
+            gtt_used=lambda: 1.0, ram_floor_gb=12.0,
+            allow_swap_admit=True, swap_admit_max_size_gb=100,
+            headroom_gb=4,
+        )
+        # 122B size 59.2 + headroom 4 needs avail>=63.2; with 13 fails mem_ok
+        # and swap path is blocked for exclusive.
         try:
             await core9.admit("coder-122b", manifest)
         except TimeoutError:
             pass
         else:
-            raise AssertionError("swap must not bypass the budget ledger")
+            raise AssertionError("exclusive must not swap-admit")
 
-        # Broken meminfo probe degrades to ledger-only.
-        core7 = _SchedulerCore(health6, unload3, budget_gb=96,
-                               mem_available=lambda: None)
+        # Broken meminfo degrades to ledger+slot only.
+        core7 = _SchedulerCore(
+            health_empty, unload3, budget_gb=80,
+            mem_available=lambda: None, gtt_used=lambda: None,
+            allow_swap_admit=False,
+        )
         await core7.admit("qwythos-9b", manifest)
 
-        # ComfyUI reclaim (0016), disabled: AIPC_SCHED_COMFY_BASE unset ->
-        # comfy_reclaim is never invoked, swap-admit path is untouched.
+        # Comfy reclaim once then hold (insufficient memory).
         global COMFY_BASE
         orig_comfy_base = COMFY_BASE
-        COMFY_BASE = None
-        comfy_calls = {"idle": 0, "reclaim": 0}
-
-        async def comfy_idle_true():
-            comfy_calls["idle"] += 1
-            return True
-
-        async def comfy_reclaim_track():
-            comfy_calls["reclaim"] += 1
-            return True
-
-        state10 = {"loaded": [], "unloads": []}
-
-        async def health10():
-            return health_for(state10["loaded"])
-
-        core10 = _SchedulerCore(health10, unload3, budget_gb=96,
-                                hold_timeout_s=10, poll_s=0,
-                                mem_available=lambda: 8.0, swap_free=lambda: 60.0,
-                                comfy_idle=comfy_idle_true,
-                                comfy_reclaim=comfy_reclaim_track)
-        await core10.admit("qwythos-9b", manifest)
-        assert comfy_calls == {"idle": 0, "reclaim": 0}, comfy_calls
-        assert state10["unloads"] == []
-
         COMFY_BASE = "http://127.0.0.1:8188"
-
-        # Reclaim precedes swap: an evictable LLM victim still wins, reclaim
-        # is not consulted on that iteration.
-        state11 = {"loaded": ["ORN"], "unloads": []}
-
-        async def health11():
-            return health_for(state11["loaded"])
-
-        async def unload11(model_id):
-            state11["unloads"].append(model_id)
-            state11["loaded"].remove(model_id)
-
-        comfy_calls11 = {"idle": 0, "reclaim": 0}
-
-        async def comfy_idle_true11():
-            comfy_calls11["idle"] += 1
-            return True
-
-        async def comfy_reclaim_track11():
-            comfy_calls11["reclaim"] += 1
-            return True
-
-        def avail11():
-            return 12.0 if "ORN" in state11["loaded"] else 40.0
-
-        core11 = _SchedulerCore(health11, unload11, budget_gb=96,
-                                hold_timeout_s=10, poll_s=0,
-                                mem_available=avail11,
-                                comfy_idle=comfy_idle_true11,
-                                comfy_reclaim=comfy_reclaim_track11)
-        await core11.admit("assistant-gemma", manifest)
-        assert state11["unloads"] == ["ORN"], state11["unloads"]
-        assert comfy_calls11 == {"idle": 0, "reclaim": 0}, comfy_calls11
-
-        # Reclaim fires once then latches: idle ComfyUI + nothing evictable ->
-        # exactly one comfy_reclaim call across every poll iteration until
-        # the hold deadline (reclaim alone did not free real memory here).
         clock12 = {"t": 0.0}
 
         async def sleep12(_s):
             clock12["t"] += 5.0
 
-        comfy_calls12 = {"idle": 0, "reclaim": 0}
+        comfy_calls12 = {"reclaim": 0}
 
         async def comfy_idle_true12():
-            comfy_calls12["idle"] += 1
             return True
 
         async def comfy_reclaim_track12():
             comfy_calls12["reclaim"] += 1
             return True
 
-        async def health12():
-            return health_for([])
-
-        core12 = _SchedulerCore(health12, unload3, budget_gb=96,
-                                hold_timeout_s=20, poll_s=0,
-                                clock=lambda: clock12["t"], sleeper=sleep12,
-                                mem_available=lambda: 5.0, swap_free=lambda: 1.0,
-                                comfy_idle=comfy_idle_true12,
-                                comfy_reclaim=comfy_reclaim_track12)
+        core12 = _SchedulerCore(
+            health_empty, unload3, budget_gb=80,
+            hold_timeout_s=20, poll_s=0,
+            clock=lambda: clock12["t"], sleeper=sleep12,
+            mem_available=lambda: 5.0, swap_free=lambda: 1.0,
+            gtt_used=lambda: 1.0, ram_floor_gb=12.0,
+            allow_swap_admit=False,
+            comfy_idle=comfy_idle_true12,
+            comfy_reclaim=comfy_reclaim_track12,
+        )
         try:
             await core12.admit("qwythos-9b", manifest)
         except TimeoutError:
             pass
         else:
-            raise AssertionError("expected hold timeout (reclaim alone insufficient)")
+            raise AssertionError("expected hold timeout")
         assert comfy_calls12["reclaim"] == 1, comfy_calls12
 
-        # Degrade open: comfy_idle raising never blocks admission and falls
-        # through to swap-admit exactly as 0012 (no reclaim attempted).
-        async def comfy_idle_raises():
-            raise RuntimeError("comfyui unreachable")
-
-        comfy_calls13 = {"reclaim": 0}
-
-        async def comfy_reclaim_unexpected():
-            comfy_calls13["reclaim"] += 1
-            return True
-
-        state13 = {"loaded": [], "unloads": []}
-
-        async def health13():
-            return health_for(state13["loaded"])
-
-        core13 = _SchedulerCore(health13, unload3, budget_gb=96,
-                                hold_timeout_s=10, poll_s=0,
-                                mem_available=lambda: 8.0, swap_free=lambda: 60.0,
-                                comfy_idle=comfy_idle_raises,
-                                comfy_reclaim=comfy_reclaim_unexpected)
-        await core13.admit("qwythos-9b", manifest)
-        assert comfy_calls13["reclaim"] == 0, comfy_calls13
-        assert state13["unloads"] == []
-
-        # Concurrent admits: A holds the lock, reclaims once (insufficient →
-        # holds to timeout); B enters concurrently targeting an already-loaded
-        # model (fast path, no lock). The latch reset lives under the lock, so
-        # B's entry cannot clear A's latch — reclaim fires exactly once total.
-        # (Pre-lock reset regression would let A /free twice → count 2.)
+        # Concurrent: A holds lock timing out; B fast-path on already loaded.
         clock14 = {"t": 0.0}
 
         async def sleep14(_s):
             clock14["t"] += 5.0
-            await asyncio.sleep(0)  # real yield so B can interleave
+            await asyncio.sleep(0)
 
         comfy_calls14 = {"reclaim": 0}
 
-        async def comfy_idle_true14():
-            return True
+        async def health14():
+            # QW9 in_use: A cannot steal it; B still fast-paths as already loaded.
+            return health_for(["QW9"], in_use={"QW9"})
+
+        async def unload14(model_id):
+            raise AssertionError("no eviction expected in concurrent case")
 
         async def comfy_reclaim_track14():
             comfy_calls14["reclaim"] += 1
             return True
 
-        async def health14():
-            return health_for(["QW9"])  # QW9 = qwythos-9b, B's target
+        async def comfy_idle_true14():
+            return True
 
-        async def unload14(model_id):
-            raise AssertionError("no eviction expected in concurrent case")
-
-        core14 = _SchedulerCore(health14, unload14, budget_gb=96,
-                                hold_timeout_s=20, poll_s=0,
-                                clock=lambda: clock14["t"], sleeper=sleep14,
-                                mem_available=lambda: 8.0, swap_free=lambda: 1.0,
-                                comfy_idle=comfy_idle_true14,
-                                comfy_reclaim=comfy_reclaim_track14)
+        core14 = _SchedulerCore(
+            health14, unload14, budget_gb=80,
+            hold_timeout_s=20, poll_s=0,
+            clock=lambda: clock14["t"], sleeper=sleep14,
+            mem_available=lambda: 8.0, swap_free=lambda: 1.0,
+            gtt_used=lambda: 50.0, ram_floor_gb=12.0,
+            allow_swap_admit=False,
+            comfy_idle=comfy_idle_true14,
+            comfy_reclaim=comfy_reclaim_track14,
+        )
 
         async def admit_a():
             try:
@@ -734,7 +783,7 @@ def self_test() -> None:
         COMFY_BASE = orig_comfy_base
 
     asyncio.run(run_async_cases())
-    print("scheduler_hook self-test passed")
+    print("scheduler_hook self-test passed (SMO)")
 
 
 if __name__ == "__main__":

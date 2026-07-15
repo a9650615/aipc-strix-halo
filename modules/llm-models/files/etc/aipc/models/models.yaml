@@ -3,18 +3,6 @@
 # llm-litellm renders its router config from here; backends pre-pull weights
 # listed here. See CLAUDE.md §7.
 #
-# Custom (non-catalog) Lemonade registrations carry checkpoints:/recipe:/
-# label: fields — `aipc models sync` builds the user.-prefixed
-# `lemonade pull --checkpoint ...` from them (added 2026-07-12; before that
-# the pull commands lived only in comments and sync could not register
-# custom models, nor detect a swapped model_id behind an alias — see
-# tools/aipc_lib/models.py marker-file logic). recipe_options: is pinned
-# into lemonade's recipe_options.json by the same sync, AFTER pull and
-# BEFORE any load — an unpinned first load uses the model-card ctx and for
-# big models that exhausts GTT and DeviceLost-crashes the whole desktop
-# (hardware-verified 2026-07-12 with coder-122b at ctx 262144). The
-# `lemonade load ...` commands in comments below are kept as documentation.
-#
 # Trimmed 2026-07-04 to a small, deliberate local set (ornith-35b,
 # coder-agentic, resident-small) — the qwen2.5 family (router-1b, intent-3b,
 # main-70b, coder-strong) and the other extras (coder-thinking,
@@ -25,72 +13,42 @@
 # 2026-07-06 for phase-2-memory (see rag-embedder module) — mem0 and the
 # RAG watchers need a real embedding alias behind the gateway.
 models:
-  # Small, always-on general-purpose assistant model. Swapped 2026-07-12
-  # (0008 fleet refresh item 6) from gemma4-it-e4b-FLM to qwen3.5-4b-FLM —
-  # same NPU resident slot, not a second resident NPU model (hardware-
-  # tested: gemma4-it-e4b + qwen3.5:4b loaded together fail
-  # CREATE_HWCTX -22 at any context size; only a 1B-class model coexists
-  # with e4b). qwen3.5:4b is newer, smarter, keeps vision + tool calling,
-  # and gets a 256k context window (FLM catalog v0.9.43: min_ver 0.9.43,
-  # Image-Text-to-Text, Tool Calling: Yes, Q4_1) — audio is not lost in
-  # practice, since the voice pipeline is SenseVoice STT (:9001) -> text ->
-  # /chat (plain string content) -> Kokoro/CosyVoice TTS; the LLM here
-  # never receives audio either way. qwen3.5:4b is hybrid-thinking, so
-  # llm-litellm's entry needs enable_thinking: false (see that file) —
-  # gemma4-it-e4b-FLM did not need this flag. model_id below is a DERIVED
-  # name (":" -> "-" + "-FLM" suffix, same convention as
-  # gemma4-it:e4b -> gemma4-it-e4b-FLM) — not yet hardware-confirmed
-  # against the real `aipc models sync`/lemonade pull output; confirm
-  # before trusting this entry (see openspec/changes/0008-fleet-refresh).
-  # Runs on Lemonade's NPU/FLM backend, not Ollama — hardware-verified
-  # 2026-07-04 end-to-end (prior model) including persistence across a
+  # Small, always-on general-purpose assistant model. gemma4 family:
+  # confirmed correct structured tool_calls, and MoE (~4B active of ~9.6GB
+  # on disk) suits this hardware's abundant-memory/limited-compute profile.
+  # Runs on Lemonade's NPU/FLM backend (gemma4-it-e4b-FLM), not Ollama —
+  # hardware-verified 2026-07-04 end-to-end including persistence across a
   # service restart — so an always-on model doesn't permanently occupy
   # iGPU/GTT memory that coder-agentic/ornith-35b also need; the NPU
   # otherwise sits idle. keep_alive/pinning is Lemonade's own concern now
   # (see llm-lemonade), not Ollama's litellm_params.keep_alive.
   - alias: resident-small
     backend: lemonade
-    model_id: qwen3.5-4b-FLM
-    size_gb: 2.5
-    # NPU/FLM — outside the GPU/GTT pool, invisible to the 0012 memory
-    # scheduler (it only budgets Vulkan models).
+    model_id: gemma4-it-e4b-FLM
     pool: npu
+    size_gb: 9.6
 
-  # Compact / Haiku-tier, swapped 2026-07-12 (0008 fleet refresh): Unsloth
-  # Qwen3.5-4B UD-Q4_K_XL GGUF on Lemonade llamacpp:vulkan, replacing the
-  # Gemma-4-E2B QAT quant. Correction to the repo id originally proposed:
-  # unsloth/Qwen3.5-4B-Instruct-GGUF does not exist — Qwen3.5's small dense
-  # models ship as unsloth/Qwen3.5-4B-GGUF (no "-Instruct" suffix; "-Base"
-  # is the separate pretrain-only variant). Card confirms 262,144 native
-  # context (extensible 1,010,000) built on Gated DeltaNet linear-attention
-  # blocks interleaved with regular attention — the long-prefill shape this
-  # on-demand compact lane benefits from. On-demand only — do NOT pin;
-  # lemond loads on first inference and LRU can unload it (competes with
-  # coder-agentic for iGPU/GTT). Known ecosystem note: community reports
-  # say Ollama doesn't support Qwen3.5 GGUFs yet — irrelevant here, this
-  # machine runs Lemonade's llamacpp backend for this alias, not Ollama.
+  # Compact / Haiku-tier (2026-07-11): Unsloth Gemma-4-E2B-it QAT GGUF on
+  # Lemonade llamacpp:vulkan. Faster long-prefill compact than NPU FLM E4B
+  # (hardware-bench on this machine). On-demand only — do NOT pin; lemond
+  # loads on first inference and LRU can unload it (competes with
+  # coder-agentic for iGPU/GTT). Official E2B window ~128k; recipe uses
+  # ctx 131072 + -np 1 -kvu (single slot, full KV for long prefill).
   #
   # First pull (user. prefix required with --checkpoint/--recipe):
-  #   lemonade pull user.Qwen3.5-4B-UD-Q4_K_XL \
-  #     --checkpoint main unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL \
-  #     --recipe llamacpp --label tool-calling
-  #   lemonade load Qwen3.5-4B-UD-Q4_K_XL \
-  #     --llamacpp vulkan --ctx-size 262144 \
+  #   lemonade pull user.Gemma4-E2B-it-qat-UD-Q4_K_XL \
+  #     --checkpoint main unsloth/gemma-4-E2B-it-qat-GGUF:UD-Q4_K_XL \
+  #     --recipe llamacpp
+  #   lemonade load Gemma4-E2B-it-qat-UD-Q4_K_XL \
+  #     --llamacpp vulkan --ctx-size 131072 \
   #     --llamacpp-args "-np 1 -kvu" --save-options
-  #   lemonade unload Qwen3.5-4B-UD-Q4_K_XL   # stay cold until used
+  #   lemonade unload Gemma4-E2B-it-qat-UD-Q4_K_XL   # stay cold until used
   - alias: coder-compact
     backend: lemonade
-    model_id: Qwen3.5-4B-UD-Q4_K_XL
-    size_gb: 2.7
+    model_id: Gemma4-E2B-it-qat-UD-Q4_K_XL
+    size_gb: 2.4
+    tier: floating
     idle_unload_after_s: 300
-    checkpoints:
-      main: unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL
-    recipe: llamacpp
-    recipe_options:
-      ctx_size: 262144
-      llamacpp_backend: vulkan
-      llamacpp_args: "-np 1 -kvu"
-    label: tool-calling
 
   # Tool-call / agentic default (2026-07-09 trial): HauhauCS Qwen3.6-35B-A3B
   # Aggressive uncensored Q4_K_P on Lemonade llamacpp:vulkan.
@@ -119,40 +77,21 @@ models:
   # explicit -np with -kvu (see llm-lemonade README concurrency section).
   # Qwen3.6 hybrid thinking: coding/tool consumers should pass
   # enable_thinking=false (see litellm config extra_body).
-  # Rewarm removed 2026-07-12 (user-directed): the idle-release daemon no
-  # longer reloads this (or any) model on its own — the tier: resident
-  # marker is gone, this is pure on-demand now. idle_unload_after_s: 1800
-  # (30min) keeps it warm across a single working session so repeated use
-  # doesn't pay reload+prefill cost, while still releasing once genuinely
-  # idle. resident-small (NPU-pinned) is the only always-loaded model left.
-  # SWAPPED 2026-07-13: coder-agentic now points at the SC117 native-MTP model.
-  # Fresh hardware A/B (llama-server, -np 1, temp 0, single-stream) on THIS
-  # vulkan build: native 20-layer MTP + --spec-type draft-mtp --spec-draft-n-max 2
-  # = 78.5 tok/s vs 57.7 no-spec (+36%), and vs 61.2 for the old Aggressive
-  # Q4_K_P (+28%); 87.5% draft acceptance, coherent uncorrupted output. This is
-  # the "fresh measured win" the MTP-rejection note below (assistant-gemma /
-  # ornith, 1-layer embedded MTP) demanded before re-enabling --spec-type.
-  # HARD: native MTP requires n_parallel=1 (llama.cpp "MTP supports only
-  # n_parallel=1"), hence -np 1 — do NOT restore -np 4 while spec is on.
-  # Old HauhauCS Aggressive Q4_K_P gguf stays on disk for manual rollback.
-  # NOTE: this repo's gguf carries a stale upstream LFS etag (HF Xet migration)
-  # — verify it by LOADING (llama.cpp parses the tensors), not by sha256; naive
-  # curl / lemonade-pull download wrong bytes, must fetch via the hf_xet client.
+  # SMO (2026-07-16): single GPU slot — this competes with ornith/gemma/vlm/122b.
   - alias: coder-agentic
     backend: lemonade
     model_id: Qwen3.6-35B-A3B-heretic-NativeMTP-APEX-I-Balanced
     size_gb: 24.2
-    idle_unload_after_s: 1800
+    size_work_gb: 28.0
+    tier: floating
+    idle_unload_after_s: 900
     checkpoints:
       main: SC117/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-GGUF:Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Balanced.gguf
-    # 0015: repo is on HF Xet storage with a stale LFS etag, so `lemonade pull`
-    # fetches content-wrong bytes and verify-loops. sync fetches it with the
-    # hf_xet client at this pinned commit instead (deterministic + offline-idem).
     provision: hf_xet
     revision: dc1e5523d5924b641adb0fabb4ecde27fc261b0b
     recipe: llamacpp
     recipe_options:
-      ctx_size: 131072
+      ctx_size: 65536
       llamacpp_backend: vulkan
       llamacpp_args: "-np 1 -kvu --spec-type draft-mtp --spec-draft-n-max 2 --no-warmup"
     label: tool-calling
@@ -165,111 +104,41 @@ models:
   # coder-agentic/ornith-35b for iGPU/GTT slots (resident-small on NPU
   # does not count).
   #
-  # MTP draft wired 2026-07-12 (0008 fleet refresh): mtp-gemma-4-26B-A4B-it.gguf
-  # (same HF repo) was sitting unused since the first trial ("not wired...
-  # plain Q4_K_M main weights only"). Lemonade v10.8.1 (already the pinned
-  # version — see llm-lemonade) added native checkpoints:{main,draft,mmproj}
-  # support for exactly this (lemonade-sdk/lemonade#2317); --model-draft/-md/
-  # --spec-draft-model are reserved internally as of that release and can no
-  # longer be passed through --llamacpp-args, so the draft file is attached
-  # via a second --checkpoint flag on pull, not a raw CLI passthrough.
-  # HARD CONSTRAINT (confirmed against a live bug report on the merged MTP
-  # PR: "MTP currently supports only n_parallel=1; got 4"): moved -np 4 -> 1
-  # below — single-stream trade-off, do not revert to -np 4 while the draft
-  # checkpoint stays attached. (The often-repeated "-mmproj also
-  # incompatible" claim did NOT hold up — Lemonade's own official Gemma-4
-  # MTP catalog entries combine draft+mmproj+vision — moot here anyway since
-  # this alias has no mmproj.) Community Strix Halo benchmarks cite up to
-  # ~110 tok/s for 26B-A4B+MTP; not yet hardware-verified on this box.
-  #
-  # Re-pull (adds the draft checkpoint to the existing custom registration;
-  # user. prefix required with --checkpoint/--recipe):
+  # First pull (user. prefix required with --checkpoint/--recipe):
   #   lemonade pull user.Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M \
   #     --checkpoint main HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M \
-  #     --checkpoint draft HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:mtp-gemma-4-26B-A4B-it.gguf \
-  #     --recipe llamacpp --label tool-calling --label mtp
+  #     --recipe llamacpp --label tool-calling
   #   lemonade load Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M \
   #     --llamacpp vulkan --ctx-size 262144 \
-  #     --llamacpp-args "-np 1 -kvu" --save-options
-  #
-  # MTP spec flags DROPPED from the recipe 2026-07-12: hardware-tested on
-  # ornith's embedded MTP with this exact llamacpp:vulkan build — the
-  # speculative loop achieved 99.2% draft acceptance yet decoded at 5.4
-  # tok/s vs 73.2 baseline (13x SLOWER; draft-eval overhead swamps the
-  # acceptance win on Vulkan). The draft checkpoint stays pulled for
-  # re-testing on future llama.cpp builds; do not re-enable --spec-type
-  # without a fresh measured win. The community "~110 tok/s with MTP"
-  # numbers did not reproduce here.
+  #     --llamacpp-args "-np 4 -kvu" --save-options
+  # MTP draft (mtp-gemma-4-26B-A4B-it.gguf) is in the same HF repo; not
+  # wired on first trial — plain Q4_K_M main weights only.
   - alias: assistant-gemma
     backend: lemonade
     model_id: Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M
-    size_gb: 15.8
-    idle_unload_after_s: 1800
-    checkpoints:
-      main: HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M
-      draft: HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:mtp-gemma-4-26B-A4B-it.gguf
-    recipe: llamacpp
-    recipe_options:
-      ctx_size: 262144
-      llamacpp_backend: vulkan
-      llamacpp_args: "-np 1 -kvu"
-    label: [tool-calling, mtp]
+    size_gb: 15.6
+    size_work_gb: 18.0
+    tier: floating
+    idle_unload_after_s: 600
 
-  # 35B MoE reasoning + agentic-coding model. Same migration as
-  # coder-agentic above: Lemonade's llamacpp:vulkan backend measured
-  # ~58.6 tok/s vs Ollama's ~38.8 tok/s (+51%) for this exact model,
-  # tool-calling re-verified structured on the new backend.
-  #
-  # Default is the uncensored AEON fine-tune (0018, user-directed,
-  # hardware-verified 2026-07-14): mrexodia's
-  # Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M GGUF — an uncensored
-  # fine-tune of the ORIGINAL deepreinforce-ai/Ornith-1.0-35B, with a baked-in
-  # MTP layer (from Qwen3.5-35B-A3B). Q4_K_M, ~21.5 GiB; 128GB unified memory
-  # fits it alongside coder-agentic (21.8GB) under max_loaded_models=2.
-  # History: this alias ran SC117's stock APEX-I-Balanced until a live swap to
-  # AEON (for uncensored behaviour) that was never written back — 0018 syncs
-  # the repo to that reality.
-  #
-  # VISION: the AEON GGUF ships text-only (no mmproj in mrexodia's repo). We
-  # borrow SC117 APEX's mmproj-F16.gguf as the mmproj checkpoint — dimensionally
-  # compatible because AEON and APEX share the Qwen3.5-35B-A3B base (same
-  # n_embd). Hardware-verified 2026-07-14 via litellm ornith-35b: OCR read
-  # "VISION 7291" exactly (2.2s) and a shapes/colors scene correctly (1.7s);
-  # the abliterate fine-tune did not degrade vision. MTP tensors + mmproj +
-  # -np 4 coexist with speculative decoding OFF.
-  #
-  # Community repos, not Lemonade's built-in catalog — both checkpoints need
-  # the user.-prefixed custom registration. mmproj targets the exact .gguf file:
-  #   lemonade pull user.Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M \
-  #     --checkpoint main mrexodia/Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-GGUF:Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M.gguf \
-  #     --checkpoint mmproj SC117/Ornith-1.0-35B-MTP-APEX-GGUF:mmproj-F16.gguf \
-  #     --recipe llamacpp --label tool-calling --label mtp --label vision
-  # (--label custom is rejected by the CLI — it is auto-applied.)
-  #   lemonade load Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M \
-  #     --llamacpp vulkan --ctx-size 131072 \
-  #     --llamacpp-args "-np 4 -kvu" --save-options
-  # MTP caveat (NOT re-verified on AEON): the known Lemonade/llamacpp MTP
-  # constraint is n_parallel=1 (see assistant-gemma). If the embedded MTP layer
-  # fails or complains about -np 4, drop to -np 1. Embedded-MTP speculative
-  # decoding was tested and REJECTED on the APEX quant (only 1 MTP layer, too
-  # shallow to beat its own eval overhead — ~19% slower on Vulkan); keep -np 4,
-  # no spec flags. idle_unload_after_s below is change 0007's headroom policy.
+  # 35B MoE tool-calling model — HF uncensored Q4_K_M replacement.
   - alias: ornith-35b
     backend: lemonade
     model_id: Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M
-    size_gb: 22.0
-    idle_unload_after_s: 900
+    size_gb: 22.53
+    size_work_gb: 26.0
+    tier: floating
+    idle_unload_after_s: 600
     checkpoints:
       main: mrexodia/Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-GGUF:Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M.gguf
-      mmproj: SC117/Ornith-1.0-35B-MTP-APEX-GGUF:mmproj-F16.gguf
+    provision: hf_xet
+    revision: 68515e939a1cb6c6809a302ee2f820cae2a4fc7e
     recipe: llamacpp
     recipe_options:
-      ctx_size: 131072
+      ctx_size: 65536
       llamacpp_backend: vulkan
-      llamacpp_args: "-np 4 -kvu"
-    label:
-      - tool-calling
-      - vision
+      llamacpp_args: "-np 1 -kvu"
+    label: tool-calling
 
   # Qwythos-9B-Claude-Mythos-5-1M (empero-ai, Q4_K_M GGUF, 5.6GB) — Hermes's
   # decision + tool-call brain (NOT the chat responder). Full-param Qwen3.5-9B
@@ -297,40 +166,19 @@ models:
     backend: lemonade
     model_id: Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M
     size_gb: 5.6
-    idle_unload_after_s: 1800
-    checkpoints:
-      main: empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M
-    recipe: llamacpp
-    recipe_options:
-      ctx_size: 262144
-      llamacpp_backend: vulkan
-      llamacpp_args: "-np 4 -kvu"
-    label: tool-calling
+    size_work_gb: 7.0
+    tier: floating
+    idle_unload_after_s: 600
 
-  # Heavy coding model (2026-07-12, user-directed, 0012): SC117's APEX
-  # I-Compact quant of HauhauCS/Qwen3.5-122B-A10B-Uncensored — 122B total /
-  # 10B active MoE (256 experts, 8 active), 262K native ctx, hybrid thinking
-  # (litellm sets enable_thinking: false), vision mmproj attached. Uploader's
-  # numbers: 84.5% HellaSwag at 55% of Q8_0's size, ~106 t/s on their rig.
-  # Predecessor qwen35-122b-q3 (Ollama, ~81GB) was retired 2026-07-11 as
-  # "hard to run comfortably" — this re-add is viable only because of the
-  # 0012 gateway memory scheduler: tier: exclusive means the scheduler
-  # preempts (unloads) floating AND resident models to fit it BEFORE the
-  # load reaches lemond, holds other big-model requests while it's in use,
-  # idle-releases it after 600s, and re-warms the agent resident set after.
-  # Single stream (-np 1): a 55 GiB working set shouldn't multiply KV slots,
-  # and coding sessions are effectively single-user.
-  #   lemonade pull user.Qwen3.5-122B-A10B-Uncensored-APEX-Compact \
-  #     --checkpoint main SC117/Qwen3.5-122B-A10B-Uncensored-APEX-Compact-GGUF:Qwen3.5-122B-A10B-Uncensored-APEX-Compact.gguf \
-  #     --checkpoint mmproj SC117/Qwen3.5-122B-A10B-Uncensored-APEX-Compact-GGUF:mmproj-Qwen3.5-122B-A10B-Uncensored-HauhauCS-Aggressive-f16.gguf \
-  #     --recipe llamacpp --label tool-calling
-  #   lemonade load Qwen3.5-122B-A10B-Uncensored-APEX-Compact \
-  #     --llamacpp vulkan --ctx-size 131072 \
-  #     --llamacpp-args "-np 1 -kvu" --save-options
+  # Exclusive 122B (SMO 2026-07-16): must be alone on GPU. Work ctx 64k —
+  # 131k + no-mmap + co-resident mid models caused full thrash (MemAvailable~0,
+  # GTT 70Gi+, swap 60Gi+). Raise ctx only after exclusive path is proven.
+
   - alias: coder-122b
     backend: lemonade
     model_id: Qwen3.5-122B-A10B-Uncensored-APEX-Compact
     size_gb: 59.2
+    size_work_gb: 64.0
     tier: exclusive
     idle_unload_after_s: 600
     checkpoints:
@@ -338,7 +186,7 @@ models:
       mmproj: SC117/Qwen3.5-122B-A10B-Uncensored-APEX-Compact-GGUF:mmproj-Qwen3.5-122B-A10B-Uncensored-HauhauCS-Aggressive-f16.gguf
     recipe: llamacpp
     recipe_options:
-      ctx_size: 131072
+      ctx_size: 65536
       llamacpp_backend: vulkan
       llamacpp_args: "-np 1 -kvu --no-warmup"
     label: tool-calling
@@ -368,11 +216,6 @@ models:
     model_id: gemini-2.5-pro
     size_gb: cloud
 
-  - alias: glm-cloud
-    backend: zai
-    model_id: glm-5.2
-    size_gb: cloud
-
   # Phase 2 (memory-rag): bge-m3 + bge-reranker-v2-m3, served by
   # modules/rag-embedder on 127.0.0.1:8201. backend isn't ollama/lemonade
   # on purpose — the rag-embedder container manages its own model cache
@@ -389,47 +232,6 @@ models:
     backend: lemonade
     model_id: Gemma4-26B-A4B-Uncensored-Vision-Q4_K_M
     size_gb: 17.1
-    # On-demand vision lane — release the floating slot after an idle burst
-    # (0011). Value provisional (render-only); hardware-tune on the physical box.
-    idle_unload_after_s: 300
-
-  # Screen UI / OCR — was only registered in llm-litellm's config, never in
-  # this file (pre-existing drift against CLAUDE.md §7's single-source-of-
-  # truth rule; fixed here as part of the 0008 swap below rather than left
-  # in place). Swapped 2026-07-12 (0008 fleet refresh): Qwen2.5-VL-7B
-  # community re-quant -> Qwen3-VL-8B-Instruct, official Qwen GGUF. 32-
-  # language OCR (up from 19), native GUI-element grounding, 256k native
-  # context (extensible 1M per card). llama.cpp gained Qwen3-VL support via
-  # ggml-org/llama.cpp#16780 (opened 2025-10-27). This repo ships mmproj
-  # only as F16/Q8_0 — no Q4_K_M tier — paired with Q8_0 here (small
-  # fraction of total size, so the extra F16 precision buys little for the
-  # memory it costs).
-  #
-  # First pull (user. prefix required with --checkpoint/--recipe; full
-  # filenames after `:` for main/mmproj, per the official multi-checkpoint
-  # doc example, not the short quant-tag shorthand a single-checkpoint pull
-  # uses elsewhere in this file):
-  #   lemonade pull user.Qwen3VL-8B-Instruct-Q4_K_M \
-  #     --checkpoint main Qwen/Qwen3-VL-8B-Instruct-GGUF:Qwen3VL-8B-Instruct-Q4_K_M.gguf \
-  #     --checkpoint mmproj Qwen/Qwen3-VL-8B-Instruct-GGUF:mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf \
-  #     --recipe llamacpp --label vision
-  #   lemonade load Qwen3VL-8B-Instruct-Q4_K_M \
-  #     --llamacpp vulkan --ctx-size 131072 \
-  #     --llamacpp-args "-np 1 -kvu" --save-options
-  - alias: vlm-screen
-    backend: lemonade
-    model_id: Qwen3VL-8B-Instruct-Q4_K_M
-    size_gb: 5.4
-    checkpoints:
-      main: Qwen/Qwen3-VL-8B-Instruct-GGUF:Qwen3VL-8B-Instruct-Q4_K_M.gguf
-      mmproj: Qwen/Qwen3-VL-8B-Instruct-GGUF:mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf
-    recipe: llamacpp
-    recipe_options:
-      ctx_size: 131072
-      llamacpp_backend: vulkan
-      llamacpp_args: "-np 1 -kvu"
-    label: vision
-    # On-demand screen-describe lane — a describe burst is seconds, so release
-    # the floating slot after idle (0011). Value provisional (render-only);
-    # hardware-tune on the physical box.
-    idle_unload_after_s: 300
+    size_work_gb: 19.0
+    tier: floating
+    idle_unload_after_s: 600
