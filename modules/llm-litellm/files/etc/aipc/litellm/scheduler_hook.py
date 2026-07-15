@@ -57,7 +57,12 @@ _GPU_ALLOW_RAW = os.environ.get(
 GPU_ALLOW = {a.strip() for a in _GPU_ALLOW_RAW.split(",") if a.strip()}
 # Min seconds between switching to a *different* GPU model (anti-storm).
 # Exclusive 122B bypasses. 0 disables.
-MIN_GPU_SWITCH_S = float(os.environ.get("AIPC_SCHED_MIN_GPU_SWITCH_S", "30"))
+# Mild anti-storm only; blocked aliases already 403. Hermes needs free
+# compact↔agentic switches; 30s was too harsh once allowlist is on.
+MIN_GPU_SWITCH_S = float(os.environ.get("AIPC_SCHED_MIN_GPU_SWITCH_S", "5"))
+# Workhorse (Hermes default) is never delayed by switch rate-limit.
+_WORKHORSE_RAW = os.environ.get("AIPC_SCHED_WORKHORSE", "coder-agentic")
+WORKHORSE = {a.strip() for a in _WORKHORSE_RAW.split(",") if a.strip()}
 COMFY_BASE = os.environ.get("AIPC_SCHED_COMFY_BASE")
 COMFY_RECLAIM = os.environ.get("AIPC_SCHED_COMFY_RECLAIM", "1") not in ("0", "")
 
@@ -367,6 +372,7 @@ class _SchedulerCore:
                 if (
                     not already
                     and target["tier"] != TIER_EXCLUSIVE
+                    and alias not in WORKHORSE
                     and self.min_gpu_switch_s > 0
                     and self._last_gpu_alias
                     and self._last_gpu_alias != alias

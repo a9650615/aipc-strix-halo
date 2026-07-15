@@ -60,3 +60,17 @@ Background services (voice/agent/learn) previously cold-loaded `assistant-gemma`
 | Hermes | `discover_models: false` |
 
 Expand allowlist only deliberately (e.g. temporary `ornith-35b` for research).
+
+## Hermes workhorse stability
+
+Hermes default is `coder-agentic` → LiteLLM `:4000` → Lemonade Vulkan.
+
+| Policy | Value | Evidence |
+|--------|-------|----------|
+| GPU allowlist includes agentic | yes | Hermes must not 403 |
+| `AIPC_SCHED_WORKHORSE=coder-agentic` | never rate-limited | long tool loops |
+| `idle_unload_after_s` agentic | **1800** | thrash was multi-model, not warm agentic |
+| `MIN_GPU_SWITCH_S` | 5s | allowlist already blocks casual mid models |
+| Background chat/classify/learn | `resident-small` NPU | drop-in `zzzz-smo-memory-guard` |
+
+Do **not** set Hermes default to blocked models (assistant-gemma/ornith).

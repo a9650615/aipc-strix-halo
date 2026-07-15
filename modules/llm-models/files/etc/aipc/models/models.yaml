@@ -144,7 +144,7 @@ models:
     size_gb: 24.2
     size_work_gb: 28.0  # SMO admission cost incl. KV headroom (2026-07-16)
     tier: floating
-    idle_unload_after_s: 900  # release faster when idle (thrash mitigation)
+    idle_unload_after_s: 1800  # Hermes workhorse warm window
     checkpoints:
       main: SC117/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-GGUF:Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Balanced.gguf
     # 0015: repo is on HF Xet storage with a stale LFS etag, so `lemonade pull`
