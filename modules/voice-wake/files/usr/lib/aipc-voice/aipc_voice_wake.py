@@ -178,6 +178,41 @@ FOLLOWUP_TTS_PAD_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP_TTS_PAD_S", "2.0")
 # After this many empty/junk captures in a follow-up chain, leave multi-turn
 # and hide the overlay (user: 没听到有意义内容就消失).
 FOLLOWUP_JUNK_MAX = int(os.environ.get("AIPC_WAKE_FOLLOWUP_JUNK_MAX", "1"))
+# Anti-ghost: fuzzy STT (我。) alone never arms; acoustic promote may recover
+# real 嘿助理 when SenseVoice mangles it (design 2026-07-16).
+ALLOW_FUZZY_PROMOTE = os.environ.get("AIPC_WAKE_ALLOW_FUZZY_PROMOTE", "1") not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+PROMOTE_SCORE = int(os.environ.get("AIPC_WAKE_PROMOTE_SCORE", "62"))
+CANDIDATE_SCORE = int(os.environ.get("AIPC_WAKE_CANDIDATE_SCORE", "42"))
+WAKE_SPEECH_MS_MIN = int(os.environ.get("AIPC_WAKE_SPEECH_MS_MIN", "280"))
+WAKE_SPEECH_MS_MAX = int(os.environ.get("AIPC_WAKE_SPEECH_MS_MAX", "1400"))
+HARD_MIN_SPEECH_MS = int(os.environ.get("AIPC_WAKE_HARD_MIN_SPEECH_MS", "180"))
+MAX_REPROMPTS = int(os.environ.get("AIPC_WAKE_MAX_REPROMPTS", "1"))
+REPROMPT_TEXT = os.environ.get("AIPC_WAKE_REPROMPT_TEXT", "沒聽清，請再說一次")
+FUZZY_PARTICLES = frozenset(
+    {
+        "我",
+        "我呀",
+        "我啊",
+        "嘿",
+        "嗨",
+        "黑",
+        "咯",
+        "咳",
+        "嗯",
+        "啊",
+        "呃",
+        "哦",
+        "喔",
+        "哈",
+        "唔",
+        "恩",
+    }
+)
 # Audio front gate (waveform ignore; fail-soft if down)
 AUDIO_FRONT = os.environ.get("AIPC_AUDIO_FRONT", "1") not in ("0", "false", "no", "off")
 AUDIO_FRONT_URL = os.environ.get(
@@ -324,31 +359,27 @@ _WAKE_ALIASES: dict[str, tuple[str, ...]] = {
 
 
 def phrase_hit(transcript: str, phrases: list[str]) -> str | None:
-    """Match wake phrases; tolerate STT slips without matching bare 你好/嘿."""
+    """Clear wake phrase match only (no particle / mangled-token auto-arm).
+
+    Bare STT tokens like 我。 historically mapped to 嘿助理 and caused ghost UI.
+    Those are tier=fuzzy via classify_wake_text; promote needs acoustic score.
+    """
     from difflib import SequenceMatcher
 
     hay = _norm(transcript)
-    # SenseVoice STT mis-recognises the spoken wake word 嘿助理 as 我。 — and
-    # does so IDENTICALLY on raw and denoised paths (hw A/B 2026-07-16: both
-    # → 我。), so this is an STT-model issue, not denoise. The mapping is stable,
-    # so accept the mangled form. Restricted to captures that normalise to
-    # essentially just this token (no other content) — a real command like
-    # 我要查... stays longer and won't match here, keeping false wakes low.
-    _MANGLED_WAKE = {"我", "我呀", "我啊", "嘿", "嗨", "黑", "咯"}
-    if hay in _MANGLED_WAKE:
-        for p in phrases:
-            if "助理" in _norm(p) or "assistant" in _norm(p).lower():
-                return p
     if not hay or len(hay) < 2:
         return None
+    # Never treat single-particle STT as a clear phrase hit.
+    if hay in FUZZY_PARTICLES:
+        return None
 
-    # 1) exact / substring (phrase must appear in full)
+    # 1) exact / substring (phrase must appear in full; min 3 chars)
     for p in sorted(phrases, key=lambda x: len(_norm(x)), reverse=True):
         n = _norm(p)
         if len(n) >= 3 and n in hay:
             return p
 
-    # 2) known STT aliases (never bare 你好 / 嘿)
+    # 2) known multi-char STT aliases (never bare 你好 / 嘿 / 我)
     alias_map: dict[str, tuple[str, ...]] = {
         "嘿助理": (
             "嘿助理", "嗨助理", "黑助理", "嘿嘴", "嘿嘴理", "嘿助哩", "嘿自理",
@@ -382,9 +413,8 @@ def phrase_hit(transcript: str, phrases: list[str]) -> str | None:
                     if "assistant" in _norm(p) and "assist" in an:
                         return p
 
-    # 3) structured: 嘿/嗨/黑 + 助/理/嘴 (not 嘿 alone). 我/咯/咳 accept the
-    # RNNoise-mangled wake word (嘿→我, hw 2026-07-14) so denoise-on still wakes.
-    if re.search(r"(嘿|嗨|黑|我|咯|咳)(助|理|嘴|自)", hay) or re.search(
+    # 3) structured multi-char only (嘿/嗨/黑 + 助/理/嘴) — not bare 我/咯
+    if re.search(r"(嘿|嗨|黑)(助|理|嘴|自)", hay) or re.search(
         r"(hey|hei|hi)(assistant|assist|julie|jarvis)", hay
     ):
         for p in phrases:
@@ -397,7 +427,7 @@ def phrase_hit(transcript: str, phrases: list[str]) -> str | None:
             if "小" in _norm(p):
                 return p
 
-    # 5) fuzzy — strict: need high ratio AND similar length (blocks 你好 vs 你好助理)
+    # 5) fuzzy ratio — high threshold only (still "clear" path if length-similar)
     best_p, best_r = None, 0.0
     for p in phrases:
         n = _norm(p)
@@ -405,7 +435,6 @@ def phrase_hit(transcript: str, phrases: list[str]) -> str | None:
             continue
         r = SequenceMatcher(None, n, hay).ratio()
         if abs(len(n) - len(hay)) > 2 and r < 0.9:
-            # length mismatch: only accept near-exact
             continue
         if r > best_r:
             best_r, best_p = r, p
@@ -413,6 +442,158 @@ def phrase_hit(transcript: str, phrases: list[str]) -> str | None:
         return best_p
 
     return None
+
+
+def classify_wake_text(
+    transcript: str, phrases: list[str]
+) -> tuple[str, str | None]:
+    """Classify STT wake clip: ('clear'|'fuzzy'|'none', matched_phrase|None).
+
+    Fuzzy particles (e.g. 我。) never return clear even though SenseVoice may
+    emit them for a real 嘿助理 — acoustic promote decides arm separately.
+    """
+    hay = _norm(transcript or "")
+    if not hay:
+        return "none", None
+    if hay in FUZZY_PARTICLES:
+        return "fuzzy", None
+    hit = phrase_hit(transcript, phrases)
+    if hit:
+        return "clear", hit
+    # Short weak residue that is not a phrase: treat as fuzzy (ambient STT junk)
+    if len(hay) <= 2:
+        return "fuzzy", None
+    return "none", None
+
+
+def score_wake_pcm(
+    pcm: bytes,
+    *,
+    noise_floor: float = 500.0,
+    thr: float = 2200.0,
+    frame_ms: int = FRAME_MS,
+) -> int:
+    """0–100 acoustic score for a wake capture (no ML).
+
+    Strong continuous speech near wake-word duration promotes; clicks / ambient
+    spikes score near 0.
+    """
+    if not pcm or len(pcm) < 4:
+        return 0
+    frame_bytes = max(2, SAMPLE_RATE * frame_ms // 1000 * 2)
+    speech_frames = 0
+    total = 0
+    peak = 0.0
+    for i in range(0, len(pcm) - frame_bytes + 1, frame_bytes):
+        total += 1
+        r = _rms(pcm[i : i + frame_bytes])
+        if r > peak:
+            peak = r
+        if r >= thr:
+            speech_frames += 1
+    if total == 0:
+        return 0
+    speech_ms = speech_frames * frame_ms
+    if speech_ms < HARD_MIN_SPEECH_MS:
+        return 0
+    noise = max(float(noise_floor), 1.0)
+    peak_ratio = peak / noise
+    duty = speech_frames / float(total)
+    dur_ok = 1.0 if WAKE_SPEECH_MS_MIN <= speech_ms <= WAKE_SPEECH_MS_MAX else 0.0
+
+    def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
+        return max(lo, min(hi, x))
+
+    score = (
+        30.0 * _clamp((speech_ms - 120) / 500.0)
+        + 25.0 * _clamp((peak_ratio - 1.3) / 2.0)
+        + 15.0 * _clamp((duty - 0.15) / 0.45)
+        + 15.0 * dur_ok
+        + 15.0 * 0.5  # neutral without audio-front
+    )
+    return int(round(min(100.0, max(0.0, score))))
+
+
+def decide_wake_arm(
+    tier: str,
+    score: int,
+    *,
+    phrase: str | None = None,
+    ptt: bool = False,
+    allow_fuzzy_promote: bool = True,
+    promote_score: int = PROMOTE_SCORE,
+    candidate_score: int = CANDIDATE_SCORE,
+) -> dict:
+    """Pure arm decision: text tier × acoustic score × PTT.
+
+    Returns dict with keys: arm (bool), arm_reason (str), intentional (bool),
+    tier (str), score (int), phrase (str|None).
+    """
+    if ptt:
+        return {
+            "arm": True,
+            "arm_reason": "ptt",
+            "intentional": True,
+            "tier": tier or "none",
+            "score": int(score),
+            "phrase": phrase,
+        }
+    if tier == "clear" and phrase:
+        return {
+            "arm": True,
+            "arm_reason": "clear_wake",
+            "intentional": True,
+            "tier": tier,
+            "score": int(score),
+            "phrase": phrase,
+        }
+    if tier == "fuzzy":
+        if allow_fuzzy_promote and int(score) >= int(promote_score):
+            return {
+                "arm": True,
+                "arm_reason": "fuzzy_promoted",
+                "intentional": True,
+                "tier": tier,
+                "score": int(score),
+                "phrase": phrase,
+            }
+        if int(score) >= int(candidate_score):
+            return {
+                "arm": False,
+                "arm_reason": "candidate",
+                "intentional": False,
+                "tier": tier,
+                "score": int(score),
+                "phrase": phrase,
+            }
+        return {
+            "arm": False,
+            "arm_reason": "ghost_suppressed",
+            "intentional": False,
+            "tier": tier,
+            "score": int(score),
+            "phrase": phrase,
+        }
+    return {
+        "arm": False,
+        "arm_reason": "none",
+        "intentional": False,
+        "tier": tier or "none",
+        "score": int(score),
+        "phrase": phrase,
+    }
+
+
+def junk_capture_action(
+    *,
+    intentional: bool,
+    reprompt_used: int,
+    max_reprompts: int = MAX_REPROMPTS,
+) -> str:
+    """After empty/junk command capture: 'reprompt' once if intentional else 'idle'."""
+    if intentional and int(reprompt_used) < int(max_reprompts):
+        return "reprompt"
+    return "idle"
 
 
 def _desktop_user_env() -> dict[str, str]:
@@ -1090,12 +1271,16 @@ def run_phrase_loop() -> int:
     playback_gate_log_t = 0.0  # rate-limit "playback gate" logs
     bleed_floor = 0.0  # EMA of mic while not clearly speaking (music bleed)
     miss_streak = 0  # consecutive energy-open without wake phrase
+    # Intentional arm (clear/promote/PTT): junk must REPROMPT once, not vanish.
+    session_intentional = False
+    reprompt_used = 0
 
     def _clear_followup(reason: str = "", *, hide: bool = True) -> None:
         """End multi-turn; by default hide overlay (listening → disappear)."""
         nonlocal followup_until, followup_high, followup_quiet, followup_mode
         nonlocal followup_started, followup_turn, followup_speech_thr, followup_min_open_s
         nonlocal followup_junk, last_submit_usable
+        nonlocal session_intentional, reprompt_used
         was = followup_mode is not None or followup_turn > 0
         followup_until = 0.0
         followup_high = 0
@@ -1107,23 +1292,63 @@ def run_phrase_loop() -> int:
         followup_turn = 0
         followup_junk = 0
         last_submit_usable = False
+        session_intentional = False
+        reprompt_used = 0
         if reason:
             print(f"aipc-voice-wake: follow-up closed ({reason})", flush=True)
         if hide:
             # No "请再说" linger — go straight to idle hide.
             _ux("listening", force=True)
 
+    def _rearm_command_capture(*, seed: list | None = None) -> None:
+        """Re-open command mode on the same mic stream (reprompt / PTT)."""
+        nonlocal mode, cmd_buf, cmd_frames, cmd_silent, cmd_speech
+        nonlocal cmd_speech_run, cmd_speech_frames, cmd_t0
+        nonlocal cmd_prog_text, cmd_prog_stable_since, partial_last_req
+        mode = "command"
+        cmd_buf = bytearray()
+        for f in seed or []:
+            cmd_buf.extend(f)
+        cmd_frames = 0
+        cmd_silent = 0
+        cmd_speech = False
+        cmd_speech_run = 0
+        cmd_speech_frames = 0
+        cmd_t0 = time.monotonic()
+        cmd_prog_text = ""
+        cmd_prog_stable_since = 0.0
+        partial_stt.reset()
+        partial_last_req = 0.0
+        _arm_command_vad(list(seed or []))
+
     def _drop_empty_capture(reason: str) -> None:
-        """No meaningful content: leave 接话 and hide UI (do not re-arm)."""
-        nonlocal followup_junk
+        """Empty/junk after command: intentional → REPROMPT once; else idle hide."""
+        nonlocal followup_junk, session_intentional, reprompt_used
         followup_junk += 1
+        action = junk_capture_action(
+            intentional=session_intentional,
+            reprompt_used=reprompt_used,
+            max_reprompts=MAX_REPROMPTS,
+        )
         print(
-            f"aipc-voice-wake: empty/junk capture → dismiss ({reason}) "
-            f"junk={followup_junk}",
+            f"aipc-voice-wake: empty/junk capture → {action} ({reason}) "
+            f"junk={followup_junk} intentional={session_intentional} "
+            f"reprompt_used={reprompt_used}",
             flush=True,
         )
         partial_stt.reset()
-        # Always dismiss on empty — user asked: 没听到有意义内容就消失
+        if action == "reprompt":
+            reprompt_used += 1
+            _ux("no_speech", REPROMPT_TEXT, force=True)
+            print(
+                f"aipc-voice-wake: reprompt {REPROMPT_TEXT!r} "
+                f"({reprompt_used}/{MAX_REPROMPTS})",
+                flush=True,
+            )
+            _ux("recording", force=True)
+            _rearm_command_capture()
+            return
+        # Follow-up noise / second intentional fail: silent idle (no more spam)
         _clear_followup(reason, hide=True)
 
     def _audio_front_ignore(wav_path: str) -> bool:
@@ -1425,7 +1650,7 @@ def run_phrase_loop() -> int:
         nonlocal cmd_speech_run, cmd_speech_frames, cmd_t0
         nonlocal followup_until, followup_turn, followup_mode, followup_high, followup_quiet
         nonlocal partial_last_req, cmd_prog_text, cmd_prog_stable_since
-        nonlocal energy_thr, miss_streak
+        nonlocal energy_thr, miss_streak, session_intentional, reprompt_used
         if ctrl is None:
             return
         try:
@@ -1465,6 +1690,8 @@ def run_phrase_loop() -> int:
             _ux("wake", "控制中心 · 接续" if in_session else "控制中心", force=True)
             _ux("recording", force=True)
             ptt_requested = True
+            session_intentional = True
+            reprompt_used = 0
             if not in_session:
                 # Idle: open a fresh conversation chain
                 followup_until = 0.0
@@ -1479,29 +1706,14 @@ def run_phrase_loop() -> int:
                 followup_mode = None
                 followup_high = 0
                 followup_quiet = 0
-            # interrupt wake_buf or restart command
-            mode = "command"
             # PTT: decay miss-streak thr so command start isn't deaf.
             energy_thr = max(
                 float(ENERGY_THRESHOLD),
                 min(energy_thr * 0.7, 5500.0),
             )
             miss_streak = 0
-            cmd_buf = bytearray()
             seed = list(preroll)
-            for f in seed:
-                cmd_buf.extend(f)
-            cmd_frames = 0
-            cmd_silent = 0
-            cmd_speech = False
-            cmd_speech_run = 0
-            cmd_speech_frames = 0
-            cmd_t0 = time.monotonic()
-            cmd_prog_text = ""
-            cmd_prog_stable_since = 0.0
-            partial_stt.reset()
-            partial_last_req = 0.0
-            _arm_command_vad(seed)
+            _rearm_command_capture(seed=seed)
 
     def _finish_command(pcm: bytes, reason: str) -> None:
         nonlocal partial_last_req, last_submit_usable, followup_junk
@@ -1853,19 +2065,16 @@ def run_phrase_loop() -> int:
                             high = 0
                             continue
                 if not cmd_speech and (time.monotonic() - cmd_t0) >= CMD_START_TIMEOUT_S:
-                    mode = "listen"
                     print(
                         f"aipc-voice-wake: command start timeout "
                         f"(speech_thr={cmd_speech_thr:.0f} last_rms={rms:.0f})",
                         flush=True,
                     )
-                    partial_stt.reset()
-                    # Opened 接话 but never spoke → dismiss UI
-                    _clear_followup("start-timeout", hide=True)
+                    # Intentional arm → REPROMPT; follow-up empty → idle hide
+                    _drop_empty_capture("start-timeout")
                     high = 0
                     continue
                 if cmd_frames >= cmd_max_frames:
-                    mode = "listen"
                     # If max without a real peak, don't send garbage to STT/LLM
                     if cmd_peak < cmd_speech_thr * 1.12:
                         print(
@@ -1873,9 +2082,9 @@ def run_phrase_loop() -> int:
                             f"(peak={cmd_peak:.0f})",
                             flush=True,
                         )
-                        partial_stt.reset()
-                        _clear_followup("max-noise", hide=True)
+                        _drop_empty_capture(f"max-noise peak={cmd_peak:.0f}")
                     else:
+                        mode = "listen"
                         _finish_command(bytes(cmd_buf), "max")
                     last_wake_check = time.monotonic()
                     high = 0
@@ -1902,27 +2111,43 @@ def run_phrase_loop() -> int:
                     except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
                         print(f"aipc-voice-wake: STT check failed: {exc}", flush=True)
                         text = ""
-                    hit = phrase_hit(text, phrases) if text else None
-                    print(f"aipc-voice-wake: heard {text!r} hit={hit!r}", flush=True)
-                    if text and not hit:
-                        # Quiet miss — no overlay spam; raise thr / cooldown if spammy
+                    tier, hit = (
+                        classify_wake_text(text, phrases)
+                        if text
+                        else ("none", None)
+                    )
+                    noise_floor = max(500.0, float(energy_thr) * 0.65)
+                    wake_score = score_wake_pcm(
+                        bytes(wake_buf),
+                        noise_floor=noise_floor,
+                        thr=float(energy_thr),
+                    )
+                    decision = decide_wake_arm(
+                        tier,
+                        wake_score,
+                        phrase=hit,
+                        ptt=False,
+                        allow_fuzzy_promote=ALLOW_FUZZY_PROMOTE,
+                        promote_score=PROMOTE_SCORE,
+                        candidate_score=CANDIDATE_SCORE,
+                    )
+                    print(
+                        f"aipc-voice-wake: heard {text!r} tier={tier!r} "
+                        f"score={wake_score} decision={decision['arm_reason']!r} "
+                        f"phrase={hit!r}",
+                        flush=True,
+                    )
+                    if not decision["arm"]:
+                        # Prefer miss over ghost: never open wake/recording UX.
                         miss_streak += 1
-                        # Misses while media plays are music/bleed hearing 「。」,
-                        # not real speech failing. Raising energy_thr on those races
-                        # it past human voice and deafens wake (root of 喚不醒,
-                        # hw 2026-07-14: 152 gate-opens, 0 wake hits, all playback).
                         _miss_in_playback = _playback_active(include_tts=False)
-                        if miss_streak >= 3:
+                        # Only thr-raise on true none-misses, not fuzzy_suppressed
+                        # (keeps room ambient from deafening later real speech).
+                        if miss_streak >= 3 and decision["arm_reason"] == "none":
                             if not _miss_in_playback:
-                                # Cap 7500: 12000 made command start deaf.
                                 energy_thr = min(
                                     max(energy_thr * 1.08, energy_thr + 200), 7500
                                 )
-                            # ponytail: the old `now + min(4,COOLDOWN_S)` set a
-                            # FUTURE timestamp; the gate check then blacked the
-                            # mic out for ~10-12s, ignoring real speech the whole
-                            # time. A miss is STT hearing noise, not a wake — a
-                            # short cooldown just stops re-firing on the same burst.
                             _miss_cd = float(
                                 os.environ.get("AIPC_WAKE_MISS_COOLDOWN_S", "1.5")
                             )
@@ -1935,61 +2160,39 @@ def run_phrase_loop() -> int:
                                 f"{' (playback: no thr raise)' if _miss_in_playback else ''}",
                                 flush=True,
                             )
-                        if voice_ux:
+                        if voice_ux and decision["arm_reason"] == "none" and text:
                             try:
                                 voice_ux.write_status("miss", text[:40])
                             except Exception:
                                 pass
-                        _ux("listening")
-                    elif not text:
-                        miss_streak += 1
-                        if voice_ux:
-                            try:
-                                voice_ux.write_status("no_speech", "")
-                            except Exception:
-                                pass
-                        _ux("listening")
-                    if hit:
+                    else:
                         miss_streak = 0
-                        # Miss-streak can push thr to 12k; after a real wake, decay
-                        # so follow-up/ambient stay in human speech range.
+                        session_intentional = bool(decision["intentional"])
+                        reprompt_used = 0
                         energy_thr = max(
                             float(ENERGY_THRESHOLD),
                             min(energy_thr * 0.75, 6500.0),
                         )
+                        label = hit or decision["arm_reason"]
                         print(
-                            f"aipc-voice-wake: phrase {hit!r} → command mode "
-                            f"(mic stays open, once is async thr={energy_thr:.0f})",
+                            f"aipc-voice-wake: arm {label!r} "
+                            f"reason={decision['arm_reason']} "
+                            f"→ command (thr={energy_thr:.0f})",
                             flush=True,
                         )
-                        _ux("wake", str(hit), force=True)
+                        _ux("wake", str(label), force=True)
                         _ux("recording", force=True)
                         followup_until = 0.0
-                        followup_turn = 0  # new conversation chain
+                        followup_turn = 0
                         followup_mode = None
                         followup_high = 0
                         followup_quiet = 0
-                        mode = "command"
-                        cmd_buf = bytearray()
-                        # keep a little post-wake audio from end of wake clip
-                        tail = bytes(wake_buf[-(frame_bytes * 10) :])
-                        cmd_buf.extend(tail)
                         tail_chunks = [
                             wake_buf[i : i + frame_bytes]
                             for i in range(0, len(wake_buf), frame_bytes)
                             if len(wake_buf[i : i + frame_bytes]) == frame_bytes
                         ][-12:]
-                        cmd_frames = 0
-                        cmd_silent = 0
-                        cmd_speech = False
-                        cmd_speech_run = 0
-                        cmd_speech_frames = 0
-                        cmd_t0 = time.monotonic()
-                        cmd_prog_text = ""
-                        cmd_prog_stable_since = 0.0
-                        partial_stt.reset()
-                        partial_last_req = 0.0
-                        _arm_command_vad(tail_chunks or list(preroll))
+                        _rearm_command_capture(seed=tail_chunks or list(preroll))
                         last_wake_check = time.monotonic()
                 finally:
                     try:
@@ -2023,10 +2226,14 @@ def run_phrase_loop() -> int:
                     nonlocal mode, cmd_buf, cmd_frames, cmd_silent, cmd_speech
                     nonlocal cmd_speech_run, cmd_speech_frames, cmd_t0
                     nonlocal cmd_prog_text, cmd_prog_stable_since, partial_last_req, high
+                    nonlocal session_intentional, reprompt_used
                     print(
                         f"aipc-voice-wake: follow-up → command ({reason})",
                         flush=True,
                     )
+                    # Follow-up junk: idle hide (no 沒聽清 spam)
+                    session_intentional = False
+                    reprompt_used = 0
                     followup_mode = None
                     followup_until = 0.0
                     followup_high = 0
@@ -2424,23 +2631,45 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _self_test() -> int:
+    phrases = ["嘿助理", "hey assistant", "你好助理", "小廢物"]
     assert _rms(b"\x00\x00" * 100) == 0.0
     loud = struct.pack("<h", 10000) * 200
     assert _rms(loud) > 1000
-    assert phrase_hit("嘿助理", ["嘿助理", "hey assistant"]) == "嘿助理"
-    assert phrase_hit("嘿嘴。", ["嘿助理"]) == "嘿助理"
-    assert phrase_hit("今天天气怎么样", ["嘿助理"]) is None
-    assert phrase_hit("你好。", ["你好助理", "嘿助理"]) is None  # bare 你好 must NOT wake
-    assert phrase_hit("你好助理", ["你好助理"]) == "你好助理"
-    assert phrase_hit("He助理。", ["嘿助理"]) == "嘿助理"
-    assert phrase_hit("小飞幕听到了吗", ["小廢物"]) == "小廢物"
-    assert _norm("嘿 助 理!") == "嘿助理" or "嘿" in _norm("嘿 助 理!")
-    # space stripped in norm
-    assert "嘿助理" == _norm("嘿 助理") or _norm("嘿助理") in _norm("嘿 助理") or _norm(
-        "嘿助理"
-    ) == _norm("嘿助理")
-    assert phrase_hit("请打开嘿助理功能", ["嘿助理"]) == "嘿助理"
-    assert phrase_hit("嘿", ["嘿助理"]) is None
+    assert phrase_hit("嘿助理", phrases) == "嘿助理"
+    assert phrase_hit("嘿嘴。", phrases) == "嘿助理"
+    assert phrase_hit("今天天气怎么样", phrases) is None
+    assert phrase_hit("你好。", phrases) is None  # bare 你好 must NOT wake
+    assert phrase_hit("你好助理", phrases) == "你好助理"
+    assert phrase_hit("He助理。", phrases) == "嘿助理"
+    assert phrase_hit("小飞幕听到了吗", phrases) == "小廢物"
+    assert phrase_hit("请打开嘿助理功能", phrases) == "嘿助理"
+    assert phrase_hit("嘿", phrases) is None
+    # Anti-ghost: particle STT is never a clear phrase hit
+    assert phrase_hit("我。", phrases) is None
+    assert phrase_hit("我", phrases) is None
+    assert classify_wake_text("我。", phrases)[0] == "fuzzy"
+    assert classify_wake_text("嘿助理", phrases)[0] == "clear"
+    assert classify_wake_text("今天天气怎么样", phrases)[0] == "none"
+    d_low = decide_wake_arm("fuzzy", 20, phrase=None, allow_fuzzy_promote=True)
+    assert d_low["arm"] is False and d_low["arm_reason"] == "ghost_suppressed"
+    d_hi = decide_wake_arm("fuzzy", 80, phrase=None, allow_fuzzy_promote=True)
+    assert d_hi["arm"] is True and d_hi["arm_reason"] == "fuzzy_promoted"
+    d_clear = decide_wake_arm("clear", 0, phrase="嘿助理")
+    assert d_clear["arm"] is True and d_clear["intentional"] is True
+    d_ptt = decide_wake_arm("none", 0, ptt=True)
+    assert d_ptt["arm"] is True and d_ptt["arm_reason"] == "ptt"
+    assert junk_capture_action(intentional=True, reprompt_used=0) == "reprompt"
+    assert junk_capture_action(intentional=True, reprompt_used=1) == "idle"
+    assert junk_capture_action(intentional=False, reprompt_used=0) == "idle"
+    # synthetic speech-shaped PCM scores above click
+    frame = SAMPLE_RATE * FRAME_MS // 1000
+    silence = struct.pack("<h", 0) * frame
+    speech = struct.pack("<h", 8000) * frame
+    click = speech + silence * 20
+    spoken = silence * 2 + speech * 20 + silence * 2  # ~600ms speech
+    assert score_wake_pcm(click, noise_floor=500, thr=2000) < score_wake_pcm(
+        spoken, noise_floor=500, thr=2000
+    )
     print("aipc-voice-wake: self-test OK")
     return 0
 
