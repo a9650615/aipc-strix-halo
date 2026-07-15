@@ -94,3 +94,16 @@ not casual voice/agent warmups. After agent skill-learn/supervisor moved to
 NPU `resident-small`, allowlist includes `ornith-35b` and `vlm-qwen2vl` so
 Imagine Web stops getting HTTP 403 while still blocking `assistant-gemma` /
 `qwythos-9b` casual classifier/chat paths.
+
+## Capacity-first admission (user directive 2026-07-16)
+
+Normal product calls must **not** hard-403. Default `AIPC_SCHED_GPU_ALLOW`
+is empty (allow all registered aliases). Gates:
+
+- MemAvailable + headroom / floor + GTT budget + no swap-admit for large
+- At most one **large** model (≥12 Gi `size_work_gb`) on GPU
+- Up to **2** non-NPU GPU models so a **small** model (qwythos/compact) can
+  start while a workhorse is warm, when free capacity allows
+- exclusive 122B still alone; lemonade `max_loaded_models=3` (NPU+2 GPU)
+
+Hard allowlist is optional emergency only.

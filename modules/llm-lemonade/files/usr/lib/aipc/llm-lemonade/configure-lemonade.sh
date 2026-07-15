@@ -54,10 +54,11 @@ if [ -f "$CFG" ]; then
   # 8 -> 4 (OOM 2026-07-11) -> 2 (SMO 2026-07-16): multi-auto-load thrash
   # with 122B + mid models left MemAvailable~0 / GTT 70Gi+ / swap 60Gi+.
   # FLM (resident-small, NPU) counts as type=llm in lemond 10.8.1, so
-  # max_loaded_models=2 == pinned NPU + ONE GPU LLM. Gateway SMO enforces
-  # the same single-GPU-slot policy; do not raise without re-proving UMA.
+  # max_loaded_models=3 == pinned NPU + up to TWO GPU LLMs (capacity-first:
+  # one large workhorse + optional small). SMO enforces at-most-one large
+  # and exclusive 122B alone. Do not raise without re-proving UMA.
   # global_timeout 1800: coder-122b ready-wait (0012).
-  jq '.max_loaded_models = 2 | .enable_dgpu_gtt = true | .llamacpp.backend = "vulkan" | .global_timeout = 1800' "$CFG" > "$tmp"
+  jq '.max_loaded_models = 3 | .enable_dgpu_gtt = true | .llamacpp.backend = "vulkan" | .global_timeout = 1800' "$CFG" > "$tmp"
   mv "$tmp" "$CFG"
 fi
 

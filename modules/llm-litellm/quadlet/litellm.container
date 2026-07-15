@@ -22,12 +22,12 @@ EnvironmentFile=/etc/aipc/env.d/llm-litellm/cloud-keys.env
 Environment=AIPC_SCHED_BUDGET_GB=80
 Environment=AIPC_SCHED_HEADROOM_GB=12
 Environment=AIPC_SCHED_RAM_FLOOR_GB=12
-Environment=AIPC_SCHED_MAX_GPU=1
+Environment=AIPC_SCHED_MAX_GPU=2
+Environment=AIPC_SCHED_LARGE_GB=12
 Environment=AIPC_SCHED_GTT_BUDGET_GB=70
 Environment=AIPC_SCHED_ALLOW_SWAP_ADMIT=0
 # Only these GPU aliases may load (NPU resident-small unrestricted).
 # Blocks voice/agent casual loads of assistant-gemma/ornith/qwythos.
-Environment=AIPC_SCHED_GPU_ALLOW=coder-agentic,coder-compact,coder-122b,ornith-35b,vlm-qwen2vl
 Environment=AIPC_SCHED_MIN_GPU_SWITCH_S=0
 Environment=AIPC_SCHED_WORKHORSE=coder-agentic
 # ComfyUI GTT reclamation (0016): before hold, ask idle ComfyUI to free cache.

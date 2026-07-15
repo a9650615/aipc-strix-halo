@@ -36,24 +36,20 @@ POLL_S = float(os.environ.get("AIPC_SCHED_POLL_S", "2"))
 HEADROOM_GB = float(os.environ.get("AIPC_SCHED_HEADROOM_GB", "12"))
 # Hard floor: never admit if MemAvailable below this (even small models).
 RAM_FLOOR_GB = float(os.environ.get("AIPC_SCHED_RAM_FLOOR_GB", "12"))
-# GPU slot count (non-NPU). UMA policy: 1.
-MAX_GPU_LOADED = int(os.environ.get("AIPC_SCHED_MAX_GPU", "1"))
+# Max concurrent *non-NPU* GPU LLMs. 2 = e.g. one workhorse (agentic/ornith)
+# + one small (qwythos/compact) when MemAvailable allows. Exclusive still alone.
+MAX_GPU_LOADED = int(os.environ.get("AIPC_SCHED_MAX_GPU", "2"))
+# Models >= this size_gb count as "large" — at most one large on GPU at a time.
+LARGE_GB = float(os.environ.get("AIPC_SCHED_LARGE_GB", "12"))
 # GTT used upper bound after which we refuse new loads until eviction frees it.
 GTT_BUDGET_GB = float(os.environ.get("AIPC_SCHED_GTT_BUDGET_GB", "70"))
 # Swap-backed admit is OFF by default (2026-07-16 thrash root cause).
-# Set AIPC_SCHED_ALLOW_SWAP_ADMIT=1 only for emergency experiments.
 ALLOW_SWAP_ADMIT = os.environ.get("AIPC_SCHED_ALLOW_SWAP_ADMIT", "0") not in ("0", "")
-# Even if swap admit is on, never use it for models larger than this (GiB).
 SWAP_ADMIT_MAX_SIZE_GB = float(os.environ.get("AIPC_SCHED_SWAP_ADMIT_MAX_SIZE_GB", "8"))
-# GPU aliases that may be *loaded* by any client. Everything else is refused
-# at the gateway so background services cannot thrash UMA by casually
-# warming assistant-gemma / ornith / qwythos. Comma-separated; empty = allow all
-# (escape hatch). Default is the deliberate work set only.
-# NPU resident-small is not in this list (pool=npu, SMO skips it).
-_GPU_ALLOW_RAW = os.environ.get(
-    "AIPC_SCHED_GPU_ALLOW",
-    "coder-agentic,coder-compact,coder-122b,ornith-35b,vlm-qwen2vl",
-)
+# Optional denylist only. Empty default = all registered aliases may load when
+# capacity fits (user directive 2026-07-16: normal product calls must not 403).
+# Set AIPC_SCHED_GPU_ALLOW=a,b to re-enable a hard allowlist if needed.
+_GPU_ALLOW_RAW = os.environ.get("AIPC_SCHED_GPU_ALLOW", "")
 GPU_ALLOW = {a.strip() for a in _GPU_ALLOW_RAW.split(",") if a.strip()}
 # Min seconds between switching to a *different* GPU model (anti-storm).
 # Exclusive 122B bypasses. 0 disables.
@@ -227,6 +223,7 @@ class _SchedulerCore:
         gtt_used=gtt_used_gb,
         gtt_budget_gb=GTT_BUDGET_GB,
         max_gpu=MAX_GPU_LOADED,
+        large_gb=LARGE_GB,
         allow_swap_admit=ALLOW_SWAP_ADMIT,
         swap_admit_max_size_gb=SWAP_ADMIT_MAX_SIZE_GB,
         comfy_idle=None,
@@ -248,6 +245,7 @@ class _SchedulerCore:
         self.gtt_used = gtt_used
         self.gtt_budget_gb = gtt_budget_gb
         self.max_gpu = max_gpu
+        self.large_gb = large_gb
         self.allow_swap_admit = allow_swap_admit
         self.swap_admit_max_size_gb = swap_admit_max_size_gb
         self.comfy_idle = comfy_idle if comfy_idle is not None else _http_comfy_idle
@@ -262,12 +260,21 @@ class _SchedulerCore:
         self.min_gpu_switch_s = MIN_GPU_SWITCH_S
 
     def _slot_ok(self, loaded: list[dict], target: dict) -> bool:
-        """GPU pool has room for target under MAX_GPU / exclusive rules."""
+        """GPU pool has room under exclusive / large / small rules.
+
+        - exclusive: alone on GPU
+        - large (>= large_gb): at most one large; total others < max_gpu
+        - small: may coexist with one large when capacity fits (max_gpu total)
+        """
         others = others_loaded(loaded, target["model_id"])
         if target["tier"] == TIER_EXCLUSIVE:
             return len(others) == 0
-        # Non-exclusive: at most max_gpu total including target once loaded.
-        return len(others) < self.max_gpu
+        if len(others) >= self.max_gpu:
+            return False
+        large_others = [m for m in others if m["size_gb"] >= self.large_gb]
+        if target["size_gb"] >= self.large_gb:
+            return len(large_others) == 0
+        return True
 
     def _mem_ok(self, target: dict) -> bool:
         avail = self.mem_available()
