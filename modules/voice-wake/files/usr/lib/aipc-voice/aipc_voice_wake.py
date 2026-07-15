@@ -178,16 +178,17 @@ FOLLOWUP_TTS_PAD_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP_TTS_PAD_S", "2.0")
 # After this many empty/junk captures in a follow-up chain, leave multi-turn
 # and hide the overlay (user: 没听到有意义内容就消失).
 FOLLOWUP_JUNK_MAX = int(os.environ.get("AIPC_WAKE_FOLLOWUP_JUNK_MAX", "1"))
-# Anti-ghost: fuzzy STT (我。) alone never arms; acoustic promote may recover
-# real 嘿助理 when SenseVoice mangles it (design 2026-07-16).
-ALLOW_FUZZY_PROMOTE = os.environ.get("AIPC_WAKE_ALLOW_FUZZY_PROMOTE", "1") not in (
+# Anti-ghost: fuzzy STT (我。) alone never arms. Acoustic promote is OFF by
+# default — hw 2026-07-16: ambient 我。 still scores ~78 and false-promoted.
+# Opt-in: AIPC_WAKE_ALLOW_FUZZY_PROMOTE=1 with high PROMOTE_SCORE when tuning.
+ALLOW_FUZZY_PROMOTE = os.environ.get("AIPC_WAKE_ALLOW_FUZZY_PROMOTE", "0") not in (
     "0",
     "false",
     "no",
     "off",
 )
-PROMOTE_SCORE = int(os.environ.get("AIPC_WAKE_PROMOTE_SCORE", "62"))
-CANDIDATE_SCORE = int(os.environ.get("AIPC_WAKE_CANDIDATE_SCORE", "42"))
+PROMOTE_SCORE = int(os.environ.get("AIPC_WAKE_PROMOTE_SCORE", "90"))
+CANDIDATE_SCORE = int(os.environ.get("AIPC_WAKE_CANDIDATE_SCORE", "70"))
 WAKE_SPEECH_MS_MIN = int(os.environ.get("AIPC_WAKE_SPEECH_MS_MIN", "280"))
 WAKE_SPEECH_MS_MAX = int(os.environ.get("AIPC_WAKE_SPEECH_MS_MAX", "1400"))
 HARD_MIN_SPEECH_MS = int(os.environ.get("AIPC_WAKE_HARD_MIN_SPEECH_MS", "180"))
@@ -520,7 +521,7 @@ def decide_wake_arm(
     *,
     phrase: str | None = None,
     ptt: bool = False,
-    allow_fuzzy_promote: bool = True,
+    allow_fuzzy_promote: bool = ALLOW_FUZZY_PROMOTE,
     promote_score: int = PROMOTE_SCORE,
     candidate_score: int = CANDIDATE_SCORE,
 ) -> dict:
