@@ -34,3 +34,15 @@ numfmt --to=iec-i < /sys/class/drm/card1/device/mem_info_gtt_used
 ## 122B
 
 Use only via gateway alias `coder-122b`. Work ctx **65536**. Expect unload of agentic/ornith first; if MemAvailable too low → HTTP 503 with SMO detail (not thrash).
+
+`configure-lemonade.sh` registers id `Qwen3.5-122B-A10B-Uncensored-APEX-Compact` in
+`user_models.json` (weights must already exist under `/var/lib/aipc-models/hf`).
+
+## Dry-run evidence (2026-07-16)
+
+| Step | Result |
+|------|--------|
+| `resident-small` chat | HTTP 200, ~2–11s |
+| `coder-agentic` chat | HTTP 200; GPU = Qwen3.6-35B only |
+| `coder-122b` chat | HTTP 200; GPU = 122B only (agentic unloaded) |
+| Isolation | `PASS ok_one ok_122 ok_no_mid` |

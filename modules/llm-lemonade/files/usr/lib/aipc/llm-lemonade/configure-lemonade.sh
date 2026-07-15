@@ -61,7 +61,24 @@ if [ -f "$CFG" ]; then
   mv "$tmp" "$CFG"
 fi
 
-# (Removed 2026-07-12: the 2026-07-07 user_models.json cleanup for the
-# retired Ollama-era Qwen3.5-122B-A10B-GGUF-Q3_K_XL id — that id no longer
-# exists anywhere, and the 0012 coder-122b re-add uses a different id
-# under the gateway memory scheduler.)
+# Ensure coder-122b's Lemonade id is registered (weights live under HF hub
+# bind-mount; without this entry lemond 404s "Model was not found" even when
+# GGUF is on disk — hardware-verified 2026-07-16 dry-run).
+UM=/var/lib/aipc-lemonade/cache/user_models.json
+if [ -f "$UM" ]; then
+  tmpu=$(mktemp -p "$(dirname "$UM")")
+  jq '
+    .["Qwen3.5-122B-A10B-Uncensored-APEX-Compact"] = (
+      .["Qwen3.5-122B-A10B-Uncensored-APEX-Compact"] // {
+        "checkpoints": {
+          "main": "SC117/Qwen3.5-122B-A10B-Uncensored-APEX-Compact-GGUF:Qwen3.5-122B-A10B-Uncensored-APEX-Compact.gguf",
+          "mmproj": "SC117/Qwen3.5-122B-A10B-Uncensored-APEX-Compact-GGUF:mmproj-Qwen3.5-122B-A10B-Uncensored-HauhauCS-Aggressive-f16.gguf"
+        },
+        "labels": ["custom", "tool-calling", "exclusive"],
+        "recipe": "llamacpp",
+        "suggested": true
+      }
+    )
+  ' "$UM" > "$tmpu"
+  mv "$tmpu" "$UM"
+fi
