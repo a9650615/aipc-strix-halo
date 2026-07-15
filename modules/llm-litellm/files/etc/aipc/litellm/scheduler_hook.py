@@ -32,7 +32,7 @@ BUDGET_GB = float(os.environ.get("AIPC_SCHED_BUDGET_GB", "80"))
 COOLDOWN_S = float(os.environ.get("AIPC_SCHED_COOLDOWN_S", "120"))
 HOLD_TIMEOUT_S = float(os.environ.get("AIPC_SCHED_HOLD_TIMEOUT_S", "900"))
 # Max seconds to wait for a single lemonade load (prevents global admit lock hang).
-LOAD_TIMEOUT_S = float(os.environ.get("AIPC_SCHED_LOAD_TIMEOUT_S", "180"))
+LOAD_TIMEOUT_S = float(os.environ.get("AIPC_SCHED_LOAD_TIMEOUT_S", "150"))
 POLL_S = float(os.environ.get("AIPC_SCHED_POLL_S", "2"))
 # Real-memory headroom: admit only if MemAvailable >= size + headroom.
 HEADROOM_GB = float(os.environ.get("AIPC_SCHED_HEADROOM_GB", "12"))
@@ -144,14 +144,23 @@ def gpu_loaded(health: dict, manifest: dict[str, dict]) -> list[dict]:
         spec = by_model_id.get(model_id)
         if spec is None:
             continue
+        status = entry.get("status") or ""
+        backend = entry.get("backend_health") or ""
+        # ready for inference only when status/backend say so (not mid-load).
+        serve_ready = status in ("ready", "in_use", "idle", "") and backend in ("ready", "busy", "idle", "")
         out.append({
             "model_id": model_id,
             "size_gb": spec["size_gb"],
             "tier": spec["tier"],
-            "in_use": entry.get("status") == "in_use",
+            "in_use": status == "in_use",
             "last_use": entry.get("last_use") or 0,
+            "serve_ready": serve_ready,
         })
     return out
+
+
+def gpu_ready(loaded: list[dict], model_id: str) -> bool:
+    return any(m["model_id"] == model_id and m.get("serve_ready", True) for m in loaded)
 
 
 def free_gb(loaded: list[dict], budget_gb: float) -> float:
@@ -360,8 +369,8 @@ class _SchedulerCore:
         if health is None:
             return  # degrade open
         loaded = gpu_loaded(health, manifest)
-        if any(m["model_id"] == target["model_id"] for m in loaded):
-            # Already loaded: serve unless exclusive isolation is broken.
+        if gpu_ready(loaded, target["model_id"]):
+            # Already ready: serve unless exclusive isolation is broken.
             if not (
                 target["tier"] == TIER_EXCLUSIVE
                 and others_loaded(loaded, target["model_id"])
@@ -376,7 +385,8 @@ class _SchedulerCore:
                     return
                 loaded = gpu_loaded(health, manifest)
                 already = any(m["model_id"] == target["model_id"] for m in loaded)
-                if already and self._slot_ok(loaded, target):
+                ready = gpu_ready(loaded, target["model_id"])
+                if ready and self._slot_ok(loaded, target):
                     break
                 # Anti-storm: refuse rapid switches between different GPU models
                 # (voice+hermes+agent racing). Exclusive bypasses.
@@ -415,7 +425,7 @@ class _SchedulerCore:
                                 f"SMO: lemonade health lost while loading {alias}"
                             )
                         loaded = gpu_loaded(health, manifest)
-                        if any(m["model_id"] == target["model_id"] for m in loaded):
+                        if gpu_ready(loaded, target["model_id"]):
                             print(f"[smo] ready {alias}", flush=True)
                             break
                         await self.sleeper(self.poll_s)
@@ -428,11 +438,23 @@ class _SchedulerCore:
                 victim = pick_victim(
                     loaded, target, self.admitted_at, self.clock(), self.cooldown_s
                 )
+                # Large↔large switch: if peer stuck "in_use" forever, pick_victim
+                # never selects it and admit hangs until HOLD_TIMEOUT. Force-evict
+                # one large peer so product switch stays within LOAD_TIMEOUT.
+                if victim is None and not already and target["size_gb"] >= self.large_gb:
+                    peers = [
+                        m for m in others_loaded(loaded, target["model_id"])
+                        if m["size_gb"] >= self.large_gb
+                        and m["tier"] != TIER_EXCLUSIVE
+                    ]
+                    if peers:
+                        victim = peers[0]["model_id"]
+                        print(f"[smo] force-unload large {victim} for {alias}", flush=True)
                 if victim is not None:
                     print(f"[smo] unload {victim} for {alias}", flush=True)
                     await self.post_unload(victim)
                     # Wait until victim actually leaves health (bounded).
-                    u_deadline = self.clock() + min(60.0, LOAD_TIMEOUT_S)
+                    u_deadline = self.clock() + min(30.0, LOAD_TIMEOUT_S)
                     while self.clock() <= u_deadline:
                         health = await self.fetch_health()
                         if health is None:
@@ -504,21 +526,30 @@ async def _http_unload(model_id: str) -> None:
 
 
 async def _http_load(model_id: str) -> None:
-    """Ask Lemonade to load a model; ignore errors (poll health for readiness)."""
+    """Kick Lemonade load; do NOT wait for full weight load here.
+
+    Waiting on POST /load held the SMO admit lock for minutes and hung every
+    concurrent chat. Readiness is polled via health with LOAD_TIMEOUT_S.
+    """
     import httpx
 
     try:
-        async with httpx.AsyncClient(timeout=180) as client:
-            # v1 load is used by ensure-resident-small; v0 may alias.
-            resp = await client.post(
-                f"{LEMONADE_BASE}/api/v1/load",
-                json={"model_name": model_id},
-            )
-            if resp.status_code >= 400:
+        # Short client timeout: lemonade may keep the HTTP open until ready;
+        # we only need the request accepted (or in-flight).
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
                 await client.post(
-                    f"{LEMONADE_BASE}/api/v0/load",
+                    f"{LEMONADE_BASE}/api/v1/load",
                     json={"model_name": model_id},
                 )
+            except Exception:
+                try:
+                    await client.post(
+                        f"{LEMONADE_BASE}/api/v0/load",
+                        json={"model_name": model_id},
+                    )
+                except Exception:
+                    pass
     except Exception:
         pass
 
