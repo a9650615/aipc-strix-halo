@@ -1,0 +1,23 @@
+[Unit]
+Description=CCS CLIProxy (OpenAI-compatible OAuth bridge for Codex/Claude/Gemini)
+After=network-online.target
+Wants=network-online.target
+Documentation=file:///usr/lib/systemd/user/ccs-cliproxy.service
+
+[Service]
+Type=simple
+# Binary + config live under the desktop user's ~/.ccs/cliproxy (OAuth tokens
+# too). Keep this a *user* unit — system unit + $HOME hits SELinux/permission
+# walls (same class as hermes-webui).
+ExecStart=/bin/bash -lc 'set -euo pipefail; \
+  BIN="$HOME/.ccs/cliproxy/bin/original/cli-proxy-api"; \
+  CFG="$HOME/.ccs/cliproxy/config.yaml"; \
+  if [[ ! -x "$BIN" ]]; then echo "cliproxy binary missing: $BIN" >&2; exit 1; fi; \
+  if [[ ! -f "$CFG" ]]; then echo "cliproxy config missing: $CFG" >&2; exit 1; fi; \
+  exec "$BIN" -config "$CFG"'
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target
