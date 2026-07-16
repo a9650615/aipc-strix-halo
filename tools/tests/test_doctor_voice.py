@@ -59,3 +59,42 @@ def test_check_voice_once_reports_active_stt_unit(tmp_path: Path) -> None:
     )
 
     assert doctor.Result("voice-stt-sensevoice", doctor.STATUS_OK, "aipc-voice-stt-sensevoice.service active") in results
+
+
+def test_check_voice_wake_fails_on_mangled_auto_arm(tmp_path: Path) -> None:
+    policy = tmp_path / "wake-policy.env"
+    policy.write_text("AIPC_WAKE_ALLOW_FUZZY_PROMOTE=0\n")
+    bad = tmp_path / "aipc_voice_wake.py"
+    bad.write_text(
+        "# stub\n_MANGLED_WAKE = {'我'}\ndef classify_wake_text():\n    pass\n"
+        "def decide_wake_arm():\n    pass\n"
+        "def miss_backoff_seconds():\n    pass\n"
+        "def junk_capture_action():\n    pass\n"
+        "def next_mode_after_empty_capture():\n    pass\n"
+        "def effective_wake_policy():\n    pass\n"
+    )
+    results = doctor.check_voice_wake(
+        policy_file=policy,
+        live_script=bad,
+        ostree_script=tmp_path / "missing-ostree.py",
+        unit_name="aipc-voice-wake.service",
+        runner=lambda *a, **k: _FakeCompletedProcess(1),
+    )
+    assert any(r.module == "voice-wake-code" and r.status == doctor.STATUS_FAIL for r in results)
+
+
+def test_check_voice_wake_ok_on_shipped_helpers(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[2]
+    wake = root / "modules/voice-wake/files/usr/lib/aipc-voice/aipc_voice_wake.py"
+    policy = root / "modules/voice-wake/files/etc/aipc/voice/wake-policy.env"
+    results = doctor.check_voice_wake(
+        policy_file=policy,
+        live_script=wake,
+        ostree_script=tmp_path / "no-ostree",
+        unit_name="aipc-voice-wake.service",
+        runner=lambda *a, **k: _FakeCompletedProcess(1),
+    )
+    mods = {r.module: r for r in results}
+    assert mods["voice-wake-policy"].status == doctor.STATUS_OK
+    assert mods["voice-wake-code"].status == doctor.STATUS_OK
+    assert mods["voice-wake-unit"].status == doctor.STATUS_OPTIONAL

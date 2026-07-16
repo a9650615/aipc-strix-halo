@@ -151,3 +151,19 @@ def test_end_to_end_decision_matrix(wake):
     tier2, ph2 = wake.classify_wake_text("嘿助理", PHRASES)
     d2 = wake.decide_wake_arm(tier2, 10, phrase=ph2)
     assert d2["arm"] is True and d2["intentional"] is True
+
+
+def test_live_loop_wires_policy_helpers_not_orphan_defs():
+    """Structural: run_phrase_loop body must call shipped policy helpers."""
+    src = WAKE_PATH.read_text(encoding="utf-8")
+    assert "_MANGLED_WAKE" not in src
+    # Call sites (not only defs)
+    assert "classify_wake_text(text, phrases)" in src
+    assert "decide_wake_arm(" in src
+    assert "miss_backoff_seconds(miss_streak)" in src
+    assert "junk_capture_action(" in src
+    assert "next_mode_after_empty_capture(action)" in src
+    # FOLLOWUP_DIRECT default must prefer off (matches policy.env)
+    assert 'AIPC_WAKE_FOLLOWUP_DIRECT", "0"' in src or (
+        'AIPC_WAKE_FOLLOWUP_DIRECT", "0"' in src.replace("'", '"')
+    )

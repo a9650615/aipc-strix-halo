@@ -396,6 +396,7 @@ def doctor() -> None:
         results.append(vectors)
 
     results.extend(doctor_mod.check_voice_once())
+    results.extend(doctor_mod.check_voice_wake())
 
     table = Table(title="aipc doctor")
     table.add_column("Module")

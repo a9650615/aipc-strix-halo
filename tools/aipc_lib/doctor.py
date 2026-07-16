@@ -159,6 +159,144 @@ def check_vector_count(
     return Result(module="memory-rag-vectors", status=STATUS_OK, message=f"{count} vectors")
 
 
+def check_voice_wake(
+    policy_file: Path = Path("/etc/aipc/voice/wake-policy.env"),
+    live_script: Path = Path("/var/lib/aipc-voice/lib/aipc_voice_wake.py"),
+    ostree_script: Path = Path("/usr/lib/aipc-voice/aipc_voice_wake.py"),
+    unit_name: str = "aipc-voice-wake.service",
+    runner=subprocess.run,
+) -> list[Result]:
+    """Wake control-plane health: policy file, live path symbols, unit state."""
+    results: list[Result] = []
+
+    if not policy_file.is_file():
+        results.append(
+            Result(
+                "voice-wake-policy",
+                STATUS_WARN,
+                f"{policy_file} missing — arm/thrash knobs fall back to code defaults",
+            )
+        )
+    else:
+        text = policy_file.read_text(encoding="utf-8", errors="replace")
+        if "AIPC_WAKE_ALLOW_FUZZY_PROMOTE=0" not in text:
+            results.append(
+                Result(
+                    "voice-wake-policy",
+                    STATUS_WARN,
+                    f"{policy_file} present but fuzzy promote not locked off",
+                )
+            )
+        else:
+            results.append(
+                Result(
+                    "voice-wake-policy",
+                    STATUS_OK,
+                    f"{policy_file} present (fuzzy promote off)",
+                )
+            )
+
+    live = live_script if live_script.is_file() else None
+    ostree = ostree_script if ostree_script.is_file() else None
+    if live is None and ostree is None:
+        results.append(
+            Result(
+                "voice-wake-code",
+                STATUS_FAIL,
+                "no aipc_voice_wake.py at /var/lib or /usr/lib",
+            )
+        )
+        return results
+
+    active = live or ostree
+    body = active.read_text(encoding="utf-8", errors="replace")
+    need = (
+        "classify_wake_text",
+        "decide_wake_arm",
+        "miss_backoff_seconds",
+        "junk_capture_action",
+        "next_mode_after_empty_capture",
+        "effective_wake_policy",
+    )
+    missing = [n for n in need if n not in body]
+    if "_MANGLED_WAKE" in body:
+        results.append(
+            Result(
+                "voice-wake-code",
+                STATUS_FAIL,
+                f"{active}: still has _MANGLED_WAKE auto-arm (ghost path)",
+            )
+        )
+    elif missing:
+        results.append(
+            Result(
+                "voice-wake-code",
+                STATUS_FAIL,
+                f"{active}: missing policy helpers: {', '.join(missing)}",
+            )
+        )
+    else:
+        results.append(
+            Result(
+                "voice-wake-code",
+                STATUS_OK,
+                f"{active} has anti-ghost + thrash helpers",
+            )
+        )
+
+    if live and ostree:
+        live_has = "miss_backoff_seconds" in live.read_text(
+            encoding="utf-8", errors="replace"
+        )
+        ostree_has = "miss_backoff_seconds" in ostree.read_text(
+            encoding="utf-8", errors="replace"
+        )
+        if live_has and not ostree_has:
+            results.append(
+                Result(
+                    "voice-wake-drift",
+                    STATUS_WARN,
+                    "live /var/lib has thrash/anti-ghost policy; ostree /usr is stale "
+                    "(bootc image rebuild needed for image-path parity)",
+                )
+            )
+
+    proc = runner(
+        ["systemctl", "is-enabled", "--quiet", unit_name],
+        check=False,
+        capture_output=True,
+    )
+    enabled = proc.returncode == 0
+    proc_a = runner(
+        ["systemctl", "is-active", "--quiet", unit_name],
+        check=False,
+        capture_output=True,
+    )
+    active_u = proc_a.returncode == 0
+    if not enabled and not active_u:
+        results.append(
+            Result(
+                "voice-wake-unit",
+                STATUS_OPTIONAL,
+                f"{unit_name} disabled/inactive (PTT-only / safety mode OK)",
+            )
+        )
+    elif active_u:
+        results.append(
+            Result("voice-wake-unit", STATUS_OK, f"{unit_name} active")
+        )
+    else:
+        results.append(
+            Result(
+                "voice-wake-unit",
+                STATUS_WARN,
+                f"{unit_name} enabled but not active",
+            )
+        )
+
+    return results
+
+
 def check_voice_once(
     script: Path = Path("/usr/bin/aipc-voice-once"),
     stt_unit: Path = Path("/etc/systemd/system/aipc-voice-stt-sensevoice.service"),

@@ -193,7 +193,8 @@ FOLLOWUP_ENERGY_FRAMES = int(os.environ.get("AIPC_WAKE_FOLLOWUP_ENERGY_FRAMES", 
 FOLLOWUP_POST_TTS_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP_POST_TTS_S", "0.55"))
 # After reply: immediately open command capture (resident mic) instead of
 # energy-gate wait. User: 可接话等待启动收音太长 → 常驻收音.
-FOLLOWUP_DIRECT = os.environ.get("AIPC_WAKE_FOLLOWUP_DIRECT", "1") not in (
+# Default off: direct follow-up UI caused ambient re-arm thrash (prefer probe).
+FOLLOWUP_DIRECT = os.environ.get("AIPC_WAKE_FOLLOWUP_DIRECT", "0") not in (
     "0", "false", "no", "off",
 )
 # Legacy ratio only used as soft hint; thr is ambient-based (see _begin_followup).
