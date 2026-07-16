@@ -167,6 +167,12 @@ def test_live_loop_wires_policy_helpers_not_orphan_defs():
     assert "class SessionState" in session
     assert "from aipc_voice_wake_policy import" in src or "import aipc_voice_wake_policy" in src
     assert "from aipc_voice_session import" in src or "import aipc_voice_session" in src
+    assert "from aipc_voice_capture import" in src or "import aipc_voice_capture" in src
+    assert "from aipc_voice_once_worker import" in src or "import aipc_voice_once_worker" in src
+    capture = (WAKE_LIB / "aipc_voice_capture.py").read_text(encoding="utf-8")
+    once = (WAKE_LIB / "aipc_voice_once_worker.py").read_text(encoding="utf-8")
+    assert "class PartialSttWorker" in capture
+    assert "class OnceWorker" in once
     # Call sites in I/O loop (not only defs in policy module)
     assert "classify_wake_text(text, phrases)" in src
     assert "decide_wake_arm(" in src

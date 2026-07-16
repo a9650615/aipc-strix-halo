@@ -6,19 +6,13 @@ lib="$this_dir/files/usr/lib/aipc-voice"
 wake="$lib/aipc_voice_wake.py"
 policy_mod="$lib/aipc_voice_wake_policy.py"
 session_mod="$lib/aipc_voice_session.py"
-[ -f "$wake" ] || {
-  echo "voice-wake: missing aipc_voice_wake.py" >&2
-  exit 1
-}
-[ -f "$policy_mod" ] || {
-  echo "voice-wake: missing aipc_voice_wake_policy.py" >&2
-  exit 1
-}
-[ -f "$session_mod" ] || {
-  echo "voice-wake: missing aipc_voice_session.py" >&2
-  exit 1
-}
-for f in "$wake" "$policy_mod" "$session_mod"; do
+capture_mod="$lib/aipc_voice_capture.py"
+once_mod="$lib/aipc_voice_once_worker.py"
+for f in "$wake" "$policy_mod" "$session_mod" "$capture_mod" "$once_mod"; do
+  [ -f "$f" ] || {
+    echo "voice-wake: missing $(basename "$f")" >&2
+    exit 1
+  }
   python3 -c "import ast; ast.parse(open('$f').read())" || {
     echo "voice-wake: syntax error in $f" >&2
     exit 1
@@ -37,6 +31,14 @@ for sym in classify_wake_text decide_wake_arm miss_backoff_seconds junk_capture_
 done
 grep -q 'class SessionState' "$session_mod" || {
   echo "voice-wake: missing SessionState" >&2
+  exit 1
+}
+grep -q 'class PartialSttWorker' "$capture_mod" || {
+  echo "voice-wake: missing PartialSttWorker in capture" >&2
+  exit 1
+}
+grep -q 'class OnceWorker' "$once_mod" || {
+  echo "voice-wake: missing OnceWorker" >&2
   exit 1
 }
 grep -q '_MANGLED_WAKE' "$policy_mod" "$wake" && {

@@ -96,6 +96,40 @@ try:
 except ImportError:  # pragma: no cover
     Session = None  # type: ignore
 
+try:
+    from aipc_voice_capture import (  # type: ignore
+        PartialSttWorker,
+        calibrate_noise as _calibrate_noise,
+        capture_env as _capture_env,
+        open_arecord_raw as _open_arecord_raw,
+        progressive_looks_complete as _progressive_looks_complete,
+        progressive_usable as _progressive_usable,
+        record_wav_seconds as _record_wav_seconds,
+        rms as _rms,
+        stt_available,
+        stt_wav as _stt_wav,
+        write_pcm_wav as _write_pcm_wav,
+        PARTIAL_STT_S,
+        PARTIAL_STT_MIN_S,
+        STT_URL,
+        STT_LANG,
+    )
+except ImportError:  # pragma: no cover
+    from aipc_voice_capture import *  # type: ignore
+
+try:
+    from aipc_voice_once_worker import (  # type: ignore
+        OnceWorker,
+        desktop_user_env as _desktop_user_env,
+        kill_process_group as _kill_process_group,
+        trigger_once,
+        ONCE_CMD,
+        STREAM_CMD,
+    )
+except ImportError:  # pragma: no cover
+    from aipc_voice_once_worker import *  # type: ignore
+
+
 def _ux(state: str, detail: str = "", **kw) -> None:
     if voice_ux is None:
         return
@@ -172,9 +206,6 @@ USER_MUTE_FLAG = Path(
         str(Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "aipc-voice-mute"),
     )
 )
-ONCE_CMD = os.environ.get("AIPC_VOICE_ONCE", "/usr/bin/aipc-voice-once")
-# Streaming turn worker (voice-streaming-turn). Default off until hardware-verified.
-STREAM_CMD = os.environ.get("AIPC_VOICE_STREAM_CMD", "/usr/bin/aipc-voice-stream")
 VOICE_STREAM = os.environ.get("AIPC_VOICE_STREAM", "0") not in ("0", "false", "no", "")
 CAPTURE_S = float(os.environ.get("AIPC_WAKE_CAPTURE_S", "2.0"))
 # Only for *complete-looking* progressive text; never for short/incomplete.
@@ -183,8 +214,6 @@ CMD_START_TIMEOUT_S = float(os.environ.get("AIPC_WAKE_CMD_START_TIMEOUT", "5"))
 # Don't allow end-of-speech until this much speech audio is buffered.
 CMD_MIN_SPEECH_MS = int(os.environ.get("AIPC_WAKE_CMD_MIN_SPEECH_MS", "700"))
 # Progressive STT while user is still talking (seconds between snapshots).
-PARTIAL_STT_S = float(os.environ.get("AIPC_WAKE_PARTIAL_STT_S", "0.9"))
-PARTIAL_STT_MIN_S = float(os.environ.get("AIPC_WAKE_PARTIAL_STT_MIN_S", "0.7"))
 # Progressive text must stay stable this long AND energy must drop (never end while still loud).
 CMD_TEXT_STABLE_S = float(os.environ.get("AIPC_WAKE_CMD_TEXT_STABLE_S", "2.0"))
 # Min spoken time before text_stable EOS is allowed (avoid cutting mid-sentence).
@@ -238,8 +267,6 @@ BARGE_OVER_BLEED = float(os.environ.get("AIPC_WAKE_BARGE_OVER_BLEED", "1.35"))
 FOLLOWUP1_SILENCE_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP1_SILENCE_S", str(FOLLOWUP_SILENCE_S)))
 FOLLOWUP1_GRACE_S = float(os.environ.get("AIPC_WAKE_FOLLOWUP1_GRACE_S", str(FOLLOWUP_GRACE_S)))
 WAKE_CTRL_SOCK = Path(os.environ.get("AIPC_WAKE_SOCK", "/run/user/1000/aipc-wake.sock"))
-STT_URL = os.environ.get("AIPC_VOICE_STT_URL", "http://127.0.0.1:9001/transcribe")
-STT_LANG = os.environ.get("AIPC_WAKE_STT_LANG", "zh")
 PHRASES_FILE = Path(
     os.environ.get("AIPC_WAKE_PHRASES_FILE", "/etc/aipc/wake/phrases")
 )
@@ -267,30 +294,6 @@ OWW_VENV_PYTHON = Path(
 
 
 
-def _capture_env() -> dict:
-    """Mic env for wake arecord — basic RNNoise denoise by default.
-
-    Uses virtual source aipc_denoise_out.monitor (noise-suppression-for-voice).
-    Disable with AIPC_WAKE_DENOISE=0 if it hurts wake-word STT.
-    """
-    env = os.environ.copy()
-    if os.environ.get("AIPC_WAKE_DENOISE", "1") == "0":
-        env.pop("PULSE_SOURCE", None)
-        return env
-    try:
-        from aipc_lib.voice_audio import capture_env, ensure_denoise_source
-        ensure_denoise_source()
-        return capture_env(env)
-    except Exception as exc:
-        print(f"aipc-voice-wake: denoise via aipc_lib failed: {exc}", flush=True)
-    try:
-        import voice_audio  # type: ignore
-        voice_audio.ensure_denoise_source()
-        return voice_audio.capture_env(env)
-    except Exception as exc:
-        print(f"aipc-voice-wake: denoise via voice_audio failed: {exc}", flush=True)
-    env.setdefault("PULSE_SOURCE", "aipc_denoise_out.monitor")
-    return env
 
 def muted() -> bool:
     return MUTE_FLAG.exists() or USER_MUTE_FLAG.exists()
@@ -315,608 +318,8 @@ def load_phrases() -> list[str]:
     return out or list(DEFAULT_PHRASES)
 
 
-def _desktop_user_env() -> dict[str, str]:
-    """Inject the active graphical session so TTS/notify path works."""
-    import pwd
-
-    env = os.environ.copy()
-    run_user = Path("/run/user")
-    if not run_user.is_dir():
-        return env
-    for entry in sorted(run_user.iterdir(), key=lambda p: p.name):
-        if not entry.name.isdigit():
-            continue
-        bus = entry / "bus"
-        if not bus.exists():
-            continue
-        uid = int(entry.name)
-        try:
-            pw = pwd.getpwuid(uid)
-        except KeyError:
-            continue
-        if pw.pw_name in ("root", "nobody"):
-            continue
-        env["DISPLAY"] = env.get("DISPLAY") or ":0"
-        env["XDG_RUNTIME_DIR"] = str(entry)
-        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
-        env["HOME"] = pw.pw_dir
-        env["USER"] = pw.pw_name
-        env["LOGNAME"] = pw.pw_name
-        env["AIPC_WAKE_AS_USER"] = pw.pw_name
-        local_once = Path(pw.pw_dir) / ".local/bin/aipc-voice-once"
-        if local_once.is_file() and os.access(local_once, os.X_OK):
-            env["AIPC_VOICE_ONCE_RESOLVED"] = str(local_once)
-        return env
-    env.setdefault("DISPLAY", ":0")
-    return env
 
 
-def _write_pcm_wav(path: str, pcm: bytes, rate: int = SAMPLE_RATE) -> None:
-    with wave.open(path, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(rate)
-        w.writeframes(pcm)
-
-
-class PartialSttWorker:
-    """Background STT snapshots while the user is still talking."""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._text = ""
-        self._busy = False
-        self._gen = 0
-        self._pending: bytes | None = None
-
-    def reset(self) -> None:
-        with self._lock:
-            self._gen += 1
-            self._text = ""
-            self._pending = None
-            self._busy = False
-
-    def get_text(self) -> str:
-        with self._lock:
-            return self._text
-
-    def request(self, pcm: bytes) -> None:
-        if len(pcm) < int(SAMPLE_RATE * PARTIAL_STT_MIN_S) * 2:
-            return
-        with self._lock:
-            if self._busy:
-                self._pending = bytes(pcm)
-                return
-            self._busy = True
-            gen = self._gen
-            snap = bytes(pcm)
-
-        def _run() -> None:
-            nonlocal snap, gen
-            while True:
-                text = ""
-                fd, path = tempfile.mkstemp(suffix=".wav", prefix="aipc-partial-")
-                os.close(fd)
-                try:
-                    _write_pcm_wav(path, snap)
-                    text = _stt_wav(path)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"aipc-voice-wake: partial STT fail: {exc}", flush=True)
-                    text = ""
-                finally:
-                    try:
-                        os.unlink(path)
-                    except OSError:
-                        pass
-                with self._lock:
-                    if gen != self._gen:
-                        self._busy = False
-                        self._pending = None
-                        return
-                    if text and text.strip():
-                        self._text = text.strip()
-                        show = self._text
-                    else:
-                        show = self._text
-                    pending = self._pending
-                    self._pending = None
-                    if pending is None:
-                        self._busy = False
-                        if show:
-                            # Overlay partial while still recording
-                            if voice_ux:
-                                try:
-                                    voice_ux.write_status("recording", "", partial=show[:120])
-                                except Exception:
-                                    pass
-                            print(f"aipc-voice-wake: partial STT: {show[:80]!r}", flush=True)
-                        return
-                    snap = pending
-                    # keep busy, process latest snapshot
-
-        threading.Thread(target=_run, name="aipc-partial-stt", daemon=True).start()
-
-
-def _kill_process_group(proc: subprocess.Popen, reason: str = "") -> None:
-    """Stop once + paplay/ffplay children (once runs in its own session)."""
-    tag = f" ({reason})" if reason else ""
-    pid = proc.pid
-    try:
-        os.killpg(pid, signal.SIGTERM)
-    except (OSError, ProcessLookupError):
-        try:
-            proc.terminate()
-        except OSError:
-            pass
-    try:
-        proc.wait(timeout=0.45)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except (OSError, ProcessLookupError):
-        try:
-            proc.kill()
-        except OSError:
-            pass
-    try:
-        proc.wait(timeout=0.5)
-    except subprocess.TimeoutExpired:
-        print(f"aipc-voice-wake: kill once timed out{tag} pid={pid}", flush=True)
-
-
-class OnceWorker:
-    """Background aipc-voice-once runner (no mic). Latest job wins.
-
-    Policy:
-    - submit while idle → start immediately
-    - submit while busy → cancel current (barge-in) and start new
-    - energy/PTT barge while busy → cancel without on_finished side effects
-    Mic stays owned by the phrase-loop stream; jobs only get --wav paths.
-    """
-
-    def __init__(self, on_finished=None) -> None:
-        self._lock = threading.Lock()
-        self._proc: subprocess.Popen | None = None
-        self._thread: threading.Thread | None = None
-        self._gen = 0
-        self._on_finished = on_finished  # callable(ok: bool, rc: int=0) | None
-
-    def busy(self) -> bool:
-        with self._lock:
-            return self._proc is not None and self._proc.poll() is None
-
-    def cancel_speech(self, reason: str = "speech-cancel") -> bool:
-        """Stop TTS/orphan playback only — leave the task (voice-once) running.
-
-        Criterion: barge-in stops speech without cancelling the underlying task
-        unless the user explicitly cancels the task.
-        """
-        stopped = False
-        try:
-            for p in (
-                Path("/var/lib/aipc-voice/lib"),
-                Path("/usr/lib/aipc-voice"),
-            ):
-                if (p / "aipc_voice_tts.py").is_file():
-                    import sys
-
-                    if str(p) not in sys.path:
-                        sys.path.insert(0, str(p))
-                    import aipc_voice_tts  # type: ignore
-
-                    if hasattr(aipc_voice_tts, "stop_active_tts"):
-                        aipc_voice_tts.stop_active_tts()
-                        stopped = True
-                    break
-        except Exception as exc:  # noqa: BLE001
-            print(f"aipc-voice-wake: cancel_speech tts module fail: {exc}", flush=True)
-        # Defense: kill only aipc-tts players, not the once worker itself
-        try:
-            uid = os.getuid()
-            for pat in (
-                "paplay.*aipc-tts-",
-                "ffplay.*aipc-tts-",
-                "pw-play.*aipc-tts-",
-            ):
-                subprocess.run(
-                    ["pkill", "-u", str(uid), "-f", pat],
-                    check=False,
-                    capture_output=True,
-                    timeout=2,
-                )
-                stopped = True
-        except Exception:
-            pass
-        print(f"aipc-voice-wake: cancel speech only ({reason})", flush=True)
-        return stopped
-
-    def cancel(self, reason: str = "barge-in") -> bool:
-        """Cancel speech or full task depending on reason.
-
-        Speech-only: speech-barge, ptt-barge, speech-cancel, barge-in.
-        Full task kill: new-job, shutdown, mic-reconnect, task-cancel, …
-        """
-        speech_only = reason in (
-            "speech-barge",
-            "ptt-barge",
-            "speech-cancel",
-            "barge-in",
-        ) or str(reason).startswith("speech")
-        if speech_only:
-            return self.cancel_speech(reason)
-        with self._lock:
-            proc = self._proc
-            live = proc is not None and proc.poll() is None
-            self._proc = None
-            self._gen += 1
-        if live and proc is not None:
-            print(f"aipc-voice-wake: cancel voice-once task ({reason})", flush=True)
-            _kill_process_group(proc, reason)
-        # Also stop any orphan TTS from a prior agent path
-        self.cancel_speech(f"with-task:{reason}")
-        return live
-
-    def submit_wav(self, wav_path: str, text: str | None = None) -> None:
-        """Run once/stream --wav asynchronously; barge-in cancels prior job.
-
-        If text is provided, worker skips STT (progressive transcript).
-        When AIPC_VOICE_STREAM=1 and aipc-voice-stream is present, prefer the
-        streaming turn worker; otherwise batch aipc-voice-once (default).
-        """
-        self.cancel(reason="new-job")
-        gen = self._gen
-
-        def _run() -> None:
-            env = _desktop_user_env()
-            use_stream = env.get("AIPC_VOICE_STREAM", os.environ.get("AIPC_VOICE_STREAM", "0"))
-            use_stream = use_stream not in ("0", "false", "no", "")
-            stream_cmd = env.get("AIPC_VOICE_STREAM_CMD") or STREAM_CMD
-            once_cmd = env.pop("AIPC_VOICE_ONCE_RESOLVED", None) or ONCE_CMD
-            cmd = once_cmd
-            if use_stream:
-                sc = stream_cmd
-                if not Path(sc).is_file() and shutil.which(sc):
-                    sc = shutil.which(sc) or sc
-                if Path(sc).is_file() or shutil.which(sc):
-                    cmd = sc
-                else:
-                    print(
-                        "aipc-voice-wake: AIPC_VOICE_STREAM=1 but stream worker missing; batch once",
-                        flush=True,
-                    )
-            if not Path(cmd).is_file() and shutil.which(cmd):
-                cmd = shutil.which(cmd) or cmd
-            argv = [cmd, "--wav", wav_path]
-            if text and text.strip():
-                argv.extend(["--text", text.strip()])
-            as_user = env.get("AIPC_WAKE_AS_USER")
-            # Already running as desktop user in service; no runuser needed.
-            if as_user and os.geteuid() == 0 and as_user != "root":
-                argv = ["runuser", "-u", as_user, "--", *argv]
-            log_name = (
-                "voice-stream-from-wake.log"
-                if "stream" in Path(cmd).name
-                else "voice-once-from-wake.log"
-            )
-            log_path = Path(env.get("HOME", "/tmp")) / ".cache/aipc" / log_name
-            try:
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                log_f = open(log_path, "ab", buffering=0)  # noqa: SIM115
-            except OSError:
-                log_f = subprocess.DEVNULL
-            print(f"aipc-voice-wake: async once {' '.join(argv)}", flush=True)
-            try:
-                proc = subprocess.Popen(
-                    argv, env=env, stdout=log_f, stderr=log_f, start_new_session=True
-                )
-            except OSError as exc:
-                print(f"aipc-voice-wake: once spawn failed: {exc}", flush=True)
-                with self._lock:
-                    superseded = gen != self._gen
-                if not superseded and self._on_finished:
-                    try:
-                        self._on_finished(False)
-                    except Exception:
-                        pass
-                return
-            with self._lock:
-                if gen != self._gen:
-                    _kill_process_group(proc, "superseded-at-start")
-                    return
-                self._proc = proc
-            rc = proc.wait()
-            with self._lock:
-                superseded = gen != self._gen
-                if self._proc is proc:
-                    self._proc = None
-            if superseded:
-                print(
-                    f"aipc-voice-wake: async once cancelled rc={rc} (no follow-up)",
-                    flush=True,
-                )
-            else:
-                print(f"aipc-voice-wake: async once finished rc={rc}", flush=True)
-                # rc 0 = success/done; rc 2 = success end session; rc 3 =
-                # success + assistant expects a reply; rc 4 = success +
-                # detached to background. All four are non-error turn
-                # outcomes (see aipc-voice-once._turn_rc) — anything else
-                # (mic/STT/network failure) is a real failure.
-                ok = rc in (0, 2, 3, 4)
-                if self._on_finished is not None:
-                    try:
-                        self._on_finished(ok, rc=rc)
-                    except TypeError:
-                        try:
-                            self._on_finished(ok)
-                        except Exception as exc:  # noqa: BLE001
-                            print(f"aipc-voice-wake: on_finished failed: {exc}", flush=True)
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"aipc-voice-wake: on_finished failed: {exc}", flush=True)
-                else:
-                    if ok:
-                        _ux("done", force=True)
-                        _ux("listening")
-                    else:
-                        _ux("error", f"voice-once rc={rc}", force=True)
-                        _ux("listening")
-            try:
-                os.unlink(wav_path)
-            except OSError:
-                pass
-            if log_f is not subprocess.DEVNULL:
-                try:
-                    log_f.close()
-                except Exception:
-                    pass
-
-        t = threading.Thread(target=_run, name="aipc-once-worker", daemon=True)
-        with self._lock:
-            self._thread = t
-        t.start()
-
-
-def trigger_once(*, wait: bool = False, timeout: float = 180.0, wav: str | None = None) -> int:
-    """Legacy helper: prefer OnceWorker.submit_wav for non-blocking path."""
-    env = _desktop_user_env()
-    cmd = env.pop("AIPC_VOICE_ONCE_RESOLVED", None) or ONCE_CMD
-    if not Path(cmd).is_file() and shutil.which(cmd):
-        cmd = shutil.which(cmd) or cmd
-    as_user = env.get("AIPC_WAKE_AS_USER")
-    argv = [cmd, "--wav", wav] if wav else [cmd, "--vad"]
-    if as_user and os.geteuid() == 0 and as_user != "root":
-        argv = ["runuser", "-u", as_user, "--", *argv]
-    log = Path(env.get("HOME", "/tmp")) / ".cache/aipc/voice-once-from-wake.log"
-    try:
-        log.parent.mkdir(parents=True, exist_ok=True)
-        log_f = open(log, "ab", buffering=0)  # noqa: SIM115
-    except OSError:
-        log_f = subprocess.DEVNULL
-    print(f"aipc-voice-wake: run {' '.join(argv)} wait={wait}", flush=True)
-    if wait:
-        try:
-            r = subprocess.run(argv, env=env, stdout=log_f, stderr=log_f, timeout=timeout)
-            return int(r.returncode)
-        except subprocess.TimeoutExpired:
-            return 124
-        finally:
-            if log_f is not subprocess.DEVNULL:
-                try:
-                    log_f.close()
-                except Exception:
-                    pass
-    subprocess.Popen(argv, env=env, stdout=log_f, stderr=log_f, start_new_session=True)
-    return 0
-
-
-def _rms(frame: bytes) -> float:
-    if len(frame) < 2:
-        return 0.0
-    n = len(frame) // 2
-    samples = array.array("h")
-    samples.frombytes(frame[: n * 2])
-    if not samples:
-        return 0.0
-    acc = 0
-    for s in samples:
-        acc += s * s
-    return (acc / len(samples)) ** 0.5
-
-
-def _record_wav_seconds(path: str, seconds: float) -> None:
-    subprocess.run(
-        [
-            "arecord",
-            "-f",
-            "S16_LE",
-            "-r",
-            str(SAMPLE_RATE),
-            "-c",
-            "1",
-            "-d",
-            str(max(0.4, int(seconds) if float(seconds).is_integer() else seconds)),
-            path,
-        ],
-        check=True,
-        capture_output=True,
-    )
-
-
-def _progressive_core(text: str) -> str:
-    """Normalize transcript for stability (ignore emoji/punct flip-flops)."""
-    s = (text or "").strip()
-    return re.sub(r"[\s\W_😔😊😂😅…·。！？!?，,、；;：:\"'“”‘’]+", "", s, flags=re.UNICODE)
-
-
-_JUNK_PARTICLES = frozenset(
-    {
-        "我",
-        "嗯",
-        "啊",
-        "呃",
-        "哦",
-        "喔",
-        "呀",
-        "的",
-        "了",
-        "吗",
-        "呢",
-        "吧",
-        "哈",
-        "嘿",
-        "唔",
-        "恩",
-        "那个",
-        "就是",
-    }
-)
-
-
-def _progressive_usable(text: str) -> bool:
-    """True if progressive STT looks like a real utterance (not noise/punct).
-
-    Hardware 2026-07-10: ambient → STT '我。' / '。' was treated as content,
-    once returned rc=0, follow-up re-opened forever (turn79+ loop).
-    """
-    core = _progressive_core(text)
-    if len(core) < 2:
-        return False
-    if core in _JUNK_PARTICLES:
-        return False
-    cjk = sum(1 for c in core if "一" <= c <= "鿿")
-    if cjk >= 2:
-        return True
-    alnum = sum(1 for c in core if c.isalnum())
-    return alnum >= 3
-
-
-def _progressive_looks_complete(text: str) -> bool:
-    """Heuristic: progressive STT likely finished a thought (not mid-phrase).
-
-    Hardware 2026-07-10: end_silence_fast on usable-but-short text cut
-    mid-sentence (e.g. short fragments before the rest of the utterance).
-    """
-    core = _progressive_core(text)
-    if len(core) < 5:
-        return False
-    raw = (text or "").strip()
-    if any(raw.endswith(x) for x in ("？", "?", "！", "!", "吗", "呢", "吧", "啊")):
-        return len(core) >= 3
-    trailers = (
-        "的", "了", "是", "在", "和", "跟", "与", "把", "被", "就", "还", "會", "会",
-        "要", "想", "能", "可", "对", "對", "给", "給", "从", "從", "到", "比",
-        "那", "这", "這", "我", "你", "他", "她", "它", "们", "們",
-    )
-    for t in trailers:
-        if core.endswith(t):
-            return False
-    # Short cores are incomplete even if STT added a period
-    if len(core) < 8:
-        return False
-    return True
-
-
-def _stt_wav(path: str) -> str:
-    with open(path, "rb") as f:
-        data = f.read()
-    url = STT_URL
-    if "language=" not in url and STT_LANG:
-        sep = "&" if "?" in url else "?"
-        url = f"{url}{sep}language={STT_LANG}"
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method="POST",
-        headers={"Content-Type": "audio/wav"},
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        body = json.loads(resp.read())
-    return str(body.get("text") or "").strip()
-
-
-def stt_available() -> bool:
-    try:
-        base = STT_URL.rsplit("/", 1)[0]
-        req = urllib.request.Request(f"{base}/healthz", method="GET")
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
-
-
-def _arecord_raw_cmd() -> list[str]:
-    return [
-        "arecord",
-        "-f",
-        "S16_LE",
-        "-r",
-        str(SAMPLE_RATE),
-        "-c",
-        "1",
-        "-t",
-        "raw",
-        "-q",
-        "-",
-    ]
-
-
-def _open_arecord_raw() -> subprocess.Popen:
-    """Open continuous raw capture; raise if PipeWire/ALSA rejects us."""
-    proc = subprocess.Popen(
-        _arecord_raw_cmd(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=_capture_env(),
-    )
-    assert proc.stdout is not None
-    time.sleep(0.15)
-    if proc.poll() is not None:
-        err = (proc.stderr.read() if proc.stderr else b"").decode(errors="replace")
-        raise RuntimeError(
-            f"arecord failed immediately (rc={proc.returncode}): {err.strip() or 'no stderr'} "
-            f"— wake must run as desktop user with XDG_RUNTIME_DIR (not bare root)"
-        )
-    frame_bytes = SAMPLE_RATE * FRAME_MS // 1000 * 2
-    chunk = proc.stdout.read(frame_bytes)
-    if not chunk:
-        raise RuntimeError("arecord opened but produced no audio frames")
-    print(f"aipc-voice-wake: mic ok first_frame_rms={_rms(chunk):.0f}", flush=True)
-    return proc
-
-
-def _calibrate_noise(proc: subprocess.Popen, seconds: float = 1.5) -> float:
-    """Estimate ambient RMS; return adaptive speech threshold."""
-    assert proc.stdout is not None
-    frame_bytes = SAMPLE_RATE * FRAME_MS // 1000 * 2
-    n = max(1, int(seconds * 1000 // FRAME_MS))
-    vals: list[float] = []
-    for _ in range(n):
-        data = proc.stdout.read(frame_bytes)
-        if not data:
-            break
-        vals.append(_rms(data))
-    if not vals:
-        return ENERGY_THRESHOLD
-    vals.sort()
-    noise = vals[max(0, len(vals) // 5)]
-    # With RNNoise denoise ON the noise floor is low (~2k) but speech is also
-    # attenuated toward it — measured hw 2026-07-14: ambient ~2182, spoken
-    # 嘿助理 p95 only ~3086. The old 1.35×+600 (=3546) sat ABOVE speech p95, so
-    # the gate almost never opened (3/266 frames > thr). Sit just above ambient
-    # so attenuated speech still trips it; the 1.5s miss-cooldown absorbs the
-    # extra ambient false-opens cleanly. Tunable: AIPC_WAKE_CALIB_RATIO / _OFFSET.
-    ratio = float(os.environ.get("AIPC_WAKE_CALIB_RATIO", "1.15"))
-    offset = float(os.environ.get("AIPC_WAKE_CALIB_OFFSET", "100.0"))
-    adaptive = max(ENERGY_THRESHOLD, noise * ratio + offset)
-    adaptive = min(adaptive, max(4000.0, noise + 1800.0), 8000.0)
-
-    print(
-        f"aipc-voice-wake: calibrated noise_rms={noise:.0f} "
-        f"threshold={adaptive:.0f} (min_env={ENERGY_THRESHOLD})",
-        flush=True,
-    )
-    return adaptive
 
 
 def _ctrl_sock_path() -> Path:
