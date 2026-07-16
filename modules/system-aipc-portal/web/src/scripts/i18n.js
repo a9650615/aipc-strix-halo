@@ -1,0 +1,496 @@
+/** Lightweight UI i18n — default Traditional Chinese, optional English. */
+
+export const LANGS = ["zh", "en"];
+const STORAGE_KEY = "aipc-ui-lang";
+
+const zh = {
+  "brand.sub": "控制中心",
+  "nav.home": "首頁",
+  "nav.models": "模型調度",
+  "nav.agents": "代理人",
+  "nav.memory": "記憶",
+  "lang.zh": "中文",
+  "lang.en": "EN",
+  "lang.switch": "介面語言",
+
+  // Home
+  "home.eyebrow": "本機 · 127.0.0.1",
+  "home.title": "控制中心",
+  "home.loading": "正在載入系統狀態…",
+  "home.baseline": "啟動基線服務",
+  "home.unavailable": "儀表板資料無法取得",
+  "home.platform": "平台",
+  "home.device": "裝置 / 機身",
+  "home.npu": "NPU 活動",
+  "home.runtime": "執行期",
+  "home.waiting.platform": "等待遙測…",
+  "home.waiting.device": "等待裝置狀態…",
+  "home.waiting.npu": "等待 NPU 狀態…",
+  "home.waiting.runtime": "等待服務狀態…",
+  "home.metric.chassis": "機身",
+  "home.metric.host": "主機名",
+  "home.metric.os": "系統",
+  "home.metric.kernel": "核心",
+  "home.metric.button": "實體鍵",
+  "home.typec": "Type-C",
+  "home.typec.none": "未偵測到 Type-C 埠",
+  "home.typea": "Type-A",
+  "home.typea.none": "未偵測到 Type-A 埠",
+  "home.button.unknown": "實體鍵狀態未知",
+  "home.ops.title": "服務與即時工作",
+  "home.ops.eyebrow": "營運",
+  "home.ops.services": "服務",
+  "home.ops.live": "即時工作",
+  "home.ops.empty": "目前沒有即時 automation 工作。",
+  "home.ops.empty.hint": "Hermes / peer 長任務請到「代理人」頁查看。",
+  "home.ops.need_start": "{n} 個服務需要啟動 · {j} 個即時工作",
+  "home.ops.healthy": "{up}/{total} 服務健康 · {j} 個即時工作",
+  "home.group.LLM": "語言模型",
+  "home.group.Voice": "語音",
+  "home.group.Agent": "代理人",
+  "home.group.System": "系統",
+  "home.metric.cpu": "CPU",
+  "home.metric.ram": "可用記憶體",
+  "home.metric.gtt": "GTT",
+  "home.metric.profile": "電源設定",
+  "home.metric.models": "模型",
+  "home.metric.loaded": "已載入",
+  "home.none.models": "未載入",
+  "home.none.reported": "尚無回報",
+  "home.device.unavailable": "裝置無法取得",
+  "home.foot.lemonade": "Lemonade：{service} · {activity}",
+  "home.foot.voice": "語音堆疊 {v}/{t} · {m} 個模型",
+  "home.cable": "線纜",
+  "home.port.link": "已連線",
+  "home.port.idle": "閒置",
+  "home.button.offline": "實體鍵離線",
+  "home.button.state": "實體鍵 {state}",
+  "btn.start": "啟動",
+  "btn.open": "開啟",
+  "btn.cancel": "取消",
+  "btn.refresh": "重新整理",
+
+  // Models
+  "models.eyebrow": "SMO · 閒置釋放 · OOM 守衛",
+  "models.title": "模型調度",
+  "models.loading": "正在載入調度狀態…",
+  "models.unavailable": "模型／調度資料無法取得",
+  "models.manifest": "清單：{path}",
+  "models.manifest.missing": "清單：找不到",
+  "models.cap.memory": "記憶體",
+  "models.cap.gtt": "GTT",
+  "models.cap.gpu": "GPU 池",
+  "models.cap.gpu.sub": "SMO 最大並發 GPU LLM",
+  "models.cap.idle": "閒置釋放",
+  "models.policy": "SMO 政策",
+  "models.loaded": "目前已載入",
+  "models.catalog": "目錄政策",
+  "models.journal": "閒置釋放日誌",
+  "models.oom": "OOM 守衛事件",
+  "models.legend": "圖例",
+  "models.none.loaded": "尚無模型回報（Lemonade health 略過或為空）。",
+  "models.none.catalog": "沒有 lemonade 目錄項目。",
+  "models.none.journal": "（沒有近期 idle-release 日誌）",
+  "models.none.oom": "沒有近期 OOM 守衛事件。",
+  "models.oom.disabled": "OOM 守衛已停用（存在 sentinel）",
+  "models.oom.ring": "環形緩衝 {path}",
+  "models.oom.missing": "OOM 守衛事件無法取得",
+  "models.ram.free": "{free} / {total} GiB 可用",
+  "models.gtt.line": "{used} / {total} GiB · 預算 {budget}",
+  "models.npu.line": "NPU {n} · lemonade max llm {max}",
+  "models.idle.policy.na": "閒置政策 n/a",
+  "models.idle.age": "閒置 {age}",
+  "models.idle.threshold": "門檻 {age}",
+  "models.chip.max_gpu": "最大 GPU",
+  "models.chip.budget": "預算",
+  "models.chip.headroom": "餘裕",
+  "models.chip.ram_floor": "RAM 底線",
+  "models.chip.gtt_budget": "GTT 預算",
+  "models.chip.large": "大型 ≥",
+  "models.chip.swap": "swap 准入",
+  "models.chip.keep_warm": "保溫",
+  "models.chip.workhorse": "主力模型",
+  "models.on": "開",
+  "models.off": "關",
+  "models.decision.keep_warm": "保溫",
+  "models.decision.in_use": "使用中",
+  "models.decision.protected": "受保護",
+  "models.decision.npu": "NPU",
+  "models.decision.cooling": "冷卻中",
+  "models.decision.unload_candidate": "卸載候選",
+  "models.decision.no_policy": "無政策",
+  "models.decision.unknown_age": "未知閒置",
+  "models.decision.hold": "維持",
+  "models.state.keep_warm": "保溫中",
+  "models.state.armed": "已武裝",
+  "models.state.idle_watch": "監視中",
+  "models.loaded.badge": "已載入",
+  "models.gate.ram_floor": "RAM 底線",
+  "models.gate.keep_warm": "保溫（閒置卸載）",
+  "models.gate.gtt_budget": "GTT 預算",
+  "models.gate.swap_admit": "Swap 准入",
+
+  // Agents
+  "agents.eyebrow": "HERMES · PEER 艦隊",
+  "agents.title": "代理人",
+  "agents.loading": "正在載入 Hermes 背景代理人…",
+  "agents.unavailable": "代理人資料無法取得",
+  "agents.peers": "Peer CLI",
+  "agents.live": "即時行程",
+  "agents.delegations": "委派",
+  "agents.kanban": "看板",
+  "agents.detail": "詳情",
+  "agents.detail.hint": "選擇一個委派或看板任務",
+  "agents.logs": "日誌",
+  "agents.log.filter": "篩選日誌（委派 id、session、工具…）",
+  "agents.log.btn": "篩選",
+  "agents.home": "home：{path}",
+  "agents.home.na": "home：無法取得",
+  "agents.counts": "{active} 活躍 · {del} 委派 · {kb} 看板 · peers {peers}/3",
+  "agents.none.peers": "沒有即時 claude / codex / grok 行程。",
+  "agents.task.unknown": "（無法對應委派任務 — 可能是本機互動 session）",
+  "agents.task.source": "來源",
+  "agents.tab.all": "全部",
+  "agents.tab.live": "即時",
+  "agents.tab.deleg": "委派",
+  "agents.tab.kanban": "看板",
+  "agents.none.filtered": "此分類目前沒有項目",
+  "agents.kind.delegated": "委派",
+  "agents.kind.interactive": "互動",
+  "agents.field.summary": "摘要",
+  "agents.field.tools": "工具",
+  "agents.field.result": "結果",
+  "agents.field.error": "錯誤",
+  "agents.field.comments": "留言",
+  "agents.field.events": "事件",
+  "agents.detail.hint": "點選左側項目查看詳情",
+  "agents.none.deleg": "尚無 async 委派。",
+  "agents.none.kanban": "尚無看板任務。",
+  "agents.none.logs": "（沒有符合的日誌）",
+  "agents.log.fail": "日誌服務無法取得",
+  "agents.installed": "已安裝",
+  "agents.missing": "未安裝",
+  "agents.auth": "已登入",
+  "agents.no_auth": "未登入",
+  "agents.live_n": "{n} 即時",
+  "agents.unassigned": "未指派",
+  "agents.no_goal": "（無目標）",
+  "agents.fail.deleg": "無法載入委派詳情。",
+  "agents.fail.kanban": "無法載入看板詳情。",
+
+  // Memory
+  "memory.eyebrow": "MEM0 · 長期記憶",
+  "memory.title": "記憶",
+  "memory.loading": "正在載入記憶…",
+  "memory.unavailable": "記憶服務無法取得",
+  "memory.search.ph": "語意搜尋…",
+  "memory.user": "user_id（全部）",
+  "memory.agent": "agent_id（全部）",
+  "memory.app": "app_id（全部）",
+  "memory.search": "搜尋",
+  "memory.list": "列出全部",
+  "memory.count": "{n} 筆記憶",
+  "memory.delete": "刪除",
+  "memory.delete.confirm": "確定刪除此筆記憶？",
+
+  // Common states
+  "state.active": "運行中",
+  "state.inactive": "未啟動",
+  "state.failed": "失敗",
+  "state.ready": "就緒",
+  "state.down": "離線",
+  "state.n/a": "不適用",
+  "state.unknown": "未知",
+  "state.running": "執行中",
+  "state.cancelling": "取消中",
+  "state.activating": "啟動中",
+  "state.reloading": "重載中",
+  "state.deactivating": "停止中",
+};
+
+const en = {
+  "brand.sub": "Control Center",
+  "nav.home": "Home",
+  "nav.models": "Models",
+  "nav.agents": "Agents",
+  "nav.memory": "Memory",
+  "lang.zh": "中文",
+  "lang.en": "EN",
+  "lang.switch": "Language",
+
+  "home.eyebrow": "LOCAL · 127.0.0.1",
+  "home.title": "Control Center",
+  "home.loading": "Loading current system state…",
+  "home.baseline": "Start baseline",
+  "home.unavailable": "Dashboard data unavailable",
+  "home.platform": "Platform",
+  "home.device": "Device / chassis",
+  "home.npu": "NPU activity",
+  "home.runtime": "Runtime",
+  "home.waiting.platform": "Waiting for telemetry",
+  "home.waiting.device": "Waiting for device state",
+  "home.waiting.npu": "Waiting for NPU state",
+  "home.waiting.runtime": "Waiting for service state",
+  "home.metric.chassis": "Chassis",
+  "home.metric.host": "Hostname",
+  "home.metric.os": "OS",
+  "home.metric.kernel": "Kernel",
+  "home.metric.button": "Command button",
+  "home.typec": "Type-C",
+  "home.typec.none": "No Type-C ports detected",
+  "home.typea": "Type-A",
+  "home.typea.none": "No Type-A ports detected",
+  "home.button.unknown": "button state unknown",
+  "home.ops.title": "Services & live work",
+  "home.ops.eyebrow": "OPERATIONS",
+  "home.ops.services": "Services",
+  "home.ops.live": "Live work",
+  "home.ops.empty": "No live automation jobs.",
+  "home.ops.empty.hint": "Long Hermes / peer work shows under Agents.",
+  "home.ops.need_start": "{n} service(s) need start · {j} live job(s)",
+  "home.ops.healthy": "{up}/{total} services healthy · {j} live job(s)",
+  "home.group.LLM": "LLM",
+  "home.group.Voice": "Voice",
+  "home.group.Agent": "Agent",
+  "home.group.System": "System",
+  "home.metric.cpu": "CPU",
+  "home.metric.ram": "RAM free",
+  "home.metric.gtt": "GTT",
+  "home.metric.profile": "Profile",
+  "home.metric.models": "Models",
+  "home.metric.loaded": "Loaded",
+  "home.none.models": "none loaded",
+  "home.none.reported": "none reported",
+  "home.device.unavailable": "Device unavailable",
+  "home.foot.lemonade": "Lemonade: {service} · {activity}",
+  "home.foot.voice": "Voice stack {v}/{t} · {m} model(s)",
+  "home.cable": "cables",
+  "home.port.link": "linked",
+  "home.port.idle": "idle",
+  "home.button.offline": "button offline",
+  "home.button.state": "button {state}",
+  "btn.start": "Start",
+  "btn.open": "Open",
+  "btn.cancel": "Cancel",
+  "btn.refresh": "Refresh",
+
+  "models.eyebrow": "SMO · IDLE RELEASE · OOM GUARD",
+  "models.title": "Models",
+  "models.loading": "Loading scheduler state…",
+  "models.unavailable": "Models / scheduler data unavailable",
+  "models.manifest": "manifest: {path}",
+  "models.manifest.missing": "manifest: missing",
+  "models.cap.memory": "MEMORY",
+  "models.cap.gtt": "GTT",
+  "models.cap.gpu": "GPU POOL",
+  "models.cap.gpu.sub": "SMO max concurrent GPU LLMs",
+  "models.cap.idle": "IDLE RELEASE",
+  "models.policy": "SMO policy",
+  "models.loaded": "Loaded now",
+  "models.catalog": "Catalog policy",
+  "models.journal": "Idle-release journal",
+  "models.oom": "OOM guard events",
+  "models.legend": "Legend",
+  "models.none.loaded": "No models reported (Lemonade health skip or empty).",
+  "models.none.catalog": "No lemonade catalog entries.",
+  "models.none.journal": "(no recent idle-release journal lines)",
+  "models.none.oom": "No recent OOM-guard events.",
+  "models.oom.disabled": "OOM guard DISABLED (sentinel present)",
+  "models.oom.ring": "Ring buffer {path}",
+  "models.oom.missing": "OOM guard events unavailable",
+  "models.ram.free": "{free} / {total} GiB free",
+  "models.gtt.line": "{used} / {total} GiB · budget {budget}",
+  "models.npu.line": "NPU {n} · lemonade max llm {max}",
+  "models.idle.policy.na": "idle policy n/a",
+  "models.idle.age": "idle {age}",
+  "models.idle.threshold": "threshold {age}",
+  "models.chip.max_gpu": "max GPU",
+  "models.chip.budget": "budget",
+  "models.chip.headroom": "headroom",
+  "models.chip.ram_floor": "RAM floor",
+  "models.chip.gtt_budget": "GTT budget",
+  "models.chip.large": "large ≥",
+  "models.chip.swap": "swap admit",
+  "models.chip.keep_warm": "keep-warm",
+  "models.chip.workhorse": "workhorse",
+  "models.on": "ON",
+  "models.off": "off",
+  "models.decision.keep_warm": "keep_warm",
+  "models.decision.in_use": "in_use",
+  "models.decision.protected": "protected",
+  "models.decision.npu": "npu",
+  "models.decision.cooling": "cooling",
+  "models.decision.unload_candidate": "unload_candidate",
+  "models.decision.no_policy": "no_policy",
+  "models.decision.unknown_age": "unknown_age",
+  "models.decision.hold": "hold",
+  "models.state.keep_warm": "keep_warm",
+  "models.state.armed": "armed",
+  "models.state.idle_watch": "idle_watch",
+  "models.loaded.badge": "loaded",
+  "models.gate.ram_floor": "RAM floor",
+  "models.gate.keep_warm": "Keep-warm (idle unload)",
+  "models.gate.gtt_budget": "GTT budget",
+  "models.gate.swap_admit": "Swap admit",
+
+  "agents.eyebrow": "HERMES · PEER FLEET",
+  "agents.title": "Agents",
+  "agents.loading": "Loading Hermes background agents…",
+  "agents.unavailable": "Agents data unavailable",
+  "agents.peers": "Peer CLIs",
+  "agents.live": "Live processes",
+  "agents.delegations": "Delegations",
+  "agents.kanban": "Kanban",
+  "agents.detail": "Detail",
+  "agents.detail.hint": "Select a delegation or kanban task",
+  "agents.logs": "Logs",
+  "agents.log.filter": "Filter logs (delegation id, session, tool…)",
+  "agents.log.btn": "Filter",
+  "agents.home": "home: {path}",
+  "agents.home.na": "home: unavailable",
+  "agents.counts": "{active} active · {del} del · {kb} kb · peers {peers}/3",
+  "agents.none.peers": "No live claude / codex / grok agent processes.",
+  "agents.task.unknown": "(no linked task — likely a local interactive session)",
+  "agents.task.source": "source",
+  "agents.tab.all": "All",
+  "agents.tab.live": "Live",
+  "agents.tab.deleg": "Delegations",
+  "agents.tab.kanban": "Kanban",
+  "agents.none.filtered": "Nothing in this filter",
+  "agents.kind.delegated": "delegated",
+  "agents.kind.interactive": "interactive",
+  "agents.field.summary": "Summary",
+  "agents.field.tools": "Tools",
+  "agents.field.result": "Result",
+  "agents.field.error": "Error",
+  "agents.field.comments": "Comments",
+  "agents.field.events": "Events",
+  "agents.detail.hint": "Select an item on the left",
+  "agents.none.deleg": "No async delegations yet.",
+  "agents.none.kanban": "No kanban tasks.",
+  "agents.none.logs": "(no matching log lines)",
+  "agents.log.fail": "Log service unavailable",
+  "agents.installed": "installed",
+  "agents.missing": "missing",
+  "agents.auth": "auth",
+  "agents.no_auth": "no auth",
+  "agents.live_n": "{n} live",
+  "agents.unassigned": "unassigned",
+  "agents.no_goal": "(no goal)",
+  "agents.fail.deleg": "Failed to load delegation detail.",
+  "agents.fail.kanban": "Failed to load kanban detail.",
+
+  "memory.eyebrow": "MEM0 · LONG-TERM MEMORY",
+  "memory.title": "Memory",
+  "memory.loading": "Loading memories…",
+  "memory.unavailable": "Memory service unavailable",
+  "memory.search.ph": "Semantic search…",
+  "memory.user": "user_id (all)",
+  "memory.agent": "agent_id (all)",
+  "memory.app": "app_id (all)",
+  "memory.search": "Search",
+  "memory.list": "List all",
+  "memory.count": "{n} memories",
+  "memory.delete": "Delete",
+  "memory.delete.confirm": "Delete this memory?",
+
+  "state.active": "active",
+  "state.inactive": "inactive",
+  "state.failed": "failed",
+  "state.ready": "ready",
+  "state.down": "down",
+  "state.n/a": "n/a",
+  "state.unknown": "unknown",
+  "state.running": "running",
+  "state.cancelling": "cancelling",
+  "state.activating": "activating",
+  "state.reloading": "reloading",
+  "state.deactivating": "deactivating",
+};
+
+const catalogs = { zh, en };
+
+export function getLang() {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored && catalogs[stored]) return stored;
+  } catch {
+    /* ignore */
+  }
+  return "zh";
+}
+
+export function setLang(lang) {
+  const next = catalogs[lang] ? lang : "zh";
+  try {
+    localStorage.setItem(STORAGE_KEY, next);
+  } catch {
+    /* ignore */
+  }
+  document.documentElement.lang = next === "zh" ? "zh-Hant" : "en";
+  document.documentElement.dataset.lang = next;
+  return next;
+}
+
+export function t(key, vars = {}) {
+  const lang = getLang();
+  const table = catalogs[lang] || zh;
+  let s = table[key] ?? zh[key] ?? key;
+  for (const [k, v] of Object.entries(vars)) {
+    s = s.replaceAll(`{${k}}`, String(v));
+  }
+  return s;
+}
+
+export function stateLabel(state) {
+  const st = String(state || "unknown");
+  const key = `state.${st}`;
+  const translated = t(key);
+  return translated === key ? st : translated;
+}
+
+export function decisionLabel(d) {
+  const key = `models.decision.${d}`;
+  const translated = t(key);
+  return translated === key ? String(d || "?") : translated;
+}
+
+export function applyDom(root = document) {
+  root.querySelectorAll("[data-i18n]").forEach((el) => {
+    const key = el.getAttribute("data-i18n");
+    if (!key) return;
+    el.textContent = t(key);
+  });
+  root.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-placeholder");
+    if (!key) return;
+    el.setAttribute("placeholder", t(key));
+  });
+  root.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-title");
+    if (!key) return;
+    el.setAttribute("title", t(key));
+  });
+  // Brand subtitle span
+  const brandSpan = root.querySelector(".brand span[data-i18n], .brand span");
+  if (brandSpan && brandSpan.hasAttribute("data-i18n")) {
+    brandSpan.textContent = t(brandSpan.getAttribute("data-i18n"));
+  }
+}
+
+export function initLangToggle() {
+  setLang(getLang());
+  applyDom(document);
+  document.querySelectorAll("[data-set-lang]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const lang = btn.getAttribute("data-set-lang");
+      setLang(lang);
+      applyDom(document);
+      document.querySelectorAll("[data-set-lang]").forEach((b) => {
+        b.classList.toggle("active", b.getAttribute("data-set-lang") === getLang());
+      });
+      window.dispatchEvent(new CustomEvent("aipc:lang", { detail: { lang: getLang() } }));
+    });
+    btn.classList.toggle("active", btn.getAttribute("data-set-lang") === getLang());
+  });
+}

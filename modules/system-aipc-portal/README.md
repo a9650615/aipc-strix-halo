@@ -10,6 +10,11 @@ strip (hear → think → speak → remember → manage), quick CLI chips,
 start actions for declared units, and service cards grouped by kind.
 Technical endpoint detail stays under a collapsible section.
 
+The **Agents** page (`/agents`) is a dedicated fleet view for Hermes
+background work: `async_delegations`, kanban tasks, subscription peer CLIs
+(Claude Code / Codex / Grok), live processes, and log tails. It does not
+replace hermes-webui chat — it is the operations surface for status and logs.
+
 ## Control Center SPA
 
 The portal serves Astro-built assets from the same localhost Python service;
@@ -18,9 +23,16 @@ Node is used only to rebuild `web/` during development. `npm run build` in
 committing a frontend change.
 
 `/api/v1/dashboard` is the SPA snapshot endpoint. It combines declared service
-status, Lemonade's loaded models, XDNA NPU availability, and the latest
-Command Center state published at `/run/aipc/command-center.json`. An absent
-device source is displayed as unavailable rather than healthy.
+status, a **short-timeout** best-effort loaded-model list, XDNA NPU
+availability, and the latest Command Center state published at
+`/run/aipc/command-center.json`. An absent device source is displayed as
+unavailable rather than healthy.
+
+Health probes must stay cheap: service cards should use liveliness endpoints
+(e.g. LiteLLM `/health/liveliness`), never LiteLLM full `/health` (model
+completion probes) or a thrashing Lemonade `/api/v0/health`. Dashboard live
+probes use ≤0.5s timeouts and a ~2.5s snapshot cache so SPA auto-refresh
+cannot stampede backends or pin portal threads.
 
 The portal does not special-case any consumer (including Mem0). Cards and
 stage membership come from metadata tags/kind only.
@@ -32,8 +44,21 @@ stage membership come from metadata tags/kind only.
 
 `http://127.0.0.1:7080`
 
-- `GET /` — manage console (auto-refresh ~5s): loop strip, ops, live work, cards
+- `GET /` — Home overview: platform/device/NPU/runtime + operations (services & live work)
+- `GET /models` — LLM scheduling: SMO policy, capacity gates, loaded decisions, idle-release, OOM guard
+- `GET /agents` — Hermes fleet: peer CLIs, processes, delegations, kanban, logs
+- `GET /memory` — Mem0 list/search/delete (proxied)
+- `GET /api/v1/dashboard` — overview snapshot (`services` include `can_start` / `display_state`)
+- `GET /api/v1/models` — scheduling snapshot (read-only; never loads/unloads)
+- `GET /api/v1/agents` — fleet snapshot (read-only from `~/.hermes`)
+- `GET /api/v1/agents/delegations/<id>` — one async delegation + log tail
+- `GET /api/v1/agents/kanban/<id>` — one kanban task + comments/events
+- `GET /api/v1/agents/logs?q=&limit=` — Hermes `agent.log` / `errors.log` tail
+- `GET /api/v1/memories*` — same-origin Mem0 proxy (502 when mem0 down)
 - `GET /healthz` — plain `ok`
+
+UI language defaults to Traditional Chinese with an EN toggle (localStorage).
+Nav lists only real pages: Home · Models · Agents · Memory.
 - `POST /services/<id>/start` — start that card’s declared systemd unit
 - `POST /ops/baseline/start` — start all cards tagged `baseline` with a unit
 - `POST /automation/<task_id>/cancel` — proxy cancel to agent-orchestrator

@@ -1,10 +1,10 @@
 ---
 import { ClientRouter } from "astro:transitions";
 import "../styles/app.css";
-const { title = "AIPC Control Center" } = Astro.props;
+const { title = "AIPC 控制中心" } = Astro.props;
 ---
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="zh-Hant" data-lang="zh">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -12,7 +12,24 @@ const { title = "AIPC Control Center" } = Astro.props;
     <ClientRouter fallback="swap" />
   </head>
   <body>
-    <header><a class="brand" href="/">AIPC <span>Control Center</span></a><nav><a href="/#home">Home</a><a href="/#device">Device</a><a href="/#ai">AI &amp; Voice</a><a href="/#services">Services</a><a href="/memory" data-astro-reload>Memory</a></nav></header>
+    <header>
+      <a class="brand" href="/" data-astro-reload>AIPC <span data-i18n="brand.sub">控制中心</span></a>
+      <nav>
+        <a href="/" data-astro-reload data-i18n="nav.home">首頁</a>
+        <a href="/models" data-astro-reload data-i18n="nav.models">模型調度</a>
+        <a href="/agents" data-astro-reload data-i18n="nav.agents">代理人</a>
+        <a href="/memory" data-astro-reload data-i18n="nav.memory">記憶</a>
+      </nav>
+      <div class="lang-switch" role="group" aria-label="Language">
+        <button type="button" class="lang-btn" data-set-lang="zh" data-i18n="lang.zh">中文</button>
+        <button type="button" class="lang-btn" data-set-lang="en" data-i18n="lang.en">EN</button>
+      </div>
+    </header>
     <main><slot /></main>
+    <script>
+      import { initLangToggle } from "../scripts/i18n.js";
+      initLangToggle();
+      document.addEventListener("astro:page-load", () => initLangToggle());
+    </script>
   </body>
 </html>

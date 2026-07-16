@@ -1,0 +1,341 @@
+---
+import App from "../layouts/App.astro";
+---
+<App title="AIPC 模型調度">
+  <section class="hero models-hero">
+    <p class="eyebrow" data-i18n="models.eyebrow">SMO · 閒置釋放 · OOM 守衛</p>
+    <h1 data-i18n="models.title">模型調度</h1>
+    <p id="summary" class="hero-summary" data-i18n="models.loading">正在載入調度狀態…</p>
+    <div class="meta-row">
+      <span id="manifest-path" class="chip muted">清單：…</span>
+      <button id="refresh" type="button" data-i18n="btn.refresh">重新整理</button>
+    </div>
+  </section>
+
+  <section class="capacity-strip" aria-label="Capacity">
+    <article class="cap-card">
+      <p class="eyebrow" data-i18n="models.cap.memory">記憶體</p>
+      <div class="bar" id="bar-ram"><i id="bar-ram-fill"></i></div>
+      <p id="cap-ram" class="cap-text">—</p>
+    </article>
+    <article class="cap-card">
+      <p class="eyebrow" data-i18n="models.cap.gtt">GTT</p>
+      <div class="bar" id="bar-gtt"><i id="bar-gtt-fill"></i></div>
+      <p id="cap-gtt" class="cap-text">—</p>
+    </article>
+    <article class="cap-card">
+      <p class="eyebrow" data-i18n="models.cap.gpu">GPU 池</p>
+      <p id="cap-gpu" class="cap-big">—</p>
+      <p id="cap-gpu-sub" class="cap-text" data-i18n="models.cap.gpu.sub">SMO 最大並發 GPU LLM</p>
+    </article>
+    <article class="cap-card" id="idle-state-card">
+      <p class="eyebrow" data-i18n="models.cap.idle">閒置釋放</p>
+      <p id="idle-state" class="cap-big">—</p>
+      <p id="idle-detail" class="cap-text">—</p>
+    </article>
+  </section>
+
+  <section class="policy-strip" aria-label="Policy">
+    <h2 class="section-title" data-i18n="models.policy">SMO 政策</h2>
+    <div id="policy-chips" class="chip-row"></div>
+    <div id="gates" class="gate-grid"></div>
+  </section>
+
+  <section class="fleet-grid models-grid" aria-label="Loaded and catalog">
+    <div class="fleet-col">
+      <h2 class="section-title" data-i18n="models.loaded">目前已載入</h2>
+      <div id="loaded" class="card-list"></div>
+    </div>
+    <div class="fleet-col">
+      <h2 class="section-title" data-i18n="models.catalog">目錄政策</h2>
+      <div id="catalog" class="card-list catalog-scroll"></div>
+    </div>
+  </section>
+
+  <section class="events-grid" aria-label="Guard events">
+    <div>
+      <h2 class="section-title" data-i18n="models.journal">閒置釋放日誌</h2>
+      <pre id="idle-journal" class="log-view compact">—</pre>
+    </div>
+    <div>
+      <h2 class="section-title" data-i18n="models.oom">OOM 守衛事件</h2>
+      <p id="oom-status" class="muted"></p>
+      <div id="oom-events" class="card-list"></div>
+    </div>
+  </section>
+
+  <section aria-label="Legend">
+    <h2 class="section-title" data-i18n="models.legend">圖例</h2>
+    <div id="legend" class="chip-row"></div>
+  </section>
+
+  <script>
+    import { t, applyDom, decisionLabel } from "../scripts/i18n.js";
+    import { createJsonPoller } from "../scripts/poll.js";
+
+    const $ = (id) => document.getElementById(id);
+    let lastSig = "";
+    let poller = null;
+
+    function cleanup() {
+      poller?.stop();
+      poller = null;
+    }
+    document.addEventListener("astro:before-preparation", cleanup, { once: true });
+    window.addEventListener("pagehide", cleanup, { once: true });
+
+    function pill(text, kind = "na") {
+      const s = document.createElement("span");
+      s.className = `pill pill-${kind}`;
+      s.textContent = text;
+      return s;
+    }
+
+    function decisionKind(d) {
+      if (d === "unload_candidate") return "bad";
+      if (d === "keep_warm") return "ok";
+      if (d === "in_use") return "run";
+      if (d === "cooling") return "wait";
+      if (d === "protected" || d === "npu") return "ok";
+      return "na";
+    }
+
+    function fmtAge(s) {
+      if (s == null) return "—";
+      const n = Number(s);
+      if (n < 60) return `${Math.round(n)}s`;
+      if (n < 3600) return `${Math.floor(n / 60)}m`;
+      return `${(n / 3600).toFixed(1)}h`;
+    }
+
+    function setBar(fillId, used, total, warnAt) {
+      const el = $(fillId);
+      if (!el || total == null || total <= 0 || used == null) {
+        if (el) el.style.width = "0%";
+        return;
+      }
+      const pct = Math.min(100, Math.max(0, (used / total) * 100));
+      el.style.width = `${pct}%`;
+      el.classList.toggle("hot", warnAt != null && used >= warnAt);
+    }
+
+    function renderCapacity(data) {
+      const c = data.capacity || {};
+      const memFree = c.mem_available_gb;
+      const memTotal = c.mem_total_gb;
+      const memUsed = memTotal != null && memFree != null ? memTotal - memFree : null;
+      $("cap-ram").textContent =
+        memFree != null && memTotal != null
+          ? t("models.ram.free", { free: memFree.toFixed(0), total: memTotal.toFixed(0) })
+          : "—";
+      setBar("bar-ram-fill", memUsed, memTotal, memTotal != null ? memTotal - (data.policy?.ram_floor_gb || 12) : null);
+
+      const gttU = c.gtt_used_gb;
+      const gttT = c.gtt_total_gb;
+      $("cap-gtt").textContent =
+        gttU != null && gttT != null
+          ? t("models.gtt.line", {
+            used: gttU.toFixed(1),
+            total: gttT.toFixed(0),
+            budget: data.policy?.gtt_budget_gb ?? "—",
+          })
+          : "—";
+      setBar("bar-gtt-fill", gttU, data.policy?.gtt_budget_gb || gttT, data.policy?.gtt_budget_gb);
+
+      const gpu = data.lemonade?.gpu_loaded ?? 0;
+      const maxG = data.policy?.max_gpu_loaded ?? "?";
+      $("cap-gpu").textContent = `${gpu} / ${maxG}`;
+      $("cap-gpu-sub").textContent = t("models.npu.line", {
+        n: data.lemonade?.npu_loaded ?? 0,
+        max: data.lemonade?.max_llm ?? "—",
+      });
+
+      const idle = data.idle_release || {};
+      const stateKey = `models.state.${idle.state}`;
+      const stateText = t(stateKey);
+      $("idle-state").textContent = stateText === stateKey ? (idle.state || "—") : stateText;
+      $("idle-detail").textContent = idle.summary || "";
+      $("idle-state-card")?.classList.toggle("armed", idle.state === "armed");
+      $("idle-state-card")?.classList.toggle("warm", idle.state === "keep_warm");
+    }
+
+    function renderPolicy(data) {
+      const p = data.policy || {};
+      const chips = [
+        [t("models.chip.max_gpu"), p.max_gpu_loaded],
+        [t("models.chip.budget"), `${p.budget_gb}G`],
+        [t("models.chip.headroom"), `${p.headroom_gb}G`],
+        [t("models.chip.ram_floor"), `${p.ram_floor_gb}G`],
+        [t("models.chip.gtt_budget"), `${p.gtt_budget_gb}G`],
+        [t("models.chip.large"), `${p.large_gb}G`],
+        [t("models.chip.swap"), p.allow_swap_admit ? t("models.on") : t("models.off")],
+        [t("models.chip.keep_warm"), `${p.keep_warm_mem_floor_gb}G`],
+        [t("models.chip.workhorse"), (p.workhorse || []).join(",") || "—"],
+      ];
+      $("policy-chips").replaceChildren(...chips.map(([k, v]) => {
+        const span = document.createElement("span");
+        span.className = "chip";
+        span.innerHTML = `<em>${k}</em> ${v}`;
+        return span;
+      }));
+
+      const gates = data.capacity?.gates || [];
+      $("gates").replaceChildren(...gates.map((g) => {
+        const card = document.createElement("article");
+        card.className = "gate-card" + (g.ok ? " ok" : " bad") + (g.armed ? " armed" : "");
+        const labelKey = `models.gate.${g.id}`;
+        const label = t(labelKey) === labelKey ? g.label : t(labelKey);
+        card.innerHTML = `<p class="eyebrow">${label}</p><p>${g.detail || ""}</p>`;
+        return card;
+      }));
+    }
+
+    function renderLoaded(rows) {
+      const el = $("loaded");
+      if (!rows?.length) {
+        el.innerHTML = `<p class="empty">${t("models.none.loaded")}</p>`;
+        return;
+      }
+      el.replaceChildren(...rows.map((m) => {
+        const card = document.createElement("article");
+        card.className = "work-card live model-card";
+        const head = document.createElement("div");
+        head.className = "work-head";
+        const title = document.createElement("strong");
+        title.textContent = m.alias || m.name_short || m.name;
+        title.title = m.name || "";
+        const badge = pill(decisionLabel(m.decision || "?"), decisionKind(m.decision));
+        head.append(title, badge);
+        const meta = document.createElement("p");
+        meta.className = "model-meta";
+        meta.textContent = [
+          m.device,
+          m.recipe,
+          m.pinned ? "pinned" : null,
+          m.status,
+          m.tier && `tier:${m.tier}`,
+          m.size_gb != null && `${m.size_gb}G`,
+          m.ctx && `ctx ${Number(m.ctx) >= 1024 ? Math.round(Number(m.ctx) / 1024) + "k" : m.ctx}`,
+        ].filter(Boolean).join(" · ");
+        const idle = document.createElement("small");
+        idle.textContent = [
+          m.idle_age_s != null && t("models.idle.age", { age: fmtAge(m.idle_age_s) }),
+          m.idle_unload_after_s != null && t("models.idle.threshold", { age: fmtAge(m.idle_unload_after_s) }),
+        ].filter(Boolean).join(" · ") || t("models.idle.policy.na");
+        const why = document.createElement("ul");
+        why.className = "reason-list";
+        for (const r of m.reasons || []) {
+          const li = document.createElement("li");
+          li.textContent = r;
+          why.append(li);
+        }
+        card.append(head, meta, idle, why);
+        return card;
+      }));
+    }
+
+    function renderCatalog(rows) {
+      const el = $("catalog");
+      const local = (rows || []).filter((r) => r.backend === "lemonade" || r.pool === "npu");
+      if (!local.length) {
+        el.innerHTML = `<p class="empty">${t("models.none.catalog")}</p>`;
+        return;
+      }
+      el.replaceChildren(...local.map((r) => {
+        const card = document.createElement("article");
+        card.className = "work-card catalog-card" + (r.loaded ? " is-loaded" : "");
+        const head = document.createElement("div");
+        head.className = "work-head";
+        const title = document.createElement("strong");
+        title.textContent = r.alias;
+        const badge = pill(
+          r.loaded ? t("models.loaded.badge") : r.tier || "—",
+          r.loaded ? "run" : r.tier === "exclusive" ? "wait" : "na",
+        );
+        head.append(title, badge);
+        const meta = document.createElement("small");
+        meta.textContent = [
+          r.pool || r.backend,
+          r.size_gb != null && `${r.size_gb}G`,
+          r.idle_unload_after_s != null && t("models.idle.age", { age: fmtAge(r.idle_unload_after_s) }),
+          r.model_id_short,
+        ].filter(Boolean).join(" · ");
+        card.append(head, meta);
+        return card;
+      }));
+    }
+
+    function renderEvents(data) {
+      const journal = data.idle_journal || [];
+      $("idle-journal").textContent = journal.length ? journal.join("\n") : t("models.none.journal");
+
+      const oom = data.oom_guard || {};
+      $("oom-status").textContent = oom.disabled
+        ? t("models.oom.disabled")
+        : oom.availability === "available"
+          ? t("models.oom.ring", { path: oom.path || "" })
+          : t("models.oom.missing");
+      const events = oom.events || [];
+      if (!events.length) {
+        $("oom-events").innerHTML = `<p class="empty">${t("models.none.oom")}</p>`;
+        return;
+      }
+      $("oom-events").replaceChildren(...events.slice(0, 20).map((e) => {
+        const card = document.createElement("article");
+        card.className = "work-card event-card";
+        const when = e.ts ? new Date(Number(e.ts) * 1000).toLocaleString() : "—";
+        card.innerHTML = `<div class="work-head"><strong>${e.event || e.action || "event"}</strong></div>
+          <small>${when}${e.level ? " · " + e.level : ""}${e.dry_run ? " · dry-run" : ""}</small>
+          <p class="model-meta">${[e.action, e.detail, e.mem != null ? `mem ${e.mem}` : null].filter(Boolean).join(" · ")}</p>`;
+        return card;
+      }));
+    }
+
+    function renderLegend(items) {
+      $("legend").replaceChildren(...(items || []).map((L) => {
+        const span = document.createElement("span");
+        span.className = "chip legend-chip";
+        span.title = L.hint || "";
+        span.innerHTML = `<em>${L.label}</em> ${L.hint || ""}`;
+        return span;
+      }));
+    }
+
+    function applyModels(data) {
+      const sig = JSON.stringify({
+        s: data.summary,
+        l: data.loaded,
+        i: data.idle_release,
+        c: data.capacity,
+        o: (data.oom_guard?.events || []).slice(0, 5),
+        st: data.lemonade?.stale,
+      });
+      if (sig === lastSig) return;
+      lastSig = sig;
+      $("summary").textContent = data.summary || "—";
+      $("manifest-path").textContent = data.manifest_path
+        ? t("models.manifest", { path: data.manifest_path })
+        : t("models.manifest.missing");
+      renderCapacity(data);
+      renderPolicy(data);
+      renderLoaded(data.loaded || []);
+      renderCatalog(data.catalog || []);
+      renderEvents(data);
+      renderLegend(data.legend || []);
+    }
+
+    applyDom(document);
+    poller = createJsonPoller({
+      url: "/api/v1/models",
+      intervalMs: 8000,
+      onData: applyModels,
+      onError: () => { $("summary").textContent = t("models.unavailable"); },
+    });
+    window.addEventListener("aipc:lang", () => {
+      applyDom(document);
+      lastSig = "";
+      poller?.refresh();
+    });
+    $("refresh").onclick = () => { lastSig = ""; poller?.refresh(); };
+  </script>
+</App>

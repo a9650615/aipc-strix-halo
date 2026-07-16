@@ -1,0 +1,417 @@
+---
+import App from "../layouts/App.astro";
+---
+<App title="AIPC 代理人">
+  <section class="hero agents-hero compact-hero">
+    <div class="hero-main">
+      <p class="eyebrow" data-i18n="agents.eyebrow">HERMES · PEER 艦隊</p>
+      <h1 data-i18n="agents.title">代理人</h1>
+      <p id="summary" class="hero-summary" data-i18n="agents.loading">正在載入…</p>
+    </div>
+    <div class="meta-row">
+      <span id="counts" class="chip muted">—</span>
+      <button id="refresh" type="button" data-i18n="btn.refresh">重新整理</button>
+    </div>
+    <div id="peers" class="peer-chips" aria-label="Peer CLI status"></div>
+  </section>
+
+  <section class="agent-workspace" aria-label="Agent work">
+    <div class="agent-list-pane">
+      <div class="agent-tabs" role="tablist">
+        <button type="button" class="agent-tab active" data-tab="all" data-i18n="agents.tab.all">全部</button>
+        <button type="button" class="agent-tab" data-tab="live" data-i18n="agents.tab.live">即時</button>
+        <button type="button" class="agent-tab" data-tab="deleg" data-i18n="agents.tab.deleg">委派</button>
+        <button type="button" class="agent-tab" data-tab="kanban" data-i18n="agents.tab.kanban">看板</button>
+      </div>
+      <div id="work-list" class="agent-rows" role="list"></div>
+      <p id="work-empty" class="empty hidden"></p>
+    </div>
+
+    <aside class="agent-detail-pane" aria-label="Detail">
+      <div class="detail-head">
+        <h2 class="section-title" id="detail-title" data-i18n="agents.detail">詳情</h2>
+        <p id="detail-sub" class="muted" data-i18n="agents.detail.hint">點選左側項目查看</p>
+      </div>
+      <div id="detail-meta" class="detail-meta"></div>
+      <pre id="detail-body" class="detail-body">—</pre>
+      <div class="detail-logs-head">
+        <h3 class="section-title" data-i18n="agents.logs">日誌</h3>
+        <div class="controls log-controls">
+          <input id="log-query" data-i18n-placeholder="agents.log.filter" placeholder="篩選日誌…" />
+          <button id="log-search" type="button" data-i18n="agents.log.btn">篩選</button>
+        </div>
+      </div>
+      <pre id="logs" class="log-view compact">—</pre>
+    </aside>
+  </section>
+
+  <script>
+    import { t, applyDom, stateLabel as i18nState } from "../scripts/i18n.js";
+    import { createJsonPoller } from "../scripts/poll.js";
+
+    const $ = (id) => document.querySelector(`#${id}`);
+    let poller = null;
+    let cache = { processes: [], delegations: [], kanban: [], peers: [] };
+    let activeTab = "all";
+    let selectedKey = "";
+    let lastListSig = "";
+
+    const short = (s, n = 72) => {
+      const t0 = String(s || "").replace(/\s+/g, " ").trim();
+      return t0.length > n ? t0.slice(0, n - 1) + "…" : t0;
+    };
+    const stateKey = (s) => String(s || "unknown").toLowerCase();
+    const stateKind = (s) => {
+      const v = stateKey(s);
+      if (["running", "active", "in_progress", "claimed"].includes(v)) return "run";
+      if (["completed", "done", "ok", "delivered"].includes(v)) return "ok";
+      if (["failed", "error", "reclaimed", "blocked"].includes(v)) return "bad";
+      if (["ready", "todo", "triage", "cooling"].includes(v)) return "wait";
+      return "na";
+    };
+    const pillClass = (s) => `pill pill-${stateKind(s)}`;
+    const fmtTime = (ts) => {
+      if (ts == null || ts === "") return "—";
+      const n = Number(ts);
+      if (!Number.isFinite(n) || n <= 0) return "—";
+      const ms = n > 1e12 ? n : n * 1000;
+      try { return new Date(ms).toLocaleString(); } catch { return String(ts); }
+    };
+    const fmtDur = (s) => {
+      const n = Number(s);
+      if (!Number.isFinite(n) || n < 0) return "";
+      if (n < 60) return `${n.toFixed(0)}s`;
+      if (n < 3600) return `${Math.floor(n / 60)}m`;
+      return `${(n / 3600).toFixed(1)}h`;
+    };
+
+    function cleanup() {
+      poller?.stop();
+      poller = null;
+    }
+    document.addEventListener("astro:before-preparation", cleanup, { once: true });
+    window.addEventListener("pagehide", cleanup, { once: true });
+
+    function pill(text, kind) {
+      const s = document.createElement("span");
+      s.className = kind.startsWith("pill") ? kind : `pill pill-${kind}`;
+      s.textContent = text;
+      return s;
+    }
+
+    function setSelected(key) {
+      selectedKey = key;
+      document.querySelectorAll(".agent-row").forEach((el) => {
+        el.classList.toggle("selected", el.dataset.key === key);
+      });
+    }
+
+    function renderPeers(peers) {
+      const el = $("peers");
+      el.replaceChildren(...(peers || []).map((p) => {
+        const chip = document.createElement("span");
+        chip.className = "chip peer-chip" + (p.installed && p.auth_present ? " ready" : "");
+        const live = p.running_count ? ` · ${p.running_count}` : "";
+        chip.textContent = `${p.label || p.id}${p.installed ? "" : " ✗"}${live}`;
+        chip.title = p.path || p.id;
+        return chip;
+      }));
+    }
+
+    function workItems() {
+      const items = [];
+      for (const p of cache.processes || []) {
+        const task = p.task || {};
+        items.push({
+          key: `live:${p.pid}`,
+          tab: "live",
+          kind: "live",
+          provider: (p.provider || "?").toUpperCase(),
+          title: task.title || t("agents.task.unknown"),
+          state: task.kind === "delegated" ? "running" : (task.source === "grok-session" ? "active" : "n/a"),
+          sub: [fmtDur(p.etime_seconds), p.cwd && p.cwd.split("/").slice(-2).join("/")].filter(Boolean).join(" · "),
+          raw: p,
+        });
+      }
+      for (const d of cache.delegations || []) {
+        items.push({
+          key: `deleg:${d.id}`,
+          tab: "deleg",
+          kind: "deleg",
+          provider: "HERMES",
+          title: d.goal_preview || d.id,
+          state: d.state || "unknown",
+          sub: [d.model, fmtDur(d.duration_seconds)].filter(Boolean).join(" · "),
+          raw: d,
+        });
+      }
+      for (const k of cache.kanban || []) {
+        items.push({
+          key: `kb:${k.id}`,
+          tab: "kanban",
+          kind: "kanban",
+          provider: (k.assignee || "KB").toString().slice(0, 12),
+          title: k.title || k.id,
+          state: k.status || "unknown",
+          sub: [k.branch_name, k.worker_pid && `pid ${k.worker_pid}`].filter(Boolean).join(" · "),
+          raw: k,
+        });
+      }
+      // Active first
+      const rank = (s) => {
+        const v = stateKey(s);
+        if (["running", "active", "claimed", "in_progress"].includes(v)) return 0;
+        if (["ready", "todo", "triage"].includes(v)) return 1;
+        if (["completed", "done", "delivered"].includes(v)) return 2;
+        return 3;
+      };
+      items.sort((a, b) => rank(a.state) - rank(b.state));
+      return items;
+    }
+
+    function filteredItems() {
+      const all = workItems();
+      if (activeTab === "all") return all;
+      return all.filter((i) => i.tab === activeTab);
+    }
+
+    function renderList({ force = false } = {}) {
+      const items = filteredItems();
+      const sig = JSON.stringify(items.map((i) => [i.key, i.title, i.state, i.sub]));
+      if (!force && sig === lastListSig) {
+        // Only refresh selected highlight
+        document.querySelectorAll(".agent-row").forEach((el) => {
+          el.classList.toggle("selected", el.dataset.key === selectedKey);
+        });
+        return;
+      }
+      lastListSig = sig;
+      const list = $("work-list");
+      const empty = $("work-empty");
+      if (!items.length) {
+        list.replaceChildren();
+        empty.classList.remove("hidden");
+        empty.textContent = t("agents.none.filtered");
+        return;
+      }
+      empty.classList.add("hidden");
+      list.replaceChildren(...items.map((item) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "agent-row" + (item.key === selectedKey ? " selected" : "");
+        row.dataset.key = item.key;
+        row.setAttribute("role", "listitem");
+
+        const left = document.createElement("div");
+        left.className = "agent-row-main";
+        const who = document.createElement("span");
+        who.className = "agent-who";
+        who.textContent = item.provider;
+        const title = document.createElement("span");
+        title.className = "agent-title";
+        title.textContent = short(item.title, 90);
+        title.title = item.title;
+        left.append(who, title);
+
+        const right = document.createElement("div");
+        right.className = "agent-row-side";
+        right.append(pill(i18nState(item.state), pillClass(item.state)));
+        if (item.sub) {
+          const sub = document.createElement("span");
+          sub.className = "agent-sub";
+          sub.textContent = item.sub;
+          right.append(sub);
+        }
+
+        row.append(left, right);
+        row.onclick = () => selectItem(item);
+        return row;
+      }));
+    }
+
+    function showDetail(title, sub, bodyLines, metaChips, logs) {
+      $("detail-title").textContent = title;
+      $("detail-sub").textContent = sub || "";
+      const meta = $("detail-meta");
+      meta.replaceChildren(...(metaChips || []).map(([label, kind]) => pill(label, kind || "na")));
+      $("detail-body").textContent = (bodyLines || []).filter(Boolean).join("\n\n") || "—";
+      if (logs) renderLogs(logs);
+    }
+
+    function selectItem(item) {
+      setSelected(item.key);
+      if (item.kind === "live") {
+        const p = item.raw;
+        const task = p.task || {};
+        showDetail(
+          task.title || `${(p.provider || "?").toUpperCase()} #${p.pid}`,
+          [
+            task.source && task.source !== "unknown" ? `${t("agents.task.source")}: ${task.source}` : t("agents.task.unknown"),
+            task.kind,
+            p.etime_seconds != null && `etime ${fmtDur(p.etime_seconds)}`,
+          ].filter(Boolean).join(" · "),
+          [
+            task.goal_preview && task.goal_preview !== task.title ? task.goal_preview : null,
+            p.cwd && `cwd: ${p.cwd}`,
+            p.cmd && `cmd: ${p.cmd}`,
+            task.session_id && `session: ${task.session_id}`,
+            task.session_path && `path: ${task.session_path}`,
+            task.delegation_id && `delegation: ${task.delegation_id}`,
+            task.task_id && `kanban: ${task.task_id}`,
+            task.model && `model: ${task.model}`,
+          ],
+          [
+            [(p.provider || "?").toUpperCase(), "run"],
+            [`pid ${p.pid}`, "na"],
+            task.kind === "delegated" ? [t("agents.kind.delegated"), "run"] : [t("agents.kind.interactive"), "wait"],
+          ],
+        );
+        if (task.session_id || task.delegation_id || task.task_id) {
+          $("log-query").value = task.delegation_id || task.task_id || task.session_id || "";
+          loadLogs();
+        } else {
+          $("logs").textContent = t("agents.none.logs");
+        }
+        return;
+      }
+      if (item.kind === "deleg") {
+        selectDelegation(item.raw.id);
+        return;
+      }
+      if (item.kind === "kanban") {
+        selectKanban(item.raw.id);
+      }
+    }
+
+    function selectDelegation(id) {
+      setSelected(`deleg:${id}`);
+      fetch(`/api/v1/agents/delegations/${encodeURIComponent(id)}`)
+        .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+        .then((d) => {
+          const tools = (d.tool_trace || []).map((x) => `· ${x.tool || "?"} (${x.status || ""})`).join("\n");
+          showDetail(
+            short(d.goal || d.goal_preview || d.id, 80),
+            `${i18nState(d.state)} · ${d.model || "—"} · ${fmtDur(d.duration_seconds) || "—"} · ${fmtTime(d.dispatched_at)}`,
+            [
+              d.goal || d.goal_preview || "",
+              d.summary || d.summary_preview ? `${t("agents.field.summary")}\n${d.summary || d.summary_preview}` : null,
+              tools ? `${t("agents.field.tools")}\n${tools}` : null,
+              d.origin_session && `origin: ${d.origin_session}`,
+              d.id && `id: ${d.id}`,
+            ],
+            [
+              ["HERMES", "na"],
+              [i18nState(d.state), stateKind(d.state)],
+              d.tool_count != null ? [`${d.tool_count} tools`, "na"] : null,
+            ].filter(Boolean),
+            d.logs,
+          );
+          $("log-query").value = id;
+        })
+        .catch(() => {
+          showDetail(t("agents.delegations"), "", [t("agents.fail.deleg")]);
+        });
+    }
+
+    function selectKanban(id) {
+      setSelected(`kb:${id}`);
+      fetch(`/api/v1/agents/kanban/${encodeURIComponent(id)}`)
+        .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+        .then((d) => {
+          const comments = (d.comments || []).slice(0, 8).map((c) => `· [${c.author || "?"}] ${c.body || ""}`).join("\n");
+          const events = (d.events || []).slice(0, 10).map((e) => `· ${e.kind || "?"} @ ${fmtTime(e.created_at)}`).join("\n");
+          showDetail(
+            d.title || d.id,
+            `${i18nState(d.status)} · ${d.assignee || t("agents.unassigned")} · pid ${d.worker_pid || "—"}`,
+            [
+              d.body || "",
+              d.workspace_path && `workspace: ${d.workspace_path}`,
+              d.branch_name && `branch: ${d.branch_name}`,
+              d.result && `${t("agents.field.result")}\n${d.result}`,
+              d.last_failure_error && `${t("agents.field.error")}\n${d.last_failure_error}`,
+              comments && `${t("agents.field.comments")}\n${comments}`,
+              events && `${t("agents.field.events")}\n${events}`,
+            ],
+            [
+              ["KANBAN", "na"],
+              [i18nState(d.status), stateKind(d.status)],
+              d.assignee ? [d.assignee, "na"] : null,
+            ].filter(Boolean),
+            d.logs,
+          );
+          $("log-query").value = id;
+        })
+        .catch(() => {
+          showDetail(t("agents.kanban"), "", [t("agents.fail.kanban")]);
+        });
+    }
+
+    function renderLogs(rows) {
+      if (!rows?.length) {
+        $("logs").textContent = t("agents.none.logs");
+        return;
+      }
+      $("logs").textContent = rows.map((r) => `[${r.file}] ${r.line}`).join("\n");
+      $("logs").scrollTop = $("logs").scrollHeight;
+    }
+
+    async function loadLogs() {
+      const q = $("log-query").value.trim();
+      try {
+        const params = new URLSearchParams({ limit: "120" });
+        if (q) params.set("q", q);
+        const data = await fetch(`/api/v1/agents/logs?${params}`).then((r) => r.ok ? r.json() : Promise.reject(r.status));
+        renderLogs(data.logs || []);
+      } catch {
+        $("logs").textContent = t("agents.log.fail");
+      }
+    }
+
+    function applyAgents(data) {
+      cache = {
+        processes: data.processes || [],
+        delegations: data.delegations || [],
+        kanban: data.kanban || [],
+        peers: data.peers || [],
+      };
+      $("summary").textContent = data.summary || "—";
+      const c = data.counts || {};
+      $("counts").textContent = t("agents.counts", {
+        active: c.running_signals || 0,
+        del: c.delegations || 0,
+        kb: c.kanban || 0,
+        peers: c.peers_ready || 0,
+      });
+      renderPeers(cache.peers);
+      renderList();
+      if (selectedKey && !filteredItems().find((i) => i.key === selectedKey)) {
+        selectedKey = "";
+      }
+    }
+
+    document.querySelectorAll(".agent-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        activeTab = btn.dataset.tab || "all";
+        document.querySelectorAll(".agent-tab").forEach((b) => b.classList.toggle("active", b === btn));
+        lastListSig = "";
+        renderList({ force: true });
+      });
+    });
+
+    applyDom(document);
+    poller = createJsonPoller({
+      url: "/api/v1/agents",
+      intervalMs: 8000,
+      onData: applyAgents,
+      onError: () => { $("summary").textContent = t("agents.unavailable"); },
+    });
+    window.addEventListener("aipc:lang", () => {
+      applyDom(document);
+      lastListSig = "";
+      poller?.refresh();
+    });
+    $("refresh").onclick = () => { lastListSig = ""; poller?.refresh(); };
+    $("log-search").onclick = loadLogs;
+    $("log-query").addEventListener("keydown", (e) => { if (e.key === "Enter") loadLogs(); });
+  </script>
+</App>
