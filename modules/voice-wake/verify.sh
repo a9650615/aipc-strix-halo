@@ -2,27 +2,44 @@
 set -eu
 this_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-wake="$this_dir/files/usr/lib/aipc-voice/aipc_voice_wake.py"
+lib="$this_dir/files/usr/lib/aipc-voice"
+wake="$lib/aipc_voice_wake.py"
+policy_mod="$lib/aipc_voice_wake_policy.py"
+session_mod="$lib/aipc_voice_session.py"
 [ -f "$wake" ] || {
   echo "voice-wake: missing aipc_voice_wake.py" >&2
   exit 1
 }
-python3 -c "import ast; ast.parse(open('$wake').read())" || {
-  echo "voice-wake: syntax error" >&2
+[ -f "$policy_mod" ] || {
+  echo "voice-wake: missing aipc_voice_wake_policy.py" >&2
   exit 1
 }
-python3 "$wake" --self-test || {
-  echo "voice-wake: self-test failed" >&2
+[ -f "$session_mod" ] || {
+  echo "voice-wake: missing aipc_voice_session.py" >&2
   exit 1
 }
-# Anti-ghost / thrash helpers must exist (not only syntax)
-for sym in classify_wake_text decide_wake_arm miss_backoff_seconds junk_capture_action next_mode_after_empty_capture; do
-  grep -q "def $sym" "$wake" || {
-    echo "voice-wake: missing helper $sym" >&2
+for f in "$wake" "$policy_mod" "$session_mod"; do
+  python3 -c "import ast; ast.parse(open('$f').read())" || {
+    echo "voice-wake: syntax error in $f" >&2
     exit 1
   }
 done
-grep -q '_MANGLED_WAKE' "$wake" && {
+PYTHONPATH="$lib${PYTHONPATH:+:$PYTHONPATH}" python3 "$wake" --self-test || {
+  echo "voice-wake: self-test failed" >&2
+  exit 1
+}
+# Anti-ghost / thrash helpers live in policy module
+for sym in classify_wake_text decide_wake_arm miss_backoff_seconds junk_capture_action next_mode_after_empty_capture; do
+  grep -q "def $sym" "$policy_mod" || {
+    echo "voice-wake: missing helper $sym in policy" >&2
+    exit 1
+  }
+done
+grep -q 'class SessionState' "$session_mod" || {
+  echo "voice-wake: missing SessionState" >&2
+  exit 1
+}
+grep -q '_MANGLED_WAKE' "$policy_mod" "$wake" && {
   echo "voice-wake: _MANGLED_WAKE must not return" >&2
   exit 1
 }

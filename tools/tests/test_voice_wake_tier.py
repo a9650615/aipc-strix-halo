@@ -12,10 +12,15 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-WAKE_PATH = ROOT / "modules/voice-wake/files/usr/lib/aipc-voice/aipc_voice_wake.py"
+WAKE_LIB = ROOT / "modules/voice-wake/files/usr/lib/aipc-voice"
+WAKE_PATH = WAKE_LIB / "aipc_voice_wake.py"
 
 
 def _load_wake():
+    # Sibling modules: aipc_voice_wake_policy, aipc_voice_session
+    lib = str(WAKE_LIB)
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
     spec = importlib.util.spec_from_file_location("aipc_voice_wake_under_test", WAKE_PATH)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
@@ -154,16 +159,19 @@ def test_end_to_end_decision_matrix(wake):
 
 
 def test_live_loop_wires_policy_helpers_not_orphan_defs():
-    """Structural: run_phrase_loop body must call shipped policy helpers."""
+    """Structural: run_phrase_loop body must call shipped policy + session helpers."""
     src = WAKE_PATH.read_text(encoding="utf-8")
-    assert "_MANGLED_WAKE" not in src
-    # Call sites (not only defs)
+    policy = (WAKE_LIB / "aipc_voice_wake_policy.py").read_text(encoding="utf-8")
+    session = (WAKE_LIB / "aipc_voice_session.py").read_text(encoding="utf-8")
+    assert "_MANGLED_WAKE" not in src and "_MANGLED_WAKE" not in policy
+    assert "class SessionState" in session
+    assert "from aipc_voice_wake_policy import" in src or "import aipc_voice_wake_policy" in src
+    assert "from aipc_voice_session import" in src or "import aipc_voice_session" in src
+    # Call sites in I/O loop (not only defs in policy module)
     assert "classify_wake_text(text, phrases)" in src
     assert "decide_wake_arm(" in src
     assert "miss_backoff_seconds(miss_streak)" in src
-    assert "junk_capture_action(" in src
-    assert "next_mode_after_empty_capture(action)" in src
-    # FOLLOWUP_DIRECT default must prefer off (matches policy.env)
-    assert 'AIPC_WAKE_FOLLOWUP_DIRECT", "0"' in src or (
-        'AIPC_WAKE_FOLLOWUP_DIRECT", "0"' in src.replace("'", '"')
-    )
+    assert "on_empty_capture(" in src
+    assert "on_wake_decision(" in src
+    # FOLLOWUP_DIRECT default off lives in policy module
+    assert 'AIPC_WAKE_FOLLOWUP_DIRECT", "0"' in policy

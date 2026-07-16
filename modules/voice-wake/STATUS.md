@@ -19,8 +19,9 @@
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Split 2.8k god-object into session/capture modules | **Not done** | still one `aipc_voice_wake.py` |
-| Explicit state machine enum (IDLE/ARMED/…) | **Not done** | design P1 |
+| Split pure policy out of god-object | **Done** | `aipc_voice_wake_policy.py` |
+| Explicit session state machine | **Partial** | `aipc_voice_session.py` + loop mirrors intentional/reprompt; full RESOLVING/SPEAKING UX still in loop |
+| Capture module split | **Not done** | still in `aipc_voice_wake.py` |
 | FOLLOWUP_ARMED probe UX (no show on noise) fully | **Partial** | `FOLLOWUP_DIRECT=0` default; no full probe state |
 | Ostree `/usr/lib` image parity | **Not done** | `/usr` is **stale** (no thrash/anti-ghost helpers) until bootc rebuild |
 | OpenSpec `0019-voice-session-runtime` change | **Not done** | design doc only |

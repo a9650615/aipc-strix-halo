@@ -218,8 +218,14 @@ def check_voice_wake(
         "next_mode_after_empty_capture",
         "effective_wake_policy",
     )
-    missing = [n for n in need if n not in body]
-    if "_MANGLED_WAKE" in body:
+    # Helpers may live in aipc_voice_wake.py or aipc_voice_wake_policy.py
+    policy_path = active.parent / "aipc_voice_wake_policy.py"
+    session_path = active.parent / "aipc_voice_session.py"
+    body_all = body
+    if policy_path.is_file():
+        body_all += "\n" + policy_path.read_text(encoding="utf-8", errors="replace")
+    missing = [n for n in need if n not in body_all]
+    if "_MANGLED_WAKE" in body_all:
         results.append(
             Result(
                 "voice-wake-code",
@@ -236,21 +242,30 @@ def check_voice_wake(
             )
         )
     else:
+        extra = ""
+        if session_path.is_file() and "SessionState" in session_path.read_text(
+            encoding="utf-8", errors="replace"
+        ):
+            extra = " + SessionState"
         results.append(
             Result(
                 "voice-wake-code",
                 STATUS_OK,
-                f"{active} has anti-ghost + thrash helpers",
+                f"{active} has anti-ghost + thrash helpers{extra}",
             )
         )
 
     if live and ostree:
-        live_has = "miss_backoff_seconds" in live.read_text(
-            encoding="utf-8", errors="replace"
-        )
-        ostree_has = "miss_backoff_seconds" in ostree.read_text(
-            encoding="utf-8", errors="replace"
-        )
+        live_tree = live.read_text(encoding="utf-8", errors="replace")
+        ostree_tree = ostree.read_text(encoding="utf-8", errors="replace")
+        live_pol = live.parent / "aipc_voice_wake_policy.py"
+        if live_pol.is_file():
+            live_tree += live_pol.read_text(encoding="utf-8", errors="replace")
+        ostree_pol = ostree.parent / "aipc_voice_wake_policy.py"
+        if ostree_pol.is_file():
+            ostree_tree += ostree_pol.read_text(encoding="utf-8", errors="replace")
+        live_has = "miss_backoff_seconds" in live_tree
+        ostree_has = "miss_backoff_seconds" in ostree_tree
         if live_has and not ostree_has:
             results.append(
                 Result(
