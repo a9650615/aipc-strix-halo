@@ -45,7 +45,9 @@ Environment=PYTHONPATH=/var/lib/aipc-voice/lib
 # Survive mic/PipeWire death across suspend/resume
 Restart=always
 RestartSec=3
-ExecStartPre=/bin/mkdir -p /var/lib/aipc-voice/wake /run/aipc /etc/aipc/wake
+# + = run as root despite User=birdyo (needed for /run/aipc at boot)
+ExecStartPre=+/bin/mkdir -p /var/lib/aipc-voice/wake /run/aipc /etc/aipc/wake
+ExecStartPre=+/bin/chmod 755 /run/aipc
 
 [Install]
 WantedBy=multi-user.target

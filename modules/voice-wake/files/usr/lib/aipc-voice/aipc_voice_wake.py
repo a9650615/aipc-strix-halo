@@ -2155,25 +2155,33 @@ def run_phrase_loop() -> int:
                         # Prefer miss over ghost: never open wake/recording UX.
                         miss_streak += 1
                         _miss_in_playback = _playback_active(include_tts=False)
-                        # Only thr-raise on true none-misses, not fuzzy_suppressed
-                        # (keeps room ambient from deafening later real speech).
-                        if miss_streak >= 3 and decision["arm_reason"] == "none":
-                            if not _miss_in_playback:
-                                energy_thr = min(
-                                    max(energy_thr * 1.08, energy_thr + 200), 7500
-                                )
-                            _miss_cd = float(
-                                os.environ.get("AIPC_WAKE_MISS_COOLDOWN_S", "1.5")
+                        # Escalating cool-off after consecutive misses. Old path
+                        # used ~1.5s miss cooldown → ambient re-opened every few
+                        # seconds, hammered SenseVoice, and correlated with
+                        # kwin amdgpu pageflip timeouts / desktop freeze
+                        # (2026-07-16). Backoff: 4,8,16,32,64s (cap 90).
+                        _base = float(
+                            os.environ.get("AIPC_WAKE_MISS_BACKOFF_BASE", "4")
+                        )
+                        _exp = min(max(0, miss_streak - 2), 5)
+                        _backoff = min(90.0, _base * (2**_exp))
+                        last_wake_check = time.monotonic() + _backoff - COOLDOWN_S
+                        # Thr-raise only on true none-misses (not fuzzy suppress).
+                        if (
+                            miss_streak >= 3
+                            and decision["arm_reason"] == "none"
+                            and not _miss_in_playback
+                        ):
+                            energy_thr = min(
+                                max(energy_thr * 1.05, energy_thr + 100), 6500
                             )
-                            last_wake_check = time.monotonic() - max(
-                                0.0, COOLDOWN_S - _miss_cd
-                            )
-                            print(
-                                f"aipc-voice-wake: miss streak={miss_streak} "
-                                f"thr→{energy_thr:.0f} cooldown≤{_miss_cd:.1f}s"
-                                f"{' (playback: no thr raise)' if _miss_in_playback else ''}",
-                                flush=True,
-                            )
+                        print(
+                            f"aipc-voice-wake: miss streak={miss_streak} "
+                            f"reason={decision['arm_reason']} "
+                            f"thr→{energy_thr:.0f} backoff={_backoff:.0f}s"
+                            f"{' (playback)' if _miss_in_playback else ''}",
+                            flush=True,
+                        )
                         if voice_ux and decision["arm_reason"] == "none" and text:
                             try:
                                 voice_ux.write_status("miss", text[:40])
