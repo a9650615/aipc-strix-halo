@@ -1,52 +1,30 @@
 [Unit]
 Description=aipc voice wake (custom phrase / openWakeWord / energy)
-After=sound.target sleep.target
-# Desktop PipeWire must exist for the mic (system root cannot open it).
+After=sound.target sleep.target user@1000.service
 Requires=user@1000.service
-After=user@1000.service
 Conflicts=aipc-voice-mute.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
-# MUST run as the graphical user — arecord → PipeWire is session-scoped.
 User=birdyo
 Group=birdyo
 Environment=HOME=/var/home/birdyo
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
-# phrase = custom wake words via STT (fast start, low false positive)
-ExecStart=/usr/bin/python3 /var/lib/aipc-voice/lib/aipc_voice_wake.py --mode phrase
+Environment=PYTHONPATH=/var/lib/aipc-voice/lib
 Environment=AIPC_VOICE_ONCE=/var/home/birdyo/.local/bin/aipc-voice-once
 Environment=AIPC_VOICE_MUTE_FLAG=/run/aipc/voice-mute
 Environment=AIPC_WAKE_PHRASES_FILE=/etc/aipc/wake/phrases
-# Ambient ~700 RMS; speech often 3k–20k. 2000 gates noise without deafness.
-Environment=AIPC_WAKE_ENERGY=1500
-Environment=AIPC_WAKE_ENERGY_FRAMES=4
-Environment=AIPC_WAKE_CAPTURE_S=2.0
-# Denoise OFF for the short wake-word capture: RNNoise on the 2s wake window
-# made SenseVoice render '嘿助理' as '我。' (hardware-confirmed 2026-07-12).
-# Command capture (aipc-voice-once) keeps denoise — it hurts only the short
-# wake phrase. The code honours this via _mic_env()'s AIPC_WAKE_DENOISE check.
-Environment=AIPC_WAKE_DENOISE=0
-Environment=AIPC_WAKE_COOLDOWN=8
-Environment=AIPC_WAKE_CMD_MAX_S=6
-Environment=AIPC_WAKE_CMD_END_SILENCE_MS=450
-Environment=AIPC_WAKE_CMD_START_TIMEOUT=2.5
 Environment=AIPC_VOICE_STT_URL=http://127.0.0.1:9001/transcribe
-Environment=AIPC_VOICE_DUCK=1
-Environment=AIPC_VOICE_DENOISE=1
-Environment=AIPC_VOICE_DUCK_FACTOR=0.55
-Environment=AIPC_VOICE_DUCK_FLOOR=40
-Environment=AIPC_VOICE_DUCK_MS=200
-Environment=AIPC_VOICE_UX_NOTIFY=auto
-Environment=AIPC_VOICE_UX_CUE=0
-Environment=PYTHONPATH=/var/lib/aipc-voice/lib
-# Survive mic/PipeWire death across suspend/resume
+Environment=AIPC_WAKE_POLICY_FILE=/etc/aipc/voice/wake-policy.env
+EnvironmentFile=-/etc/aipc/voice/wake-policy.env
+ExecStart=/usr/bin/python3 /var/lib/aipc-voice/lib/aipc_voice_wake.py --mode phrase
 Restart=always
-RestartSec=3
-# + = run as root despite User=birdyo (needed for /run/aipc at boot)
-ExecStartPre=+/bin/mkdir -p /var/lib/aipc-voice/wake /run/aipc /etc/aipc/wake
+RestartSec=10
+ExecStartPre=+/bin/mkdir -p /var/lib/aipc-voice/wake /run/aipc /etc/aipc/wake /etc/aipc/voice
 ExecStartPre=+/bin/chmod 755 /run/aipc
 
 [Install]

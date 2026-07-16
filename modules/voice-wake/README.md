@@ -78,3 +78,19 @@ NPU EP when an onnxruntime EP for `/dev/accel/accel0` is validated.
 ## Spec
 
 - phase-3-voice D2, D7; tasks 1.2, 2.1–2.4, 7.2, 7.5
+
+## Policy source of truth
+
+Arm / thrash / reprompt knobs live in **`/etc/aipc/voice/wake-policy.env`**
+(shipped from `files/etc/aipc/voice/wake-policy.env`). The wake process loads
+this file at import time (**file wins** over systemd drop-in mazes).
+
+```bash
+# Effective knobs (no always-on required)
+python3 /var/lib/aipc-voice/lib/aipc_voice_wake.py --print-policy
+# or
+python3 modules/voice-wake/files/usr/lib/aipc-voice/aipc_voice_wake.py --print-policy
+```
+
+Always-on may remain **disabled** after freezes; policy still applies when
+re-enabled. Prefer PTT/control-center until thrash checks pass.

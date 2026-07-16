@@ -112,6 +112,35 @@ def _effective_energy_thr(
         )
 
 
+def _preload_wake_policy_file() -> Path | None:
+    """Load wake-policy.env into os.environ before knobs bind (file wins).
+
+    Authoritative path for arm/thrash/reprompt so multi-drop-in mazes cannot
+    silently override when the file is present (design 2026-07-16).
+    """
+    path = Path(
+        os.environ.get("AIPC_WAKE_POLICY_FILE", "/etc/aipc/voice/wake-policy.env")
+    )
+    if not path.is_file():
+        return None
+    try:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            if key:
+                os.environ[key] = val
+        return path
+    except OSError as exc:
+        print(f"aipc-voice-wake: policy file {path}: {exc}", flush=True)
+        return None
+
+
+_POLICY_FILE_LOADED = _preload_wake_policy_file()
+
 MUTE_FLAG = Path(os.environ.get("AIPC_VOICE_MUTE_FLAG", "/run/aipc/voice-mute"))
 USER_MUTE_FLAG = Path(
     os.environ.get(
@@ -126,10 +155,11 @@ VOICE_STREAM = os.environ.get("AIPC_VOICE_STREAM", "0") not in ("0", "false", "n
 SAMPLE_RATE = 16000
 FRAME_MS = 30
 # Higher default than old energy-only: phrase mode re-checks with STT.
-ENERGY_THRESHOLD = float(os.environ.get("AIPC_WAKE_ENERGY", "2000"))
-COOLDOWN_S = float(os.environ.get("AIPC_WAKE_COOLDOWN", "8"))
+# Safe anti-ghost defaults (overridden by wake-policy.env when present).
+ENERGY_THRESHOLD = float(os.environ.get("AIPC_WAKE_ENERGY", "2800"))
+COOLDOWN_S = float(os.environ.get("AIPC_WAKE_COOLDOWN", "10"))
 # Frames of continuous energy before STT (5×30ms ≈ 150ms)
-ENERGY_FRAMES = int(os.environ.get("AIPC_WAKE_ENERGY_FRAMES", "5"))
+ENERGY_FRAMES = int(os.environ.get("AIPC_WAKE_ENERGY_FRAMES", "8"))
 CAPTURE_S = float(os.environ.get("AIPC_WAKE_CAPTURE_S", "2.0"))
 # Command capture: end quickly after user stops (was 800ms + often hit max).
 CMD_MAX_S = float(os.environ.get("AIPC_WAKE_CMD_MAX_S", "10"))
@@ -194,6 +224,8 @@ WAKE_SPEECH_MS_MAX = int(os.environ.get("AIPC_WAKE_SPEECH_MS_MAX", "1400"))
 HARD_MIN_SPEECH_MS = int(os.environ.get("AIPC_WAKE_HARD_MIN_SPEECH_MS", "180"))
 MAX_REPROMPTS = int(os.environ.get("AIPC_WAKE_MAX_REPROMPTS", "1"))
 REPROMPT_TEXT = os.environ.get("AIPC_WAKE_REPROMPT_TEXT", "沒聽清，請再說一次")
+MISS_BACKOFF_BASE = float(os.environ.get("AIPC_WAKE_MISS_BACKOFF_BASE", "6"))
+MISS_BACKOFF_CAP = float(os.environ.get("AIPC_WAKE_MISS_BACKOFF_CAP", "90"))
 FUZZY_PARTICLES = frozenset(
     {
         "我",
@@ -606,6 +638,43 @@ def next_mode_after_empty_capture(action: str) -> str:
     if action == "reprompt":
         return "command"
     return "listen"
+
+
+def miss_backoff_seconds(
+    miss_streak: int,
+    *,
+    base: float | None = None,
+    cap: float | None = None,
+) -> float:
+    """Seconds to wait after a non-arm before next energy→STT (escalating).
+
+    miss_streak 1–2 → base; then ×2 each step, cap at cap (default 90s).
+    Prevents ambient busy-loop hammering SenseVoice (freeze root 2026-07-16).
+    """
+    b = float(MISS_BACKOFF_BASE if base is None else base)
+    c = float(MISS_BACKOFF_CAP if cap is None else cap)
+    exp = min(max(0, int(miss_streak) - 2), 5)
+    return float(min(c, b * (2**exp)))
+
+
+def effective_wake_policy() -> dict:
+    """Single dump of arm/thrash/reprompt knobs for doctor / --print-policy."""
+    return {
+        "policy_file": str(_POLICY_FILE_LOADED) if _POLICY_FILE_LOADED else None,
+        "allow_fuzzy_promote": bool(ALLOW_FUZZY_PROMOTE),
+        "promote_score": int(PROMOTE_SCORE),
+        "candidate_score": int(CANDIDATE_SCORE),
+        "energy": float(ENERGY_THRESHOLD),
+        "energy_frames": int(ENERGY_FRAMES),
+        "cooldown_s": float(COOLDOWN_S),
+        "miss_backoff_base": float(MISS_BACKOFF_BASE),
+        "miss_backoff_cap": float(MISS_BACKOFF_CAP),
+        "max_reprompts": int(MAX_REPROMPTS),
+        "reprompt_text": REPROMPT_TEXT,
+        "cmd_end_silence_ms": int(CMD_END_SILENCE_MS),
+        "cmd_max_s": float(CMD_MAX_S),
+        "followup_direct": bool(FOLLOWUP_DIRECT),
+    }
 
 
 def _desktop_user_env() -> dict[str, str]:
@@ -2155,16 +2224,9 @@ def run_phrase_loop() -> int:
                         # Prefer miss over ghost: never open wake/recording UX.
                         miss_streak += 1
                         _miss_in_playback = _playback_active(include_tts=False)
-                        # Escalating cool-off after consecutive misses. Old path
-                        # used ~1.5s miss cooldown → ambient re-opened every few
-                        # seconds, hammered SenseVoice, and correlated with
-                        # kwin amdgpu pageflip timeouts / desktop freeze
-                        # (2026-07-16). Backoff: 4,8,16,32,64s (cap 90).
-                        _base = float(
-                            os.environ.get("AIPC_WAKE_MISS_BACKOFF_BASE", "4")
-                        )
-                        _exp = min(max(0, miss_streak - 2), 5)
-                        _backoff = min(90.0, _base * (2**_exp))
+                        # Escalating cool-off (pure miss_backoff_seconds) —
+                        # was ~1.5s → ambient STT thrash + desktop freeze.
+                        _backoff = miss_backoff_seconds(miss_streak)
                         last_wake_check = time.monotonic() + _backoff - COOLDOWN_S
                         # Thr-raise only on true none-misses (not fuzzy suppress).
                         if (
@@ -2641,6 +2703,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--self-test", action="store_true")
     p.add_argument(
+        "--print-policy",
+        action="store_true",
+        help="print effective arm/thrash/reprompt knobs as JSON and exit",
+    )
+    p.add_argument(
         "--mode",
         choices=("auto", "phrase", "energy", "openwakeword"),
         default="auto",
@@ -2672,9 +2739,14 @@ def _self_test() -> int:
     assert classify_wake_text("我。", phrases)[0] == "fuzzy"
     assert classify_wake_text("嘿助理", phrases)[0] == "clear"
     assert classify_wake_text("今天天气怎么样", phrases)[0] == "none"
-    d_low = decide_wake_arm("fuzzy", 20, phrase=None, allow_fuzzy_promote=True)
+    d_low = decide_wake_arm(
+        "fuzzy", 20, phrase=None, allow_fuzzy_promote=True, promote_score=90
+    )
     assert d_low["arm"] is False and d_low["arm_reason"] == "ghost_suppressed"
-    d_hi = decide_wake_arm("fuzzy", 80, phrase=None, allow_fuzzy_promote=True)
+    # Opt-in promote path (default allow is off; test with explicit promote_score)
+    d_hi = decide_wake_arm(
+        "fuzzy", 95, phrase=None, allow_fuzzy_promote=True, promote_score=90
+    )
     assert d_hi["arm"] is True and d_hi["arm_reason"] == "fuzzy_promoted"
     d_clear = decide_wake_arm("clear", 0, phrase="嘿助理")
     assert d_clear["arm"] is True and d_clear["intentional"] is True
@@ -2685,6 +2757,12 @@ def _self_test() -> int:
     assert junk_capture_action(intentional=False, reprompt_used=0) == "idle"
     assert next_mode_after_empty_capture("reprompt") == "command"
     assert next_mode_after_empty_capture("idle") == "listen"
+    assert miss_backoff_seconds(1, base=6, cap=90) == 6.0
+    assert miss_backoff_seconds(3, base=6, cap=90) == 12.0
+    assert miss_backoff_seconds(10, base=6, cap=90) == 90.0
+    pol = effective_wake_policy()
+    assert pol["allow_fuzzy_promote"] is False or pol["promote_score"] >= 90
+    assert pol["miss_backoff_base"] > 0
     # synthetic speech-shaped PCM scores above click
     frame = SAMPLE_RATE * FRAME_MS // 1000
     silence = struct.pack("<h", 0) * frame
@@ -2700,6 +2778,9 @@ def _self_test() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.print_policy:
+        print(json.dumps(effective_wake_policy(), ensure_ascii=False, indent=2))
+        return 0
     if args.self_test:
         return _self_test()
     if args.train:

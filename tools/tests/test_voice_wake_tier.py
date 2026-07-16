@@ -114,6 +114,30 @@ def test_next_mode_after_empty_capture_wiring(wake):
     assert wake.next_mode_after_empty_capture(a0) == "listen"
 
 
+def test_miss_backoff_escalates_not_fixed_1_5s(wake):
+    """Thrash protection: consecutive misses grow cool-off (not ~1.5s loop)."""
+    b1 = wake.miss_backoff_seconds(1, base=6.0, cap=90.0)
+    b3 = wake.miss_backoff_seconds(3, base=6.0, cap=90.0)
+    b5 = wake.miss_backoff_seconds(5, base=6.0, cap=90.0)
+    b99 = wake.miss_backoff_seconds(99, base=6.0, cap=90.0)
+    assert b1 == 6.0
+    assert b3 == 12.0
+    assert b5 == 48.0
+    assert b99 == 90.0
+    assert b3 > b1 and b5 > b3
+    # Must not be the old fixed ~1.5s miss cooldown
+    assert b1 >= 4.0
+
+
+def test_effective_wake_policy_dump(wake):
+    pol = wake.effective_wake_policy()
+    assert "allow_fuzzy_promote" in pol
+    assert "miss_backoff_base" in pol
+    assert pol["max_reprompts"] >= 1
+    # Prefer miss: promote off by default in shipped policy/defaults
+    assert pol["allow_fuzzy_promote"] is False
+
+
 def test_end_to_end_decision_matrix(wake):
     """Drive classify → score → decide like the live wake path."""
     # ambient STT particle + weak pcm → no arm
