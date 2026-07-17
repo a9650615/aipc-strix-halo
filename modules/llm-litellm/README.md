@@ -13,10 +13,15 @@ agent tools, scripts).
 ## Model namespace (public API surface)
 
 `resident-small`, `coder-agentic`, `ornith-35b`, `assistant-gemma`,
-`qwythos-9b`, `vlm-*`, plus the cloud aliases (`main-cloud`, `coder-cloud`,
-`thinking-cloud`, `gpt4o-cloud`, `gemini-cloud`, `glm-cloud`) — see
-`llm-models`. `glm-cloud` is tool-only and quota-gated by CodexBar provider
-`zai`; it is never a default or automatic fallback.
+`qwythos-9b`, `vlm-*`, classic cloud aliases (`main-cloud`, `coder-cloud`,
+`thinking-cloud`, `gpt4o-cloud`, `gemini-cloud`, `glm-cloud`), plus
+CLIProxy-backed bare names for unified Hermes control (`gpt-5.6-sol`,
+`gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.4`, `gpt-5.5`, selected `claude-*`).
+Those need `CLIPROXY_API_KEY` in `cloud-keys.env` (see that file's comments).
+`glm-cloud` is tool-only and quota-gated by CodexBar provider `zai`; it is
+never a default or automatic fallback. Consumers (including Hermes) should
+call **only** this gateway (`:4000`) — do not dual-route to CLIProxy or
+vendor OAuth from the client.
 `qwen35-122b-q3` was retired 2026-07-11 (weights deleted; too heavy for
 comfortable UMA use; avoid dual-backend giants).
 
