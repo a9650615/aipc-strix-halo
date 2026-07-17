@@ -1,12 +1,13 @@
 [Unit]
-Description=Recover paired Bluetooth audio after a half-connect
-After=pipewire.service pipewire-pulse.service wireplumber.service
+Description=Watch Bluetooth and recover a half-connected audio speaker
+After=pipewire.service pipewire-pulse.service wireplumber.service bluetooth.service
 Wants=pipewire.service pipewire-pulse.service wireplumber.service
 
 [Service]
-Type=oneshot
-ExecStart=/etc/aipc/aipc-bluetooth-audio-recover
-TimeoutStartSec=60
+Type=simple
+ExecStart=/etc/aipc/aipc-bluetooth-audio-recover --monitor
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=default.target

@@ -53,3 +53,12 @@ for f in /sys/bus/thunderbolt/devices/*/power/control /sys/bus/pci/drivers/thund
   [ "$(cat "$f")" = "on" ] \
     || fail "system-unified-memory: $f is not 'on' (71-thunderbolt-no-runtime-pm.rules didn't apply)"
 done
+
+# MT7925 Bluetooth USB autosuspend disabled (see README's "MT7925 Bluetooth
+# instability" section). Match the radio by USB id; if this chassis' BT module
+# differs, the rule needs its id added rather than this check relaxed.
+for d in /sys/bus/usb/devices/*/; do
+  [ "$(cat "$d/idVendor" 2>/dev/null):$(cat "$d/idProduct" 2>/dev/null)" = "13d3:3608" ] || continue
+  [ "$(cat "$d/power/control" 2>/dev/null)" = "on" ] \
+    || fail "system-unified-memory: MT7925 BT ${d}power/control not 'on' (72-mt7925-bluetooth-no-autosuspend.rules didn't apply)"
+done

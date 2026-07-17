@@ -1,0 +1,8 @@
+# Disable USB autosuspend on the MediaTek MT7925 Bluetooth radio. See
+# modules/system-unified-memory/README.md's "MT7925 Bluetooth instability"
+# section: btusb autosuspends the controller after ~2s idle, and waking it is
+# unreliable on this radio -- observed as BT HID devices (MX Master mouse /
+# keyboard) re-pairing many times per hour, "hci0: Opcode 0x0401 failed: -16"
+# storms, and A2DP audio links dropping/wedging (br-connection-create-socket,
+# no PipeWire bluez sink) until a physical speaker power-cycle. Keep it powered.
+SUBSYSTEM=="usb", ATTR{idVendor}=="13d3", ATTR{idProduct}=="3608", TEST=="power/control", ATTR{power/control}="on"
