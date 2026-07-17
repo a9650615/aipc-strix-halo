@@ -7,6 +7,9 @@ from aipc_bluetooth_audio_recover import (
     connect_with_retries,
     device_path_from_tree,
     has_sink,
+    is_recovery_event,
+    monitor,
+    recover_safe,
     needs_recovery,
     needs_connection,
     power_cycle_adapter,
@@ -198,6 +201,116 @@ class BluetoothAudioRecoveryTests(unittest.TestCase):
         )
         self.assertEqual(attempts["n"], 2)
         self.assertEqual(sleeps, [2.0])
+
+    def _safe_output(self, *, connected="b true\n", sinks=""):
+        def output(argv):
+            if argv[:2] == ["busctl", "tree"]:
+                return "/org/bluez/hci0/dev_68_52_10_35_29_44\n"
+            if argv[:2] == ["busctl", "get-property"]:
+                return connected
+            if argv[:3] == ["pactl", "list", "short"]:
+                return sinks
+            return ""
+
+        return output
+
+    def _record_run(self, calls):
+        def run(argv):
+            calls.append(argv)
+            return CompletedProcess(argv, 0, "", "")
+
+        return run
+
+    def test_recover_safe_is_silent_when_healthy(self):
+        calls = []
+        self.assertEqual(
+            recover_safe(
+                "68:52:10:35:29:44",
+                run=self._record_run(calls),
+                output=self._safe_output(
+                    sinks="1\tbluez_output.68_52_10_35_29_44.1\tPipeWire"
+                ),
+            ),
+            0,
+        )
+        self.assertEqual(calls, [])
+
+    def test_recover_safe_does_nothing_when_disconnected(self):
+        calls = []
+        self.assertEqual(
+            recover_safe(
+                "68:52:10:35:29:44",
+                run=self._record_run(calls),
+                output=self._safe_output(connected="b false\n", sinks=""),
+            ),
+            0,
+        )
+        self.assertEqual(calls, [])
+
+    def test_recover_safe_only_notifies_and_never_touches_bt_or_audio(self):
+        calls = []
+        self.assertEqual(
+            recover_safe(
+                "68:52:10:35:29:44",
+                run=self._record_run(calls),
+                output=self._safe_output(connected="b true\n", sinks=""),
+            ),
+            1,
+        )
+        self.assertEqual([c[0] for c in calls], ["notify-send"])
+        self.assertFalse(
+            any(
+                c[:1] == ["systemctl"]
+                or c[:2] == ["busctl", "call"]
+                or "Powered" in c
+                for c in calls
+            )
+        )
+
+    def test_matches_only_relevant_device_property_events(self):
+        dev = "dev_68_52_10_35_29_44"
+        connected = f"/org/bluez/hci0/{dev}: ...PropertiesChanged ('org.bluez.Device1', {{'Connected': <true>}}, @as [])"
+        resolved = f"/org/bluez/hci0/{dev}: ...PropertiesChanged ('org.bluez.Device1', {{'ServicesResolved': <true>}}, @as [])"
+        self.assertTrue(is_recovery_event(connected, "68:52:10:35:29:44"))
+        self.assertTrue(is_recovery_event(resolved, "68:52:10:35:29:44"))
+        self.assertFalse(is_recovery_event(connected, "AA:BB:CC:DD:EE:FF"))
+        self.assertFalse(
+            is_recovery_event(
+                f"/org/bluez/hci0/{dev}: ...PropertiesChanged ('org.bluez.Device1', {{'RSSI': <-42>}}, @as [])",
+                "68:52:10:35:29:44",
+            )
+        )
+
+    def test_monitor_recovers_on_startup_and_on_each_event(self):
+        events = [
+            "unrelated line\n",
+            "/org/bluez/hci0/dev_68_52_10_35_29_44: PropertiesChanged 'Connected' <true>\n",
+            "/org/bluez/hci0/dev_68_52_10_35_29_44: PropertiesChanged 'ServicesResolved' <true>\n",
+        ]
+
+        class FakeProc:
+            stdout = iter(events)
+
+            def wait(self):
+                return 0
+
+        recoveries = []
+        # clock() order: init last, then (check, update) per firing event;
+        # gaps must exceed MONITOR_COOLDOWN (60s) so both events fire
+        ticks = iter([0.0, 70.0, 70.0, 140.0, 140.0])
+
+        self.assertEqual(
+            monitor(
+                "68:52:10:35:29:44",
+                popen=lambda *a, **k: FakeProc(),
+                clock=lambda: next(ticks),
+                sleep=lambda _s: None,
+                recover=lambda mac: recoveries.append(mac),
+            ),
+            0,
+        )
+        # 1 startup pass + 2 matching events (both past cooldown)
+        self.assertEqual(recoveries, ["68:52:10:35:29:44"] * 3)
 
     def test_sets_default_sink_by_name(self):
         calls = []

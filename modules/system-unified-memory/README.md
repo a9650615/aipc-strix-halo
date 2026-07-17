@@ -311,3 +311,40 @@ kernel module or `iomem=relaxed` (a security-loosening kernel arg) to get past "
 get memory access", and even then it pokes reverse-engineered SMU registers on a very new
 (Strix Halo) platform — same risk class as forcing GPU clocks, not attempted without
 explicit confirmation.
+
+## Known issue: MT7925 Bluetooth instability (HID re-pairing storms, A2DP speaker wedge)
+
+Direct user report 2026-07-18: a Bluetooth speaker (LG-XT7S) "keeps breaking" —
+works fine on the user's phone and other machines, only this box wedges it. The
+speaker is not the fault. This chassis' Bluetooth radio is the USB side of the
+MediaTek **MT7925** Wi-Fi/BT combo (`13d3:3608`, driver `btusb`; the Wi-Fi side
+is `mt7925e`), and MT7925 BT is a known Linux stability problem.
+
+Root cause: **btusb USB autosuspend.** `power/control` defaulted to `auto` with a
+2 s idle delay, so the BT controller USB-suspends whenever it goes briefly idle,
+and waking it is unreliable on this radio. Symptoms observed on this machine:
+
+- BT HID devices re-pairing many times per hour (`hid-generic ... BLUETOOTH HID
+  ... Keyboard [MX MCHNCL M]` and `logitech-hidpp-device ... MX Master 3S`, with
+  the HID handle counter climbing `.0010 → .002B` over a few hours).
+- `Bluetooth: hci0: Opcode 0x0401 failed: -16` (HCI Inquiry → EBUSY) storms.
+- A2DP audio half-connecting: BlueZ `Connected=true` but `ServicesResolved=false`,
+  no PipeWire `bluez_output` sink, `Connect()` → `br-connection-create-socket`.
+  Once wedged, *no* software recovery clears it — reconnecting the link, and even
+  restarting only `wireplumber`, drop the transport and re-wedge it; only a
+  physical speaker power-cycle recovers. (An audio-side detector that notifies the
+  user to power-cycle, rather than trying to auto-fix, lives in
+  `modules/voice-pipecat`.)
+
+Fix: `72-mt7925-bluetooth-no-autosuspend.rules` pins the BT radio's USB
+`power/control` to `on`, mirroring `71-thunderbolt-no-runtime-pm.rules`. The
+kernel cmdline already carries `bluetooth.disable_ertm=1` (a prior BT workaround);
+disabling autosuspend addresses the disconnect churn the ERTM flag did not.
+
+Verification status: rule is render-verified and live-applied on the running
+machine (`echo on > .../3-3/power/control`); `verify.sh` checks the BT radio's
+`power/control` is `on`. The "HID churn stops / speaker stays stable" claim needs
+soak time on hardware — flag it if re-pairing events keep appearing in
+`dmesg | grep BLUETOOTH.HID` after the rule is in effect (next candidates:
+newer `linux-firmware` MT7925 BT firmware, or `btusb.enable_autosuspend=0` as a
+module param if the per-device udev pin proves insufficient).

@@ -13,6 +13,8 @@ DEFAULT_MAC = "68:52:10:35:29:44"
 SINK_TIMEOUT = 45.0
 CONNECT_RETRY_TIMEOUT = 30.0
 CONNECT_RETRY_DELAY = 2.0
+MONITOR_COOLDOWN = 60.0
+MONITOR_SETTLE = 15.0
 
 
 def sink_name(mac: str) -> str:
@@ -218,8 +220,81 @@ def recover(mac: str = DEFAULT_MAC, timeout: float = SINK_TIMEOUT) -> int:
     return 0
 
 
+def recover_safe(
+    mac: str = DEFAULT_MAC,
+    *,
+    run=_run,
+    output=_output,
+) -> int:
+    """Auto-path handler — detect and NOTIFY only, never remediate.
+
+    This speaker (LG-XT7S) wedges on any software touch: BT connect/disconnect
+    hits br-connection-create-socket, and restarting wireplumber/pipewire drops
+    the A2DP transport. Every active fix turns "no sink" into "disconnected" or
+    a wedge that only a physical power-cycle clears. So the only safe response
+    to a genuine half-connect is to tell the user, who fixes it by power-cycling
+    the speaker. Never touch BT or the audio stack here.
+    """
+    device = device_path_from_tree(output(["busctl", "tree", "org.bluez"]), mac)
+    if not device:
+        return 0
+    connected = output(
+        ["busctl", "get-property", "org.bluez", device, "org.bluez.Device1", "Connected"]
+    )
+    if not (connected and connected.split()[-1].lower() == "true"):
+        return 0  # disconnected: nothing to fix — the speaker reconnects itself
+    if has_sink(output(["pactl", "list", "short", "sinks"]), mac):
+        return 0  # healthy
+
+    run(
+        [
+            "notify-send",
+            "-a",
+            "AIPC Audio",
+            "藍芽喇叭沒聲音",
+            f"{mac} 已連線但沒有音訊。請把喇叭關機再開機（軟體重連反而會把它弄卡）。",
+        ]
+    )
+    return 1
+
+
+def is_recovery_event(line: str, mac: str = DEFAULT_MAC) -> bool:
+    device = f"dev_{mac.replace(':', '_')}"
+    return device in line and ("Connected" in line or "ServicesResolved" in line)
+
+
+def monitor(
+    mac: str = DEFAULT_MAC,
+    *,
+    popen=subprocess.Popen,
+    clock=time.monotonic,
+    sleep=time.sleep,
+    recover=recover_safe,
+) -> int:
+    recover(mac)
+    proc = popen(
+        ["gdbus", "monitor", "--system", "--dest", "org.bluez"],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    last = clock()
+    for line in proc.stdout:
+        if not is_recovery_event(line, mac):
+            continue
+        # ponytail: cooldown coalesces the burst of PropertiesChanged a single
+        # (dis)connect emits — and suppresses recover()'s own events re-triggering it.
+        if clock() - last < MONITOR_COOLDOWN:
+            continue
+        sleep(MONITOR_SETTLE)
+        recover(mac)
+        last = clock()
+    return proc.wait()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args == ["--monitor"]:
+        return monitor(os.environ.get("AIPC_BLUETOOTH_AUDIO_MAC", DEFAULT_MAC))
     if args == ["--self-test"]:
         assert sink_name(DEFAULT_MAC) == "bluez_output.68_52_10_35_29_44.1"
         assert not needs_recovery(
