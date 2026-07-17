@@ -19,6 +19,7 @@ const zh = {
   "home.loading": "正在載入系統狀態…",
   "home.baseline": "啟動基線服務",
   "home.unavailable": "儀表板資料無法取得",
+  "home.summary.line": "{up}/{total} 服務就緒 · {models} 個模型 · {free}/{mem}G 可用 · GTT {gtt}G · {profile}",
   "home.platform": "平台",
   "home.device": "裝置 / 機身",
   "home.npu": "NPU 活動",
@@ -41,7 +42,7 @@ const zh = {
   "home.ops.eyebrow": "營運",
   "home.ops.services": "服務",
   "home.ops.live": "即時工作",
-  "home.ops.empty": "目前沒有即時 automation 工作。",
+  "home.ops.empty": "目前沒有即時自動化工作。",
   "home.ops.empty.hint": "Hermes / peer 長任務請到「代理人」頁查看。",
   "home.ops.need_start": "{n} 個服務需要啟動 · {j} 個即時工作",
   "home.ops.healthy": "{up}/{total} 服務健康 · {j} 個即時工作",
@@ -75,6 +76,8 @@ const zh = {
   "models.title": "模型調度",
   "models.loading": "正在載入調度狀態…",
   "models.unavailable": "模型／調度資料無法取得",
+  "models.summary.line": "{free}/{mem}G 可用 · GTT {gtt}G · 已載入 {loaded} · GPU {gpu}/{maxGpu} · {idle}",
+  "models.stale": "（Lemonade 暫用快取）",
   "models.manifest": "清單：{path}",
   "models.manifest.missing": "清單：找不到",
   "models.cap.memory": "記憶體",
@@ -85,20 +88,37 @@ const zh = {
   "models.policy": "SMO 政策",
   "models.loaded": "目前已載入",
   "models.catalog": "目錄政策",
-  "models.journal": "閒置釋放日誌",
-  "models.oom": "OOM 守衛事件",
+  "models.journal": "閒置釋放",
+  "models.oom": "OOM 守衛",
   "models.legend": "圖例",
-  "models.none.loaded": "尚無模型回報（Lemonade health 略過或為空）。",
-  "models.none.catalog": "沒有 lemonade 目錄項目。",
-  "models.none.journal": "（沒有近期 idle-release 日誌）",
-  "models.none.oom": "沒有近期 OOM 守衛事件。",
-  "models.oom.disabled": "OOM 守衛已停用（存在 sentinel）",
-  "models.oom.ring": "環形緩衝 {path}",
+  "models.none.loaded": "目前沒有已載入模型。",
+  "models.none.catalog": "目錄中沒有本機模型項目。",
+  "models.none.journal": "沒有可顯示的閒置決策（保溫中時通常只有週期檢查）",
+  "models.none.oom": "沒有近期 OOM 守衛事件",
+  "models.oom.disabled": "OOM 守衛已停用",
+  "models.oom.ring": "事件緩衝：{path}",
+  "models.oom.watching": "持續監看記憶體壓力",
   "models.oom.missing": "OOM 守衛事件無法取得",
+  "models.oom.dry_run": "演練",
+  "models.oom.mem": "可用 {gib} GiB",
+  "models.oom.ev.transition": "壓力層級 → {level}",
+  "models.oom.ev.transition_from": "壓力 {frm} → {to}",
+  "models.oom.ev.would_act": "擬對 {target} 做 {action}",
+  "models.oom.ev.acted": "已對 {target} 執行 {action}",
+  "models.oom.ev.generic": "{event} · {level}",
+  "models.idle.ev.keep_warm": "保溫中：可用 {mem}G ≥ 底線 {floor}G，跳過卸載",
+  "models.idle.ev.unload": "卸載決策：{model}",
+  "models.idle.ev.error": "閒置釋放錯誤：{detail}",
+  "models.idle.ev.info": "{detail}",
+  "models.idle.kind.keep_warm": "保溫",
+  "models.idle.kind.unload": "卸載",
+  "models.idle.kind.error": "錯誤",
+  "models.idle.kind.info": "資訊",
+  "models.idle.status_line": "目前：{state}",
   "models.ram.free": "{free} / {total} GiB 可用",
   "models.gtt.line": "{used} / {total} GiB · 預算 {budget}",
-  "models.npu.line": "NPU {n} · lemonade max llm {max}",
-  "models.idle.policy.na": "閒置政策 n/a",
+  "models.npu.line": "NPU {n} · 上限 {max}",
+  "models.idle.policy.na": "無閒置政策",
   "models.idle.age": "閒置 {age}",
   "models.idle.threshold": "門檻 {age}",
   "models.chip.max_gpu": "最大 GPU",
@@ -133,20 +153,25 @@ const zh = {
   // Agents
   "agents.eyebrow": "HERMES · PEER 艦隊",
   "agents.title": "代理人",
-  "agents.loading": "正在載入 Hermes 背景代理人…",
+  "agents.loading": "正在載入背景代理人…",
   "agents.unavailable": "代理人資料無法取得",
+  "agents.summary.line": "{active} 活躍 · {del} 委派 · {kb} 看板 · peer 就緒 {peers}/3",
   "agents.peers": "Peer CLI",
+  "agents.peer_mcp.eyebrow": "PEER MCP · 進度",
+  "agents.peer_mcp": "Peer MCP 行程",
+  "agents.peer_mcp.count": "{n} 筆",
+  "agents.peer_mcp.empty": "目前沒有 peer MCP 行程。",
   "agents.live": "即時行程",
   "agents.delegations": "委派",
   "agents.kanban": "看板",
   "agents.detail": "詳情",
-  "agents.detail.hint": "選擇一個委派或看板任務",
+  "agents.detail.hint": "點選左側項目查看詳情",
   "agents.logs": "日誌",
-  "agents.log.filter": "篩選日誌（委派 id、session、工具…）",
+  "agents.log.filter": "篩選日誌…",
   "agents.log.btn": "篩選",
   "agents.home": "home：{path}",
   "agents.home.na": "home：無法取得",
-  "agents.counts": "{active} 活躍 · {del} 委派 · {kb} 看板 · peers {peers}/3",
+  "agents.counts": "{active} 活躍 · {del} 委派 · {kb} 看板 · peer {peers}/3",
   "agents.none.peers": "沒有即時 claude / codex / grok 行程。",
   "agents.task.unknown": "（無法對應委派任務 — 可能是本機互動 session）",
   "agents.task.source": "來源",
@@ -184,16 +209,17 @@ const zh = {
   "memory.loading": "正在載入記憶…",
   "memory.unavailable": "記憶服務無法取得",
   "memory.search.ph": "語意搜尋…",
-  "memory.user": "user_id（全部）",
-  "memory.agent": "agent_id（全部）",
-  "memory.app": "app_id（全部）",
+  "memory.user": "使用者（全部）",
+  "memory.agent": "代理人（全部）",
+  "memory.app": "應用（全部）",
   "memory.search": "搜尋",
   "memory.list": "列出全部",
   "memory.count": "{n} 筆記憶",
+  "memory.empty": "沒有符合的記憶",
   "memory.delete": "刪除",
   "memory.delete.confirm": "確定刪除此筆記憶？",
 
-  // Common states
+  // Common states (keys lowercase; stateLabel normalizes input)
   "state.active": "運行中",
   "state.inactive": "未啟動",
   "state.failed": "失敗",
@@ -206,6 +232,19 @@ const zh = {
   "state.activating": "啟動中",
   "state.reloading": "重載中",
   "state.deactivating": "停止中",
+  "state.completed": "已完成",
+  "state.done": "完成",
+  "state.delivered": "已送達",
+  "state.ok": "正常",
+  "state.claimed": "已認領",
+  "state.in_progress": "進行中",
+  "state.blocked": "阻塞",
+  "state.reclaimed": "已回收",
+  "state.triage": "分診",
+  "state.todo": "待辦",
+  "state.cooling": "冷卻中",
+  "state.pending": "等待中",
+  "state.error": "錯誤",
 };
 
 const en = {
@@ -223,6 +262,7 @@ const en = {
   "home.loading": "Loading current system state…",
   "home.baseline": "Start baseline",
   "home.unavailable": "Dashboard data unavailable",
+  "home.summary.line": "{up}/{total} services ready · {models} model(s) · {free}/{mem}G free · GTT {gtt}G · {profile}",
   "home.platform": "Platform",
   "home.device": "Device / chassis",
   "home.npu": "NPU activity",
@@ -278,6 +318,8 @@ const en = {
   "models.title": "Models",
   "models.loading": "Loading scheduler state…",
   "models.unavailable": "Models / scheduler data unavailable",
+  "models.summary.line": "{free}/{mem}G free · GTT {gtt}G · {loaded} loaded · GPU {gpu}/{maxGpu} · {idle}",
+  "models.stale": "(lemonade cache)",
   "models.manifest": "manifest: {path}",
   "models.manifest.missing": "manifest: missing",
   "models.cap.memory": "MEMORY",
@@ -288,20 +330,37 @@ const en = {
   "models.policy": "SMO policy",
   "models.loaded": "Loaded now",
   "models.catalog": "Catalog policy",
-  "models.journal": "Idle-release journal",
-  "models.oom": "OOM guard events",
+  "models.journal": "Idle release",
+  "models.oom": "OOM guard",
   "models.legend": "Legend",
-  "models.none.loaded": "No models reported (Lemonade health skip or empty).",
-  "models.none.catalog": "No lemonade catalog entries.",
-  "models.none.journal": "(no recent idle-release journal lines)",
-  "models.none.oom": "No recent OOM-guard events.",
-  "models.oom.disabled": "OOM guard DISABLED (sentinel present)",
-  "models.oom.ring": "Ring buffer {path}",
+  "models.none.loaded": "No models loaded right now.",
+  "models.none.catalog": "No local catalog entries.",
+  "models.none.journal": "No idle decisions to show (keep-warm usually only logs periodic checks)",
+  "models.none.oom": "No recent OOM-guard events",
+  "models.oom.disabled": "OOM guard disabled",
+  "models.oom.ring": "event ring: {path}",
+  "models.oom.watching": "Watching memory pressure",
   "models.oom.missing": "OOM guard events unavailable",
+  "models.oom.dry_run": "dry-run",
+  "models.oom.mem": "{gib} GiB free",
+  "models.oom.ev.transition": "Pressure level → {level}",
+  "models.oom.ev.transition_from": "Pressure {frm} → {to}",
+  "models.oom.ev.would_act": "Would {action} on {target}",
+  "models.oom.ev.acted": "Did {action} on {target}",
+  "models.oom.ev.generic": "{event} · {level}",
+  "models.idle.ev.keep_warm": "Keep-warm: {mem}G free ≥ {floor}G floor — skip unload",
+  "models.idle.ev.unload": "Unload decision: {model}",
+  "models.idle.ev.error": "Idle-release error: {detail}",
+  "models.idle.ev.info": "{detail}",
+  "models.idle.kind.keep_warm": "keep-warm",
+  "models.idle.kind.unload": "unload",
+  "models.idle.kind.error": "error",
+  "models.idle.kind.info": "info",
+  "models.idle.status_line": "Now: {state}",
   "models.ram.free": "{free} / {total} GiB free",
   "models.gtt.line": "{used} / {total} GiB · budget {budget}",
-  "models.npu.line": "NPU {n} · lemonade max llm {max}",
-  "models.idle.policy.na": "idle policy n/a",
+  "models.npu.line": "NPU {n} · max {max}",
+  "models.idle.policy.na": "no idle policy",
   "models.idle.age": "idle {age}",
   "models.idle.threshold": "threshold {age}",
   "models.chip.max_gpu": "max GPU",
@@ -335,16 +394,21 @@ const en = {
 
   "agents.eyebrow": "HERMES · PEER FLEET",
   "agents.title": "Agents",
-  "agents.loading": "Loading Hermes background agents…",
+  "agents.loading": "Loading background agents…",
   "agents.unavailable": "Agents data unavailable",
+  "agents.summary.line": "{active} active · {del} del · {kb} kanban · peers {peers}/3",
   "agents.peers": "Peer CLIs",
+  "agents.peer_mcp.eyebrow": "PEER MCP · PROGRESS",
+  "agents.peer_mcp": "Peer MCP runs",
+  "agents.peer_mcp.count": "{n} runs",
+  "agents.peer_mcp.empty": "No peer MCP runs yet.",
   "agents.live": "Live processes",
   "agents.delegations": "Delegations",
   "agents.kanban": "Kanban",
   "agents.detail": "Detail",
-  "agents.detail.hint": "Select a delegation or kanban task",
+  "agents.detail.hint": "Select an item on the left",
   "agents.logs": "Logs",
-  "agents.log.filter": "Filter logs (delegation id, session, tool…)",
+  "agents.log.filter": "Filter logs…",
   "agents.log.btn": "Filter",
   "agents.home": "home: {path}",
   "agents.home.na": "home: unavailable",
@@ -385,12 +449,13 @@ const en = {
   "memory.loading": "Loading memories…",
   "memory.unavailable": "Memory service unavailable",
   "memory.search.ph": "Semantic search…",
-  "memory.user": "user_id (all)",
-  "memory.agent": "agent_id (all)",
-  "memory.app": "app_id (all)",
+  "memory.user": "user (all)",
+  "memory.agent": "agent (all)",
+  "memory.app": "app (all)",
   "memory.search": "Search",
   "memory.list": "List all",
   "memory.count": "{n} memories",
+  "memory.empty": "No matching memories",
   "memory.delete": "Delete",
   "memory.delete.confirm": "Delete this memory?",
 
@@ -406,16 +471,34 @@ const en = {
   "state.activating": "activating",
   "state.reloading": "reloading",
   "state.deactivating": "deactivating",
+  "state.completed": "completed",
+  "state.done": "done",
+  "state.delivered": "delivered",
+  "state.ok": "ok",
+  "state.claimed": "claimed",
+  "state.in_progress": "in progress",
+  "state.blocked": "blocked",
+  "state.reclaimed": "reclaimed",
+  "state.triage": "triage",
+  "state.todo": "todo",
+  "state.cooling": "cooling",
+  "state.pending": "pending",
+  "state.error": "error",
 };
 
 const catalogs = { zh, en };
 
 export function getLang() {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored && catalogs[stored]) return stored;
+    if (typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored && catalogs[stored]) return stored;
+    }
   } catch {
     /* ignore */
+  }
+  if (typeof globalThis !== "undefined" && catalogs[globalThis.__AIPC_UI_LANG__]) {
+    return globalThis.__AIPC_UI_LANG__;
   }
   return "zh";
 }
@@ -423,12 +506,21 @@ export function getLang() {
 export function setLang(lang) {
   const next = catalogs[lang] ? lang : "zh";
   try {
-    localStorage.setItem(STORAGE_KEY, next);
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(STORAGE_KEY, next);
+    }
   } catch {
     /* ignore */
   }
-  document.documentElement.lang = next === "zh" ? "zh-Hant" : "en";
-  document.documentElement.dataset.lang = next;
+  // Browser-only DOM side effects (Node unit tests exercise stateLabel only).
+  if (typeof document !== "undefined" && document.documentElement) {
+    document.documentElement.lang = next === "zh" ? "zh-Hant" : "en";
+    document.documentElement.dataset.lang = next;
+  }
+  // Keep getLang() consistent when localStorage is unavailable (Node).
+  if (typeof globalThis !== "undefined") {
+    globalThis.__AIPC_UI_LANG__ = next;
+  }
   return next;
 }
 
@@ -443,14 +535,16 @@ export function t(key, vars = {}) {
 }
 
 export function stateLabel(state) {
-  const st = String(state || "unknown");
+  // Normalize API casing (COMPLETED / Completed → completed) before lookup.
+  const st = String(state || "unknown").trim().toLowerCase() || "unknown";
   const key = `state.${st}`;
   const translated = t(key);
   return translated === key ? st : translated;
 }
 
 export function decisionLabel(d) {
-  const key = `models.decision.${d}`;
+  const id = String(d || "?").trim().toLowerCase();
+  const key = `models.decision.${id}`;
   const translated = t(key);
   return translated === key ? String(d || "?") : translated;
 }

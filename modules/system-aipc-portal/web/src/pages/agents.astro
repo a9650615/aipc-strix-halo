@@ -15,6 +15,18 @@ import App from "../layouts/App.astro";
     <div id="peers" class="peer-chips" aria-label="Peer CLI status"></div>
   </section>
 
+  <section class="peer-mcp-panel" aria-label="Peer MCP progress">
+    <div class="peer-mcp-head">
+      <div>
+        <p class="eyebrow" data-i18n="agents.peer_mcp.eyebrow">PEER MCP · PROGRESS</p>
+        <h2 class="section-title" data-i18n="agents.peer_mcp">Peer MCP 行程</h2>
+      </div>
+      <span id="peer-mcp-count" class="chip muted">—</span>
+    </div>
+    <div id="peer-mcp-runs" class="peer-mcp-runs"></div>
+    <p id="peer-mcp-empty" class="empty hidden" data-i18n="agents.peer_mcp.empty">目前沒有 peer MCP 行程。</p>
+  </section>
+
   <section class="agent-workspace" aria-label="Agent work">
     <div class="agent-list-pane">
       <div class="agent-tabs" role="tablist">
@@ -51,7 +63,7 @@ import App from "../layouts/App.astro";
 
     const $ = (id) => document.querySelector(`#${id}`);
     let poller = null;
-    let cache = { processes: [], delegations: [], kanban: [], peers: [] };
+    let cache = { processes: [], delegations: [], kanban: [], peers: [], peer_mcp_runs: [] };
     let activeTab = "all";
     let selectedKey = "";
     let lastListSig = "";
@@ -106,58 +118,113 @@ import App from "../layouts/App.astro";
       });
     }
 
-    function renderPeers(peers) {
+    function renderPeers(peers, profiles = []) {
       const el = $("peers");
-      el.replaceChildren(...(peers || []).map((p) => {
+      const chips = (peers || []).map((p) => {
         const chip = document.createElement("span");
         chip.className = "chip peer-chip" + (p.installed && p.auth_present ? " ready" : "");
         const live = p.running_count ? ` · ${p.running_count}` : "";
         chip.textContent = `${p.label || p.id}${p.installed ? "" : " ✗"}${live}`;
         chip.title = p.path || p.id;
         return chip;
-      }));
+      });
+      if ((profiles || []).length > 1) {
+        const chip = document.createElement("span");
+        chip.className = "chip peer-chip ready";
+        chip.textContent = `profiles · ${profiles.map((p) => p.name).join(",")}`;
+        chip.title = profiles.map((p) => p.path || p.name).join("\n");
+        chips.push(chip);
+      }
+      el.replaceChildren(...chips);
+    }
+
+    function renderPeerMcpRuns(runs) {
+      const el = $("peer-mcp-runs");
+      const empty = $("peer-mcp-empty");
+      const rows = (runs || []).map((run) => {
+        const row = document.createElement("article");
+        row.className = "peer-mcp-row";
+        const head = document.createElement("div");
+        head.className = "peer-mcp-row-head";
+        const title = document.createElement("strong");
+        title.textContent = `${String(run.peer || "peer").toUpperCase()} · ${run.agent_id || "—"}`;
+        head.append(title, pill(i18nState(run.status || run.event), pillClass(run.status || run.event)));
+        const meta = document.createElement("small");
+        meta.textContent = [
+          run.pid ? `pid ${run.pid}` : null,
+          run.elapsed_s != null ? fmtDur(run.elapsed_s) : null,
+          fmtTime(run.ts),
+        ].filter(Boolean).join(" · ");
+        const output = document.createElement("pre");
+        output.className = "peer-mcp-output";
+        output.textContent = run.output_tail || run.error || "—";
+        row.append(head, meta, output);
+        return row;
+      });
+      el.replaceChildren(...rows);
+      empty.classList.toggle("hidden", rows.length > 0);
+      $("peer-mcp-count").textContent = t("agents.peer_mcp.count", { n: rows.length });
     }
 
     function workItems() {
       const items = [];
       for (const p of cache.processes || []) {
         const task = p.task || {};
+        const profile = task.profile && task.profile !== "default" ? task.profile : null;
         items.push({
           key: `live:${p.pid}`,
           tab: "live",
           kind: "live",
-          provider: (p.provider || "?").toUpperCase(),
+          child: false,
+          provider: (p.provider || "?").toUpperCase() + (profile ? `/${profile}` : ""),
           title: task.title || t("agents.task.unknown"),
           state: task.kind === "delegated" ? "running" : (task.source === "grok-session" ? "active" : "n/a"),
-          sub: [fmtDur(p.etime_seconds), p.cwd && p.cwd.split("/").slice(-2).join("/")].filter(Boolean).join(" · "),
+          sub: [
+            profile,
+            task.source && task.source !== "unknown" ? task.source : null,
+            fmtDur(p.etime_seconds),
+            p.cwd && p.cwd.split("/").slice(-2).join("/"),
+          ].filter(Boolean).join(" · "),
           raw: p,
         });
       }
       for (const d of cache.delegations || []) {
+        const isChild = d.kind === "delegation-child";
+        const profile = d.profile && d.profile !== "default" ? d.profile : null;
         items.push({
           key: `deleg:${d.id}`,
           tab: "deleg",
           kind: "deleg",
-          provider: "HERMES",
-          title: d.goal_preview || d.id,
+          child: isChild,
+          provider: (isChild ? "SUB" : "HERMES") + (profile ? `/${profile}` : ""),
+          title: d.goal_preview || d.summary_preview || d.id,
           state: d.state || "unknown",
-          sub: [d.model, fmtDur(d.duration_seconds)].filter(Boolean).join(" · "),
+          sub: [
+            isChild && d.parent_id ? `← ${d.parent_id}` : null,
+            !isChild && d.child_count ? `${d.child_count} sub` : null,
+            profile,
+            d.model,
+            fmtDur(d.duration_seconds),
+            d.tool_count != null ? `${d.tool_count} tools` : null,
+          ].filter(Boolean).join(" · "),
           raw: d,
         });
       }
       for (const k of cache.kanban || []) {
+        const profile = k.profile && k.profile !== "default" ? k.profile : null;
         items.push({
           key: `kb:${k.id}`,
           tab: "kanban",
           kind: "kanban",
-          provider: (k.assignee || "KB").toString().slice(0, 12),
+          child: false,
+          provider: ((k.assignee || "KB").toString().slice(0, 12)) + (profile ? `/${profile}` : ""),
           title: k.title || k.id,
           state: k.status || "unknown",
-          sub: [k.branch_name, k.worker_pid && `pid ${k.worker_pid}`].filter(Boolean).join(" · "),
+          sub: [profile, k.branch_name, k.worker_pid && `pid ${k.worker_pid}`].filter(Boolean).join(" · "),
           raw: k,
         });
       }
-      // Active first
+      // Active first; keep children after parent
       const rank = (s) => {
         const v = stateKey(s);
         if (["running", "active", "claimed", "in_progress"].includes(v)) return 0;
@@ -165,7 +232,14 @@ import App from "../layouts/App.astro";
         if (["completed", "done", "delivered"].includes(v)) return 2;
         return 3;
       };
-      items.sort((a, b) => rank(a.state) - rank(b.state));
+      items.sort((a, b) => {
+        const ap = a.raw && a.raw.parent_id ? String(a.raw.parent_id) : "";
+        const bp = b.raw && b.raw.parent_id ? String(b.raw.parent_id) : "";
+        if (ap && ap === String(b.raw && b.raw.id || "")) return 1;
+        if (bp && bp === String(a.raw && a.raw.id || "")) return -1;
+        if (ap && bp && ap === bp) return (a.raw.task_index || 0) - (b.raw.task_index || 0);
+        return rank(a.state) - rank(b.state);
+      });
       return items;
     }
 
@@ -198,7 +272,7 @@ import App from "../layouts/App.astro";
       list.replaceChildren(...items.map((item) => {
         const row = document.createElement("button");
         row.type = "button";
-        row.className = "agent-row" + (item.key === selectedKey ? " selected" : "");
+        row.className = "agent-row" + (item.key === selectedKey ? " selected" : "") + (item.child ? " child" : "");
         row.dataset.key = item.key;
         row.setAttribute("role", "listitem");
 
@@ -259,6 +333,7 @@ import App from "../layouts/App.astro";
             task.delegation_id && `delegation: ${task.delegation_id}`,
             task.task_id && `kanban: ${task.task_id}`,
             task.model && `model: ${task.model}`,
+            task.profile && `profile: ${task.profile}`,
           ],
           [
             [(p.provider || "?").toUpperCase(), "run"],
@@ -275,7 +350,7 @@ import App from "../layouts/App.astro";
         return;
       }
       if (item.kind === "deleg") {
-        selectDelegation(item.raw.id);
+        selectDelegation(item.raw.id, item.raw);
         return;
       }
       if (item.kind === "kanban") {
@@ -283,12 +358,16 @@ import App from "../layouts/App.astro";
       }
     }
 
-    function selectDelegation(id) {
+    function selectDelegation(id, raw = null) {
       setSelected(`deleg:${id}`);
       fetch(`/api/v1/agents/delegations/${encodeURIComponent(id)}`)
         .then((r) => r.ok ? r.json() : Promise.reject(r.status))
         .then((d) => {
           const tools = (d.tool_trace || []).map((x) => `· ${x.tool || "?"} (${x.status || ""})`).join("\n");
+          const profile = d.profile || (raw && raw.profile) || null;
+          const who = d.kind === "delegation-child" || (raw && raw.kind === "delegation-child")
+            ? (profile && profile !== "default" ? `SUB/${profile}` : "SUB")
+            : (profile && profile !== "default" ? `HERMES/${profile}` : "HERMES");
           showDetail(
             short(d.goal || d.goal_preview || d.id, 80),
             `${i18nState(d.state)} · ${d.model || "—"} · ${fmtDur(d.duration_seconds) || "—"} · ${fmtTime(d.dispatched_at)}`,
@@ -296,17 +375,20 @@ import App from "../layouts/App.astro";
               d.goal || d.goal_preview || "",
               d.summary || d.summary_preview ? `${t("agents.field.summary")}\n${d.summary || d.summary_preview}` : null,
               tools ? `${t("agents.field.tools")}\n${tools}` : null,
+              profile && `profile: ${profile}`,
+              d.parent_id && `parent: ${d.parent_id}`,
+              d.child_count != null && d.child_count > 0 && `subagents: ${d.child_count}`,
               d.origin_session && `origin: ${d.origin_session}`,
               d.id && `id: ${d.id}`,
             ],
             [
-              ["HERMES", "na"],
+              [who, "na"],
               [i18nState(d.state), stateKind(d.state)],
               d.tool_count != null ? [`${d.tool_count} tools`, "na"] : null,
             ].filter(Boolean),
             d.logs,
           );
-          $("log-query").value = id;
+          $("log-query").value = (d.parent_id || id).replace(/__\d+$/, "");
         })
         .catch(() => {
           showDetail(t("agents.delegations"), "", [t("agents.fail.deleg")]);
@@ -333,7 +415,7 @@ import App from "../layouts/App.astro";
               events && `${t("agents.field.events")}\n${events}`,
             ],
             [
-              ["KANBAN", "na"],
+              [d.profile && d.profile !== "default" ? `KANBAN/${d.profile}` : "KANBAN", "na"],
               [i18nState(d.status), stateKind(d.status)],
               d.assignee ? [d.assignee, "na"] : null,
             ].filter(Boolean),
@@ -373,16 +455,35 @@ import App from "../layouts/App.astro";
         delegations: data.delegations || [],
         kanban: data.kanban || [],
         peers: data.peers || [],
+        profiles: data.profiles || [],
+        peer_mcp_runs: data.peer_mcp_runs || [],
       };
-      $("summary").textContent = data.summary || "—";
       const c = data.counts || {};
-      $("counts").textContent = t("agents.counts", {
+      const parents = (cache.delegations || []).filter((d) => d.kind !== "delegation-child");
+      const subs = (cache.delegations || []).filter((d) => d.kind === "delegation-child");
+      const delCount = parents.length || c.delegations || 0;
+      const line = t("agents.summary.line", {
         active: c.running_signals || 0,
-        del: c.delegations || 0,
+        del: delCount,
         kb: c.kanban || 0,
         peers: c.peers_ready || 0,
       });
-      renderPeers(cache.peers);
+      const profileHint = (cache.profiles || []).length > 1
+        ? ` · ${(cache.profiles || []).length} profiles`
+        : "";
+      const subHint = subs.length ? ` · ${subs.length} sub` : "";
+      const peerMcpHint = cache.peer_mcp_runs.length
+        ? ` · ${t("agents.peer_mcp.count", { n: cache.peer_mcp_runs.length })}`
+        : "";
+      $("summary").textContent = line + subHint + profileHint + peerMcpHint;
+      $("counts").textContent = t("agents.counts", {
+        active: c.running_signals || 0,
+        del: delCount,
+        kb: c.kanban || 0,
+        peers: c.peers_ready || 0,
+      }) + subHint + profileHint;
+      renderPeers(cache.peers, cache.profiles);
+      renderPeerMcpRuns(cache.peer_mcp_runs);
       renderList();
       if (selectedKey && !filteredItems().find((i) => i.key === selectedKey)) {
         selectedKey = "";

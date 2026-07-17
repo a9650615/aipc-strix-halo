@@ -53,14 +53,15 @@ import App from "../layouts/App.astro";
   </section>
 
   <section class="events-grid" aria-label="Guard events">
-    <div>
-      <h2 class="section-title" data-i18n="models.journal">閒置釋放日誌</h2>
-      <pre id="idle-journal" class="log-view compact">—</pre>
+    <div class="event-col">
+      <h2 class="section-title" data-i18n="models.journal">閒置釋放</h2>
+      <p id="idle-status" class="event-status muted">—</p>
+      <div id="idle-events" class="card-list event-timeline"></div>
     </div>
-    <div>
-      <h2 class="section-title" data-i18n="models.oom">OOM 守衛事件</h2>
-      <p id="oom-status" class="muted"></p>
-      <div id="oom-events" class="card-list"></div>
+    <div class="event-col">
+      <h2 class="section-title" data-i18n="models.oom">OOM 守衛</h2>
+      <p id="oom-status" class="event-status muted">—</p>
+      <div id="oom-events" class="card-list event-timeline"></div>
     </div>
   </section>
 
@@ -265,29 +266,115 @@ import App from "../layouts/App.astro";
       }));
     }
 
-    function renderEvents(data) {
-      const journal = data.idle_journal || [];
-      $("idle-journal").textContent = journal.length ? journal.join("\n") : t("models.none.journal");
+    function titleFromKey(key, vars, fallback) {
+      if (!key) return fallback || "—";
+      const s = t(key, vars || {});
+      return s === key ? (fallback || key) : s;
+    }
 
+    function eventCard({ title, sub, kind, severity }) {
+      const card = document.createElement("article");
+      card.className = "event-card sev-" + (severity || "na");
+      const head = document.createElement("div");
+      head.className = "event-card-head";
+      const strong = document.createElement("strong");
+      strong.textContent = title;
+      const badge = pill(
+        kind || "—",
+        severity === "ok" ? "ok" : severity === "bad" ? "bad" : severity === "wait" ? "wait" : "na",
+      );
+      head.append(strong, badge);
+      const small = document.createElement("small");
+      small.textContent = sub || "";
+      card.append(head);
+      if (sub) card.append(small);
+      return card;
+    }
+
+    function renderEvents(data) {
+      // Idle release: structured decisions, not systemd unit spam.
+      const idleState = data.idle_release || {};
+      const idleKey = `models.state.${idleState.state || ""}`;
+      let idleLabel = t(idleKey);
+      if (idleLabel === idleKey) idleLabel = idleState.state || "—";
+      // Prefer structured status only (avoid English backend summary dump).
+      $("idle-status").textContent = t("models.idle.status_line", { state: idleLabel });
+
+      let idleEvents = data.idle_events || [];
+      // Fallback: parse raw journal client-side if backend is old.
+      if (!idleEvents.length && (data.idle_journal || []).length) {
+        idleEvents = (data.idle_journal || [])
+          .filter((ln) => /keep warm|unload|error|failed/i.test(ln) && !/Starting |Finished |Deactivated/i.test(ln))
+          .slice(-8)
+          .reverse()
+          .map((ln) => ({
+            kind: /keep warm/i.test(ln) ? "keep_warm" : "info",
+            severity: /keep warm/i.test(ln) ? "ok" : "na",
+            title_key: /keep warm/i.test(ln) ? "models.idle.ev.keep_warm" : "models.idle.ev.info",
+            title_vars: /keep warm/i.test(ln)
+              ? { mem: (ln.match(/MemAvailable=([0-9.]+)/i) || [])[1] || "—", floor: "25" }
+              : { detail: ln.slice(0, 120) },
+            raw: ln,
+          }));
+      }
+      const idleEl = $("idle-events");
+      if (!idleEvents.length) {
+        idleEl.innerHTML = `<p class="empty">${t("models.none.journal")}</p>`;
+      } else {
+        idleEl.replaceChildren(...idleEvents.slice(0, 10).map((e) => {
+          const title = titleFromKey(e.title_key, e.title_vars, e.raw || e.kind);
+          const kindLabel = e.kind === "keep_warm"
+            ? t("models.idle.kind.keep_warm")
+            : e.kind === "unload"
+              ? t("models.idle.kind.unload")
+              : e.kind === "error"
+                ? t("models.idle.kind.error")
+                : t("models.idle.kind.info");
+          return eventCard({
+            title,
+            sub: e.raw && e.raw !== title ? e.raw.slice(0, 140) : "",
+            kind: kindLabel,
+            severity: e.severity || "na",
+          });
+        }));
+      }
+
+      // OOM guard: human titles, hide file path noise.
       const oom = data.oom_guard || {};
-      $("oom-status").textContent = oom.disabled
-        ? t("models.oom.disabled")
-        : oom.availability === "available"
-          ? t("models.oom.ring", { path: oom.path || "" })
-          : t("models.oom.missing");
+      if (oom.disabled) {
+        $("oom-status").textContent = t("models.oom.disabled");
+      } else if (oom.availability === "available") {
+        $("oom-status").textContent = t("models.oom.watching");
+      } else {
+        $("oom-status").textContent = t("models.oom.missing");
+      }
       const events = oom.events || [];
+      const oomEl = $("oom-events");
       if (!events.length) {
-        $("oom-events").innerHTML = `<p class="empty">${t("models.none.oom")}</p>`;
+        oomEl.innerHTML = `<p class="empty">${t("models.none.oom")}</p>`;
         return;
       }
-      $("oom-events").replaceChildren(...events.slice(0, 20).map((e) => {
-        const card = document.createElement("article");
-        card.className = "work-card event-card";
-        const when = e.ts ? new Date(Number(e.ts) * 1000).toLocaleString() : "—";
-        card.innerHTML = `<div class="work-head"><strong>${e.event || e.action || "event"}</strong></div>
-          <small>${when}${e.level ? " · " + e.level : ""}${e.dry_run ? " · dry-run" : ""}</small>
-          <p class="model-meta">${[e.action, e.detail, e.mem != null ? `mem ${e.mem}` : null].filter(Boolean).join(" · ")}</p>`;
-        return card;
+      oomEl.replaceChildren(...events.slice(0, 12).map((e) => {
+        const title = titleFromKey(
+          e.title_key,
+          e.title_vars,
+          e.event || e.action || "event",
+        );
+        const when = e.ts ? new Date(Number(e.ts) * 1000).toLocaleString() : "";
+        const bits = [
+          when,
+          e.level,
+          e.dry_run ? t("models.oom.dry_run") : null,
+          e.mem_gib != null ? t("models.oom.mem", { gib: e.mem_gib }) : (e.mem != null ? `mem ${e.mem}` : null),
+          e.detail && e.detail !== e.title_vars?.target ? String(e.detail).slice(0, 80) : null,
+        ].filter(Boolean);
+        const kindLabel = e.level || e.kind || e.event || "—";
+        return eventCard({
+          title,
+          sub: bits.join(" · "),
+          kind: kindLabel,
+          severity: e.severity || "na",
+        });
       }));
     }
 
@@ -301,18 +388,34 @@ import App from "../layouts/App.astro";
       }));
     }
 
+    function formatModelsSummary(data) {
+      const c = data.capacity || {};
+      const free = c.mem_available_gb != null ? Math.round(Number(c.mem_available_gb)) : "—";
+      const mem = c.mem_total_gb != null ? Math.round(Number(c.mem_total_gb)) : "—";
+      const gtt = c.gtt_used_gb != null ? Number(c.gtt_used_gb).toFixed(1) : "—";
+      const loaded = (data.loaded || []).length;
+      const gpu = data.lemonade?.gpu_loaded ?? 0;
+      const maxGpu = data.policy?.max_gpu_loaded ?? "?";
+      const idleKey = `models.state.${data.idle_release?.state || ""}`;
+      let idle = t(idleKey);
+      if (idle === idleKey) idle = data.idle_release?.state || "—";
+      let line = t("models.summary.line", { free, mem, gtt, loaded, gpu, maxGpu, idle });
+      if (data.lemonade?.stale) line += " " + t("models.stale");
+      return line;
+    }
+
     function applyModels(data) {
       const sig = JSON.stringify({
-        s: data.summary,
         l: data.loaded,
         i: data.idle_release,
         c: data.capacity,
         o: (data.oom_guard?.events || []).slice(0, 5),
         st: data.lemonade?.stale,
+        p: data.policy,
       });
       if (sig === lastSig) return;
       lastSig = sig;
-      $("summary").textContent = data.summary || "—";
+      $("summary").textContent = formatModelsSummary(data);
       $("manifest-path").textContent = data.manifest_path
         ? t("models.manifest", { path: data.manifest_path })
         : t("models.manifest.missing");

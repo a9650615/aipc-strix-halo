@@ -452,9 +452,30 @@ import App from "../layouts/App.astro";
       }));
     }
 
+    function formatHomeSummary(data) {
+      const services = data.services || [];
+      const up = services.filter((s) => {
+        const st = s.display_state || s.state;
+        return st === "active" || st === "ready" || (st === "n/a" && s.health === true);
+      }).length;
+      const p = data.platform || {};
+      const free = p.mem_available_gb != null ? Math.round(Number(p.mem_available_gb)) : "—";
+      const mem = p.mem_total_gb != null ? Math.round(Number(p.mem_total_gb)) : "—";
+      const gtt = p.gtt_used_gb != null ? Number(p.gtt_used_gb).toFixed(1) : "—";
+      const models = data.runtime?.model_count ?? (data.models || []).length ?? 0;
+      return t("home.summary.line", {
+        up,
+        total: services.length,
+        models,
+        free,
+        mem,
+        gtt,
+        profile: p.profile || "—",
+      });
+    }
+
     function applyDashboard(data) {
       const sig = JSON.stringify({
-        s: data.summary,
         p: data.platform,
         d: data.device && {
           summary: data.device.summary,
@@ -478,9 +499,8 @@ import App from "../layouts/App.astro";
       renderRuntime(data.runtime || {});
       renderOps(data.services || [], data.automation || []);
       const sum = $("#summary");
-      if (sum && sum.textContent !== (data.summary || "—")) {
-        sum.textContent = data.summary || "—";
-      }
+      const line = formatHomeSummary(data);
+      if (sum && sum.textContent !== line) sum.textContent = line;
     }
 
     applyDom(document);
