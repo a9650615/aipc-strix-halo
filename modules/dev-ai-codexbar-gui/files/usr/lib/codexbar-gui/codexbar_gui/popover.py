@@ -1150,7 +1150,7 @@ class UsagePopover(QWidget):
     quit_requested = Signal()
 
     POINTER_LEAVE_GRACE = 2.0  # hovered, then moved the pointer away
-    UNTOUCHED_TIMEOUT = 8.0  # opened and never hovered at all
+    UNTOUCHED_TIMEOUT = 12.0  # opened and never hovered at all — hard cap
     # KWin grants activation ~300ms after the map and often hands it straight back
     # to the previously active app — ignore activation churn until it settles.
     ACTIVATION_SETTLE = 2.5
@@ -1200,6 +1200,9 @@ class UsagePopover(QWidget):
         self._pointer_seen = False  # pointer entered the card at least once
         self._pointer_left_at: Optional[float] = None
         self._shown_at = 0.0
+        self._hidden_at = 0.0
+        self._kwin_armed = False
+        self._last_tick_state: Optional[tuple] = None
         self._open_grace_until = 0.0  # ignore dismiss during open / in-panel clicks
         self._outside_filter: Optional[_OutsideClickFilter] = None
         self._last_anchor: Optional[QRect] = None  # tray/click rect used for dock
@@ -1520,11 +1523,14 @@ class UsagePopover(QWidget):
         """
         if self._embedded or not _is_wayland():
             return
-        kwin_place.arm(anchor, width, height, anchor_real=anchor_real)
+        # KWin also owns focus-based dismissal while armed (it can read the real
+        # cursor position; we cannot).
+        self._kwin_armed = kwin_place.arm(anchor, width, height, anchor_real=anchor_real)
 
     def _kwin_disarm(self) -> None:
         if self._embedded:
             return
+        self._kwin_armed = False
         kwin_place.disarm()
 
     def show_at_tray(
@@ -1634,7 +1640,6 @@ class UsagePopover(QWidget):
         QTimer.singleShot(50, self._reassert_pin)
         QTimer.singleShot(150, self._reassert_pin)
         QTimer.singleShot(300, self._reassert_pin)
-        QTimer.singleShot(1500, self._kwin_disarm)
         self._start_dismiss_watch()
 
         app = QApplication.instance()
@@ -1927,12 +1932,31 @@ class UsagePopover(QWidget):
             return
         app.removeEventFilter(self._outside_filter)
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        if not self._embedded:
+            self._shown_at = time.monotonic()
+        super().showEvent(event)
+
     def hideEvent(self, event) -> None:  # noqa: N802
         if not self._embedded:
+            self._hidden_at = time.monotonic()
             self._remove_outside_filter()
             self._stop_dismiss_watch()
             self._kwin_disarm()
         super().hideEvent(event)
+
+    def is_really_visible(self, settle: float = 0.25) -> bool:
+        """Visible *and* mapped long enough that the opening click is over.
+
+        The tray toggle needs this: a frameless top-level can report
+        isVisible()=True before it is really up, and the click that opens us must
+        not immediately count as the click that closes us.
+        """
+        return self.isVisible() and (time.monotonic() - self._shown_at) >= settle
+
+    def hidden_within(self, window: float) -> bool:
+        """True if we were dismissed within the last ``window`` seconds."""
+        return (not self.isVisible()) and (time.monotonic() - self._hidden_at) <= window
 
     def _start_dismiss_watch(self) -> None:
         """Pointer-driven auto-dismiss.
@@ -1948,6 +1972,7 @@ class UsagePopover(QWidget):
             return
         self._pointer_seen = False
         self._pointer_left_at = None
+        self._last_tick_state = None
         self._shown_at = time.monotonic()
         if self._dismiss_watch is None:
             self._dismiss_watch = QTimer(self)
@@ -1966,9 +1991,31 @@ class UsagePopover(QWidget):
         if self._settings_open:
             return
         now = time.monotonic()
+        inside = self._pointer_inside()
+        state = (inside, self.isActiveWindow(), self._pointer_seen)
+        if state != self._last_tick_state:
+            self._last_tick_state = state
+            logger.info(
+                "dismiss state: pointer_on_card=%s active=%s hovered_before=%s open=%.1fs",
+                inside,
+                state[1],
+                state[2],
+                now - self._shown_at,
+            )
         if now < self._open_grace_until:
             return
-        if self._pointer_inside():
+        if self._kwin_armed and self._last_anchor is not None:
+            # KWin owns the whole call on Wayland: only the compositor sees the real
+            # cursor and the real active window. Qt's underMouse() is not even
+            # reliable here — a card mapped under a stationary pointer gets no enter
+            # event — so the Python rules below would close a card being read.
+            kwin_place.poll_dismiss(
+                self._last_anchor, open_seconds=now - self._shown_at
+            )
+            if not self.isVisible():
+                self._stop_dismiss_watch()
+            return
+        if inside:
             self._pointer_seen = True
             self._pointer_left_at = None
             return
@@ -1977,7 +2024,10 @@ class UsagePopover(QWidget):
                 self._pointer_left_at = now
             elif now - self._pointer_left_at >= self.POINTER_LEAVE_GRACE:
                 self._dismiss("pointer left the card")
-        elif now - self._shown_at >= self.UNTOUCHED_TIMEOUT and not self.isActiveWindow():
+        elif now - self._shown_at >= self.UNTOUCHED_TIMEOUT:
+            # Unconditional: KWin re-activates the always-on-top card whenever the
+            # window that stole focus closes, so gating this on activation left the
+            # panel open forever. Hovering it is the only way to keep it.
             self._dismiss("opened but never touched")
 
     def _dismiss(self, reason: str) -> None:
@@ -1996,6 +2046,7 @@ class UsagePopover(QWidget):
         if (
             event.type() == QEvent.Type.ActivationChange
             and self.isVisible()
+            and not self._kwin_armed  # KWin decides, with the real cursor position
             and not self.isActiveWindow()
             and not self._settings_open
             and not self._pointer_inside()
@@ -2312,7 +2363,8 @@ class UsagePopover(QWidget):
             return
         # Backup dismiss path; changeEvent(ActivationChange) is the primary one.
         if (
-            not self.isActiveWindow()
+            not self._kwin_armed
+            and not self.isActiveWindow()
             and not self._settings_open
             and not self._pointer_inside()
             and time.monotonic() >= self._open_grace_until

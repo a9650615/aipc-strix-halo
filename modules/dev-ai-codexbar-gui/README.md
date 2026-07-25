@@ -147,22 +147,43 @@ fallback all land inside the correct output's work area.
 
 ## Auto-dismiss
 
-Activation is not a trustworthy dismiss signal here: KWin grants it ~300 ms after
-the map and then hands it back to whatever was active before (measured: browser
-reclaims focus ~1.2 s after open), and when it never arrives at all no
-`ActivationChange` ever fires and the card stays open forever. So dismissal is
-guarded and polled (`_dismiss_tick`, 400 ms):
+A Qt client on Wayland cannot decide this for itself:
 
-| Trigger | Rule |
-|---|---|
-| Activation / focus lost | only when the pointer is not on the card **and** we have been open ≥ `ACTIVATION_SETTLE` (2.5 s) |
-| Pointer left the card | `POINTER_LEAVE_GRACE` (2 s) after it was hovered |
-| Never hovered at all | `UNTOUCHED_TIMEOUT` (8 s), and only while unfocused |
-| Press outside / Esc / close button | immediate |
+- **activation lies.** KWin grants it ~300 ms after the map, hands it back to
+  whatever was active before (measured: browser reclaims focus ~1.2 s after open),
+  then re-activates the always-on-top card when that window closes. Sometimes it
+  is never granted, so no `ActivationChange` ever fires and the card stays open
+  forever — the original "unfocus 不一定會關".
+- **the pointer is invisible.** `QCursor.pos()` freezes at the last position our
+  own surface saw, and `underMouse()` stays false for a card that maps *under* a
+  stationary pointer (no enter event) — measured.
+- **a click on the already-focused window raises no signal at all.**
 
-Hovering the card always keeps it alive. `_pointer_inside()` trusts only
-`underMouse()` on Wayland — `QCursor.pos()` freezes at the last position our own
-surface saw. Every dismissal logs its reason (`popover dismiss: …`).
+So on Wayland KWin decides, polled every 400 ms from `_dismiss_tick` via
+`kwin_place.poll_dismiss()` — it reads `workspace.cursorPos` and
+`workspace.activeWindow` and closes the window itself:
+
+| Cursor (KWin) | Focus (KWin) | Result |
+|---|---|---|
+| on the card, its tray icon, or within `CURSOR_PAD` (32 px) of either | anything | stays — the user is right there |
+| elsewhere | another window | closes within one tick |
+| elsewhere | still ours | closes at `UNTOUCHED_CAP_S` (12 s) |
+
+Plus, on any platform: Esc, the close button, a press outside inside our own
+window tree, and clicking the tray icon again (`is_really_visible()` toggle, with
+`hidden_within()` so the click that dismissed us does not bounce it back open).
+Every Python-side dismissal logs its reason (`popover dismiss: …`).
+
+`CODEXBAR_KWIN_DEBUG=1` makes the poll report its inputs over D-Bus, since KWin's
+`print()` does not reach the journal here:
+
+```sh
+busctl --user monitor --match "interface='io.aipc.CodexbarProbe'"
+# poll cursor=2346,300 card=2136,34 420x480 anchor=2531,0 24x24 engaged=true …
+```
+
+X11 keeps the client-side rules (`ACTIVATION_SETTLE`, `POINTER_LEAVE_GRACE`,
+`UNTOUCHED_TIMEOUT`), where `QCursor.pos()` and activation are trustworthy.
 
 ## Tray shell (compatibility layer)
 

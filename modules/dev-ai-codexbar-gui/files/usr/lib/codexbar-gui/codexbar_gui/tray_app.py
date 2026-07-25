@@ -346,10 +346,22 @@ class CodexBarApp:
                 click,
                 self._app.platformName() if self._app else "?",
             )
-            # No isVisible() toggle: on xcb/Wayland a frameless top-level can
-            # stick at isVisible()=True while not mapped, which makes every click
-            # hit the close branch and the popover never opens. Always (re)open;
-            # dismissal is handled by unfocus / close button / Esc.
+            pop = self._popover
+            # Toggle. The old code always reopened because a frameless top-level
+            # can report isVisible()=True while unmapped — guard that with the
+            # popover's own map timestamps instead of dropping the toggle.
+            if pop is not None and pop.is_really_visible():
+                logger.info("tray click while open → close")
+                if self._shell is not None:
+                    self._shell.close()
+                else:
+                    pop.hide()
+                return
+            if pop is not None and pop.hidden_within(0.5):
+                # This same click already dismissed us (press outside the panel
+                # lands before Activate) — do not bounce straight back open.
+                logger.info("tray click right after dismiss → stay closed")
+                return
             self._open_popover(click_pos=click)
 
     def _quit_app(self) -> None:

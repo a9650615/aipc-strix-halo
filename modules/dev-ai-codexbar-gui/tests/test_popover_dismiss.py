@@ -53,6 +53,19 @@ def test_untouched_card_closes_after_timeout() -> None:
     assert not pop.isVisible()
 
 
+def test_untouched_timeout_fires_even_while_focused() -> None:
+    """KWin re-activates the always-on-top card when the thief window closes."""
+    pop = _popover()
+    pop.show()
+    pop._start_dismiss_watch()
+    pop._open_grace_until = 0.0
+    pop.isActiveWindow = lambda: True  # pretend KWin handed focus back
+    pop._shown_at = time.monotonic() - pop.UNTOUCHED_TIMEOUT - 0.1
+
+    pop._dismiss_tick()
+    assert not pop.isVisible()
+
+
 def test_hovered_card_closes_only_after_pointer_leave_grace() -> None:
     pop = _popover()
     pop.show()

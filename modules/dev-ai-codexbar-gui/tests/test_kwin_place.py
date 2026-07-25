@@ -53,6 +53,37 @@ def test_zero_sized_anchor_is_clamped_not_divided_by_zero() -> None:
     assert "var anchor = {x: 10, y: 20, w: 1, h: 1};" in js
 
 
+def test_poll_script_caps_an_untouched_card_that_keeps_focus() -> None:
+    """Focus can stay with us forever; the cursor being away then decides."""
+    js = kwin_place.build_poll_script(_rect(2531, 0, 24, 24), open_seconds=3)
+    assert "var openMs = 3000;" in js
+    assert f"var capMs = {int(kwin_place.UNTOUCHED_CAP_S * 1000)};" in js
+    assert "} else if (openMs >= capMs) {" in js
+    # …but never while the cursor is on the card
+    assert "if (!engaged) {" in js
+
+
+def test_poll_script_closes_only_when_cursor_and_focus_left() -> None:
+    js = kwin_place.build_poll_script(_rect(2531, 0, 24, 24))
+    # KWin is asked because a Wayland client sees neither of these
+    assert "workspace.cursorPos" in js
+    assert "workspace.activeWindow" in js
+    # Both conditions required before closing
+    assert "var engaged = cursorEngaged(pop);" in js
+    assert "if (!engaged) {" in js
+    assert "if (!oursActive) {" in js
+    assert "pop.closeWindow();" in js
+    # The tray icon and the gap to the card count as still-engaged
+    assert f"var pad = {kwin_place.CURSOR_PAD};" in js
+    assert "Math.min(g.x, anchor.x) - pad" in js
+
+
+def test_resident_script_only_places() -> None:
+    js = kwin_place.build_script(_rect(2531, 0, 24, 24), 420, 480)
+    assert "workspace.windowAdded.connect" in js
+    assert "closeWindow" not in js
+
+
 def test_disarm_is_safe_without_kwin() -> None:
     kwin_place._armed = None
     kwin_place.disarm()  # must not raise when nothing is loaded

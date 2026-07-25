@@ -24,6 +24,9 @@ Everything is computed inside KWin because the client cannot see the truth:
 - when Plasma refuses to report a tray rect (``anchor_real=False``), KWin looks up
   the panel (``dock``) window on the active output and derives the anchor from its
   geometry and edge.
+
+Dismissal is asked of KWin too (:func:`poll_dismiss`), for the same reason: only
+the compositor knows the real cursor position and which window is truly active.
 """
 
 from __future__ import annotations
@@ -37,6 +40,15 @@ from typing import Optional
 logger = logging.getLogger("codexbar_gui.kwin_place")
 
 WINDOW_TITLE = "CodexBar Usage Popover"
+
+# How far outside the card/tray-icon box the cursor still counts as "engaged".
+CURSOR_PAD = 32
+# A card the cursor never came near closes after this long even if it keeps focus.
+UNTOUCHED_CAP_S = 12.0
+# CODEXBAR_KWIN_DEBUG=1 makes the poll report its inputs over D-Bus (KWin's own
+# print() does not reach the journal on this system):
+#   busctl --user monitor --match "interface='io.aipc.CodexbarProbe'"
+DEBUG = os.environ.get("CODEXBAR_KWIN_DEBUG", "").strip() in {"1", "true", "yes"}
 
 _seq = itertools.count(1)
 _armed: Optional[str] = None
@@ -149,6 +161,95 @@ def build_script(
         "w": int(width),
         "h": int(height),
         "title": title,
+        "pad": CURSOR_PAD,
+    }
+
+
+# Polled dismissal. A Wayland client cannot see the cursor outside its own
+# surface, nor which window is really active, so it can never tell "user clicked
+# elsewhere" from "a background app grabbed focus while the user reads" — and a
+# click on an *already focused* window raises no activation signal at all. KWin
+# knows all three, so it decides and closes the card itself.
+_POLL_JS_TEMPLATE = """
+var anchor = {x: %(ax)d, y: %(ay)d, w: %(aw)d, h: %(ah)d};
+var title = "%(title)s";
+var pad = %(pad)d;
+var openMs = %(open_ms)d;
+var capMs = %(cap_ms)d;
+
+function mine(c) {
+    return c && c.caption && c.caption.indexOf(title) >= 0;
+}
+
+function popover() {
+    var wins = workspace.windowList();
+    for (var i = 0; i < wins.length; i++) {
+        if (mine(wins[i])) { return wins[i]; }
+    }
+    return null;
+}
+
+/* Cursor on the card, on the tray icon, or in the gap between them. */
+function cursorEngaged(pop) {
+    var p = workspace.cursorPos;
+    var g = pop.frameGeometry;
+    var left = Math.min(g.x, anchor.x) - pad;
+    var right = Math.max(g.x + g.width, anchor.x + anchor.w) + pad;
+    var top = Math.min(g.y, anchor.y) - pad;
+    var bottom = Math.max(g.y + g.height, anchor.y + anchor.h) + pad;
+    return p.x >= left && p.x <= right && p.y >= top && p.y <= bottom;
+}
+
+var pop = popover();
+if (pop !== null) {
+    var act = workspace.activeWindow;
+    var engaged = cursorEngaged(pop);
+    var oursActive = mine(act);
+    if (%(debug)d) {
+        var c = workspace.cursorPos;
+        var g = pop.frameGeometry;
+        callDBus("io.aipc.CodexbarProbe", "/", "io.aipc.CodexbarProbe", "report",
+            "poll cursor=" + c.x + "," + c.y +
+            " card=" + g.x + "," + g.y + " " + g.width + "x" + g.height +
+            " anchor=" + anchor.x + "," + anchor.y + " " + anchor.w + "x" + anchor.h +
+            " engaged=" + engaged + " oursActive=" + oursActive +
+            " active=" + (act ? act.caption : "null") +
+            " openMs=" + openMs + "/" + capMs);
+    }
+    /* The cursor being on the card (or its tray icon) always means "user is here".
+       Otherwise: another window holding focus means they moved on, and the cap
+       stops a card nobody touched from living forever when focus never changes. */
+    if (!engaged) {
+        if (!oursActive) {
+            print("codexbar-place: closing, cursor and focus are elsewhere");
+            pop.closeWindow();
+        } else if (openMs >= capMs) {
+            print("codexbar-place: closing, untouched for " + openMs + "ms");
+            pop.closeWindow();
+        }
+    }
+}
+"""
+
+
+def build_poll_script(
+    anchor,
+    *,
+    open_seconds: float = 0.0,
+    cap_seconds: float = UNTOUCHED_CAP_S,
+    title: str = WINDOW_TITLE,
+) -> str:
+    """Render the polled dismissal script (pure — the unit-testable half)."""
+    return _POLL_JS_TEMPLATE % {
+        "ax": int(anchor.x()),
+        "ay": int(anchor.y()),
+        "aw": max(1, int(anchor.width())),
+        "ah": max(1, int(anchor.height())),
+        "title": title,
+        "pad": CURSOR_PAD,
+        "open_ms": int(max(0.0, open_seconds) * 1000),
+        "cap_ms": int(cap_seconds * 1000),
+        "debug": 1 if DEBUG else 0,
     }
 
 
@@ -223,6 +324,59 @@ def arm(
     except Exception:
         logger.warning("KWin placement failed", exc_info=True)
         return False
+
+
+def _run_once(js: str, tag: str) -> bool:
+    """Load, run and unload a throwaway KWin script."""
+    scripting = _scripting()
+    if scripting is None:
+        return False
+    path = Path(
+        os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    ) / f"codexbar-{tag}-{os.getpid()}.js"
+    try:
+        path.write_text(js)
+    except OSError:
+        return False
+    name = f"codexbar-{tag}-{os.getpid()}-{next(_seq)}"
+    try:
+        from PySide6.QtDBus import QDBusConnection, QDBusInterface
+
+        reply = scripting.call("loadScript", str(path), name)
+        args = reply.arguments()
+        sid = int(args[0]) if args else -1
+        if sid < 0:
+            return False
+        runner = QDBusInterface(
+            "org.kde.KWin",
+            f"/Scripting/Script{sid}",
+            "org.kde.kwin.Script",
+            QDBusConnection.sessionBus(),
+        )
+        if not runner.isValid():
+            return False
+        runner.call("run")
+        return True
+    except Exception:
+        logger.debug("KWin %s script failed", tag, exc_info=True)
+        return False
+    finally:
+        try:
+            scripting.call("unloadScript", name)
+        except Exception:
+            pass
+
+
+def poll_dismiss(
+    anchor,
+    *,
+    open_seconds: float = 0.0,
+    title: str = WINDOW_TITLE,
+) -> bool:
+    """Let KWin close the card if the cursor *and* focus have both moved on."""
+    return _run_once(
+        build_poll_script(anchor, open_seconds=open_seconds, title=title), "dismiss"
+    )
 
 
 def disarm() -> None:
