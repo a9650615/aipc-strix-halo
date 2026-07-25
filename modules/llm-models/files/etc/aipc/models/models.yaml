@@ -349,18 +349,18 @@ models:
     label: tool-calling
 
   - alias: main-cloud
-    backend: anthropic
-    model_id: claude-sonnet-4-6
+    backend: cliproxy
+    model_id: claude-sonnet-5
     size_gb: cloud
 
   - alias: coder-cloud
-    backend: anthropic
-    model_id: claude-sonnet-4-6
+    backend: cliproxy
+    model_id: claude-sonnet-5
     size_gb: cloud
 
   - alias: thinking-cloud
-    backend: anthropic
-    model_id: claude-opus-4-8
+    backend: cliproxy
+    model_id: claude-opus-5
     size_gb: cloud
 
   - alias: gpt4o-cloud

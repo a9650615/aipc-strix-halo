@@ -201,20 +201,32 @@ model_list:
       max_input_tokens: 262144
       max_output_tokens: 8192
 
+  # Cloud aliases ride the Claude subscription through CLIProxy, not a paid
+  # ANTHROPIC_API_KEY — cloud-keys.env only ever carries CLIPROXY_API_KEY, so
+  # the anthropic/ backend these used to name was dead on arrival.
   - model_name: main-cloud
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/claude-sonnet-5
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
 
   - model_name: coder-cloud
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/claude-sonnet-5
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
 
   - model_name: thinking-cloud
     litellm_params:
-      model: anthropic/claude-opus-4-8
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/claude-opus-5
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
 
   - model_name: gpt4o-cloud
     litellm_params:
