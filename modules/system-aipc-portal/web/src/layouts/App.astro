@@ -1,18 +1,50 @@
 ---
 import { ClientRouter } from "astro:transitions";
 import "../styles/app.css";
-const { title = "AIPC Control Center" } = Astro.props;
+const { title = "AIPC 控制中心" } = Astro.props;
 ---
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="zh-Hant" data-lang="zh">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b1018'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%237ee0ff'/%3E%3C/svg%3E" />
     <ClientRouter fallback="swap" />
   </head>
   <body>
-    <header><a class="brand" href="/">AIPC <span>Control Center</span></a><nav><a href="/#home">Home</a><a href="/#device">Device</a><a href="/#ai">AI &amp; Voice</a><a href="/#services">Services</a><a href="/memory" data-astro-reload>Memory</a></nav></header>
-    <main><slot /></main>
+    <header class="app-header">
+      <a class="brand" href="/" data-astro-reload>AIPC <span data-i18n="brand.sub">控制中心</span></a>
+      <nav class="app-nav" aria-label="Primary">
+        <a href="/" data-astro-reload data-i18n="nav.home" data-nav="/">首頁</a>
+        <a href="/models" data-astro-reload data-i18n="nav.models" data-nav="/models">模型調度</a>
+        <a href="/agents" data-astro-reload data-i18n="nav.agents" data-nav="/agents">代理人</a>
+        <a href="/memory" data-astro-reload data-i18n="nav.memory" data-nav="/memory">記憶</a>
+      </nav>
+      <div class="lang-switch" role="group" aria-label="Language">
+        <button type="button" class="lang-btn" data-set-lang="zh" data-i18n="lang.zh">中文</button>
+        <button type="button" class="lang-btn" data-set-lang="en" data-i18n="lang.en">EN</button>
+      </div>
+    </header>
+    <main class="app-main"><slot /></main>
+    <script>
+      import { initLangToggle } from "../scripts/i18n.js";
+      function markActiveNav() {
+        const path = location.pathname.replace(/\/$/, "") || "/";
+        document.querySelectorAll(".app-nav a[data-nav]").forEach((a) => {
+          const nav = a.getAttribute("data-nav") || "";
+          const active = nav === "/" ? path === "/" : path === nav || path.startsWith(nav + "/");
+          a.classList.toggle("active", active);
+          if (active) a.setAttribute("aria-current", "page");
+          else a.removeAttribute("aria-current");
+        });
+      }
+      initLangToggle();
+      markActiveNav();
+      document.addEventListener("astro:page-load", () => {
+        initLangToggle();
+        markActiveNav();
+      });
+    </script>
   </body>
 </html>

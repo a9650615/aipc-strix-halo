@@ -396,6 +396,64 @@ def find_codexbar_binary() -> Optional[str]:
     return None
 
 
+def _infer_window_minutes_from_reset(resets_at: Optional[str]) -> Optional[int]:
+    """Guess rate-limit window length when CLI omits windowMinutes (Grok SuperGrok)."""
+    if not resets_at:
+        return None
+    try:
+        raw = str(resets_at).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        secs_left = (dt - datetime.now(timezone.utc)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+    if secs_left <= 0:
+        return None
+    hours = secs_left / 3600.0
+    # SuperGrok / many xAI plans expose a multi-day (weekly-ish) bucket without mins.
+    if hours > 36:
+        return 10080  # weekly
+    if hours > 8:
+        return 1440  # daily
+    if hours > 0:
+        return 300  # session 5h
+    return None
+
+
+def _refine_rate_window(
+    win: Optional[RateWindowView],
+    *,
+    default_label: str,
+    provider: str = "",
+) -> Optional[RateWindowView]:
+    """Fill missing window_minutes / labels so weekly-only Grok isn't 'Session (5h)'."""
+    if win is None:
+        return None
+    mins = win.window_minutes
+    if mins is None:
+        mins = _infer_window_minutes_from_reset(win.resets_at)
+        if mins is not None:
+            win.window_minutes = mins
+    label = win.label or default_label
+    low = label.lower()
+    prov = (provider or "").lower()
+    # Relabel default Session when the window is clearly multi-day / weekly
+    if mins is not None and mins >= 1440 and low in {
+        "session (5h)",
+        "session",
+        "primary",
+        "extra",
+    }:
+        win.label = "Weekly" if mins >= 10080 else "Daily"
+    elif prov == "grok" and mins is None and low.startswith("session"):
+        # Grok often has a single plan bucket; prefer Weekly wording over fake 5h
+        win.label = "Weekly"
+    if win.pace is None:
+        win.pace = compute_pace(win.used_percent, win.window_minutes, win.resets_at)
+    return win
+
+
 def _window_from_dict(
     label: str,
     data: Optional[dict],
@@ -429,6 +487,7 @@ def _window_from_dict(
     )
     label_map = {
         300: "Session (5h)",
+        1440: "Daily",
         10080: "Weekly",
     }
     if title:
@@ -439,6 +498,7 @@ def _window_from_dict(
         "Session",
         "Session (5h)",
         "Weekly",
+        "Daily",
         "Extra",
         "Primary",
         "Secondary",
@@ -446,6 +506,8 @@ def _window_from_dict(
         # Only rename primary lanes — do not clobber Designs / Daily Routines etc.
         label = label_map[mins_i]
     resets_at = data.get("resetsAt") or data.get("resets_at")
+    if mins_i is None:
+        mins_i = _infer_window_minutes_from_reset(resets_at)
     pace = _pace_from_cli(cli_pace) or compute_pace(used, mins_i, resets_at)
     return RateWindowView(
         label=label,
@@ -553,6 +615,11 @@ def parse_upstream_item(item: dict[str, Any]) -> ProviderView:
         "Weekly", usage.get("secondary"), cli_pace=pace_secondary or None
     )
     tertiary = _window_from_dict("Extra", usage.get("tertiary"), cli_pace=None)
+    # Grok SuperGrok often returns a single primary bucket with no windowMinutes
+    # and reset days out — refine labels so UI shows Weekly, not fake Session 5h.
+    primary = _refine_rate_window(primary, default_label="Session (5h)", provider=provider)
+    secondary = _refine_rate_window(secondary, default_label="Weekly", provider=provider)
+    tertiary = _refine_rate_window(tertiary, default_label="Extra", provider=provider)
     # Tertiary pace if CLI provides it
     pace_tertiary = pace.get("tertiary") if isinstance(pace.get("tertiary"), dict) else {}
     if tertiary is not None and pace_tertiary and tertiary.pace is None:
@@ -645,18 +712,31 @@ def fetch_from_http(
     return parse_upstream_list(body)
 
 
-def enabled_providers_from_config() -> List[str]:
-    """Enabled provider ids from official config (for multi-tab UI)."""
-    for path in (
+def _official_config_paths() -> List[Path]:
+    return [
         Path.home() / ".config" / "codexbar" / "config.json",
         Path.home() / ".codexbar" / "config.json",
-    ):
+    ]
+
+
+def load_official_config() -> Optional[dict[str, Any]]:
+    """Load first readable official CodexBar config.json (no secrets logged)."""
+    for path in _official_config_paths():
         if not path.is_file():
             continue
         try:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
+def enabled_providers_from_config() -> List[str]:
+    """Enabled provider ids from official config (for multi-tab UI)."""
+    data = load_official_config()
+    if data:
         out: List[str] = []
         for p in data.get("providers") or []:
             if isinstance(p, dict) and p.get("enabled") and p.get("id"):
@@ -664,6 +744,126 @@ def enabled_providers_from_config() -> List[str]:
         if out:
             return out
     return ["codex"]
+
+
+# Provider id → env vars the official CLI accepts for API-key auth.
+# Primary name is set first when injecting from config.json.
+_PROVIDER_API_ENV: dict[str, tuple[str, ...]] = {
+    "zai": ("Z_AI_API_KEY", "ZAI_API_KEY"),
+    "glm": ("Z_AI_API_KEY", "ZAI_API_KEY"),
+    "zhipu": ("Z_AI_API_KEY", "ZAI_API_KEY"),
+    "grok": ("XAI_API_KEY", "GROK_API_KEY"),
+    "openrouter": ("OPENROUTER_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+    "minimax": ("MINIMAX_API_KEY",),
+    "mistral": ("MISTRAL_API_KEY",),
+    "perplexity": ("PERPLEXITY_API_KEY", "PPLX_API_KEY"),
+    "kimi": ("MOONSHOT_API_KEY", "KIMI_API_KEY"),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+}
+
+
+def _env_names_for_provider(provider_id: str) -> tuple[str, ...]:
+    return _PROVIDER_API_ENV.get(provider_id.lower().strip(), ())
+
+
+def provider_api_key_from_config(
+    provider_id: Optional[str],
+    data: Optional[dict[str, Any]] = None,
+) -> Optional[str]:
+    """Return api_key/apiKey for provider from official config (or None)."""
+    if not provider_id:
+        return None
+    cfg = data if data is not None else load_official_config()
+    if not cfg:
+        return None
+    want = provider_id.lower().strip()
+    for p in cfg.get("providers") or []:
+        if not isinstance(p, dict):
+            continue
+        if str(p.get("id") or "").lower() != want:
+            continue
+        key = p.get("api_key") if p.get("api_key") is not None else p.get("apiKey")
+        if key is None:
+            return None
+        key_s = str(key).strip()
+        return key_s or None
+    return None
+
+
+def provider_has_api_key(
+    provider_id: Optional[str],
+    *,
+    env: Optional[dict[str, str]] = None,
+    data: Optional[dict[str, Any]] = None,
+) -> bool:
+    """True if shell env or config.json already has a key for this provider."""
+    if not provider_id:
+        return False
+    environ = env if env is not None else os.environ
+    for name in _env_names_for_provider(provider_id):
+        if (environ.get(name) or "").strip():
+            return True
+    return bool(provider_api_key_from_config(provider_id, data=data))
+
+
+def build_cli_env(
+    provider: Optional[str] = None,
+    *,
+    base: Optional[dict[str, str]] = None,
+    data: Optional[dict[str, Any]] = None,
+) -> dict[str, str]:
+    """Child env for ``codexbar usage``: inject config keys only if unset.
+
+    Never clobbers an already-exported env var. Does not log raw keys.
+    """
+    env: dict[str, str] = dict(base if base is not None else os.environ)
+    cfg = data if data is not None else load_official_config()
+    if provider:
+        ids = [provider]
+    else:
+        ids = []
+        if cfg:
+            for p in cfg.get("providers") or []:
+                if isinstance(p, dict) and p.get("id"):
+                    ids.append(str(p["id"]))
+    for pid in ids:
+        names = _env_names_for_provider(pid)
+        if not names:
+            continue
+        if any((env.get(n) or "").strip() for n in names):
+            continue
+        key = provider_api_key_from_config(pid, data=cfg)
+        if not key:
+            continue
+        env[names[0]] = key
+        logger.debug(
+            "Injected %s from config for provider=%s (value redacted)",
+            names[0],
+            pid,
+        )
+    if any(str(p).lower() == "claude" for p in ids):
+        _inject_claude_oauth(env)
+    return env
+
+
+def _inject_claude_oauth(env: dict[str, str]) -> None:
+    """Hand the CLI a live Claude session token (ccs keeps it out of ~/.claude)."""
+    if (env.get("CODEXBAR_CLAUDE_OAUTH_TOKEN") or "").strip():
+        return
+    try:
+        from codexbar_gui.claude_oauth import access_token
+    except ImportError:
+        return
+    try:
+        token = access_token()
+    except Exception:
+        logger.warning("Claude OAuth token lookup failed", exc_info=True)
+        return
+    if token:
+        env["CODEXBAR_CLAUDE_OAUTH_TOKEN"] = token
+        logger.debug("Injected CODEXBAR_CLAUDE_OAUTH_TOKEN (value redacted)")
 
 
 def _cli_provider_arg(provider: Optional[str]) -> Optional[str]:
@@ -746,6 +946,8 @@ def _source_attempts(provider: Optional[str], configured: Optional[str]) -> List
     Claude:
       - auto → oauth, then cli (skip hanging web)
       - api alone often 401s on personal keys; still fall back to oauth/cli
+    Zai / API-key providers:
+      - prefer ``api`` when a key is present (CLI needs env, not config alone)
     """
     pid = (provider or "").lower()
     if configured and configured != "auto":
@@ -757,6 +959,13 @@ def _source_attempts(provider: Optional[str], configured: Optional[str]) -> List
         return ["oauth", "cli"]
     if pid == "codex":
         return ["oauth", "cli", None]  # None = auto
+    # zai/glm/zhipu: official Linux CLI only fetches via API key env
+    if pid in {"zai", "glm", "zhipu"}:
+        if provider_has_api_key(pid):
+            return ["api", None]
+        return ["api"]
+    if pid in _PROVIDER_API_ENV and provider_has_api_key(pid):
+        return ["api", None]
     return [None]
 
 
@@ -794,11 +1003,38 @@ def _friendly_claude_error(msg: Optional[str], source: Optional[str]) -> Optiona
         )
     if "rate limit" in m:
         return msg  # already friendly from CLI
+    if "access token missing" in m:
+        return (
+            "No Claude session token found in ~/.claude or any ccs instance. "
+            "Log in with `claude` (or `ccs use <instance>`), then Refresh."
+        )
     if "subscription notice without session" in m or "without session quota" in m:
         return (
             "Claude CLI has no session quota right now (subscription notice only). "
             "Try `claude login`, or wait for OAuth rate limit to clear. "
             "Cost chart below still uses local logs."
+        )
+    if source:
+        return f"{msg} (source={source})"
+    return msg
+
+
+def _friendly_zai_error(msg: Optional[str], source: Optional[str]) -> Optional[str]:
+    if not msg:
+        return msg
+    m = msg.lower()
+    if "no available fetch strategy" in m or "fetch strategy" in m:
+        if not provider_has_api_key("zai"):
+            return (
+                "Z.ai needs an API key. Set Z_AI_API_KEY in the environment, "
+                "or paste it under Settings → zai → API key (saved to "
+                "~/.config/codexbar/config.json). Usage source: api."
+            )
+        return (
+            "Z.ai fetch failed even with an API key. "
+            "Confirm the BigModel / Z_AI_API_KEY is valid, source=api, "
+            "then Refresh. Official CLI: "
+            "`Z_AI_API_KEY=… codexbar usage --provider zai --source api --format json`."
         )
     if source:
         return f"{msg} (source={source})"
@@ -822,6 +1058,7 @@ def fetch_from_cli(
     attempts = _source_attempts(prov, configured)
 
     last: Optional[List[ProviderView]] = None
+    pid_l = (prov or "").lower()
     for src in attempts:
         views = _run_usage_cli(
             binary,
@@ -831,11 +1068,14 @@ def fetch_from_cli(
         )
         if not views:
             continue
-        # Friendly Claude messages
-        if (prov or "").lower() == "claude":
-            for v in views:
-                if v.error:
-                    v.error = _friendly_claude_error(v.error, src)
+        # Friendly provider messages
+        for v in views:
+            if not v.error:
+                continue
+            if pid_l == "claude":
+                v.error = _friendly_claude_error(v.error, src)
+            elif pid_l in {"zai", "glm", "zhipu"}:
+                v.error = _friendly_zai_error(v.error, src)
         last = views
         # Prefer a successful window
         if any(v.ok for v in views):
@@ -846,8 +1086,8 @@ def fetch_from_cli(
         # 401 / auth → try next source
         if any(_is_auth_fallback_error(e) for e in errs):
             continue
-        # Other hard errors: still try next for Claude, stop for others
-        if (prov or "").lower() != "claude":
+        # Other hard errors: still try next for Claude / zai api fallbacks
+        if pid_l not in {"claude", "zai", "glm", "zhipu"}:
             return views
     return last
 
@@ -900,6 +1140,7 @@ def _run_usage_cli(
     if source:
         cmd.extend(["--source", source])
     logger.info("CLI: %s", " ".join(cmd))
+    child_env = build_cli_env(provider)
     try:
         proc = subprocess.run(
             cmd,
@@ -907,6 +1148,7 @@ def _run_usage_cli(
             text=True,
             timeout=timeout + 5.0,
             check=False,
+            env=child_env,
         )
     except subprocess.TimeoutExpired:
         logger.warning("codexbar CLI timed out: %s", " ".join(cmd))

@@ -82,7 +82,7 @@ models:
     backend: lemonade
     model_id: Qwen3.5-4B-UD-Q4_K_XL
     size_gb: 2.7
-    idle_unload_after_s: 300
+    idle_unload_after_s: 1800  # keep warm when MemAvailable high
     checkpoints:
       main: unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL
     recipe: llamacpp
@@ -142,7 +142,9 @@ models:
     backend: lemonade
     model_id: Qwen3.6-35B-A3B-heretic-NativeMTP-APEX-I-Balanced
     size_gb: 24.2
-    idle_unload_after_s: 1800
+    size_work_gb: 28.0  # SMO admission cost incl. KV headroom (2026-07-16)
+    tier: floating
+    idle_unload_after_s: 7200  # keep warm when MemAvailable high
     checkpoints:
       main: SC117/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-GGUF:Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Balanced.gguf
     # 0015: repo is on HF Xet storage with a stale LFS etag, so `lemonade pull`
@@ -152,7 +154,7 @@ models:
     revision: dc1e5523d5924b641adb0fabb4ecde27fc261b0b
     recipe: llamacpp
     recipe_options:
-      ctx_size: 131072
+      ctx_size: 98304  # ~96k: long sessions need room; 131k thrash on UMA  # work profile; 131k reserved for long later
       llamacpp_backend: vulkan
       llamacpp_args: "-np 1 -kvu --spec-type draft-mtp --spec-draft-n-max 2 --no-warmup"
     label: tool-calling
@@ -204,7 +206,8 @@ models:
     backend: lemonade
     model_id: Gemma4-26B-A4B-QAT-Uncensored-Balanced-Q4_K_M
     size_gb: 15.8
-    idle_unload_after_s: 1800
+    tier: floating
+    idle_unload_after_s: 3600  # keep warm when MemAvailable high
     checkpoints:
       main: HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M
       draft: HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:mtp-gemma-4-26B-A4B-it.gguf
@@ -258,13 +261,14 @@ models:
     backend: lemonade
     model_id: Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M
     size_gb: 22.0
-    idle_unload_after_s: 900
+    tier: floating
+    idle_unload_after_s: 7200  # keep warm when MemAvailable high
     checkpoints:
       main: mrexodia/Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-GGUF:Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q4_K_M.gguf
       mmproj: SC117/Ornith-1.0-35B-MTP-APEX-GGUF:mmproj-F16.gguf
     recipe: llamacpp
     recipe_options:
-      ctx_size: 131072
+      ctx_size: 98304  # ~96k: long sessions need room; 131k thrash on UMA
       llamacpp_backend: vulkan
       llamacpp_args: "-np 4 -kvu"
     label:
@@ -297,7 +301,7 @@ models:
     backend: lemonade
     model_id: Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M
     size_gb: 5.6
-    idle_unload_after_s: 1800
+    idle_unload_after_s: 3600  # keep warm when MemAvailable high
     checkpoints:
       main: empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M
     recipe: llamacpp
@@ -331,31 +335,32 @@ models:
     backend: lemonade
     model_id: Qwen3.5-122B-A10B-Uncensored-APEX-Compact
     size_gb: 59.2
+    size_work_gb: 64.0  # weights+KV work cost (SMO)
     tier: exclusive
-    idle_unload_after_s: 600
+    idle_unload_after_s: 1800  # keep warm when MemAvailable high
     checkpoints:
       main: SC117/Qwen3.5-122B-A10B-Uncensored-APEX-Compact-GGUF:Qwen3.5-122B-A10B-Uncensored-APEX-Compact.gguf
       mmproj: SC117/Qwen3.5-122B-A10B-Uncensored-APEX-Compact-GGUF:mmproj-Qwen3.5-122B-A10B-Uncensored-HauhauCS-Aggressive-f16.gguf
     recipe: llamacpp
     recipe_options:
-      ctx_size: 131072
+      ctx_size: 65536  # work profile; proven chat 2026-07-16
       llamacpp_backend: vulkan
       llamacpp_args: "-np 1 -kvu --no-warmup"
     label: tool-calling
 
   - alias: main-cloud
-    backend: anthropic
-    model_id: claude-sonnet-4-6
+    backend: cliproxy
+    model_id: claude-sonnet-5
     size_gb: cloud
 
   - alias: coder-cloud
-    backend: anthropic
-    model_id: claude-sonnet-4-6
+    backend: cliproxy
+    model_id: claude-sonnet-5
     size_gb: cloud
 
   - alias: thinking-cloud
-    backend: anthropic
-    model_id: claude-opus-4-8
+    backend: cliproxy
+    model_id: claude-opus-5
     size_gb: cloud
 
   - alias: gpt4o-cloud
@@ -389,9 +394,10 @@ models:
     backend: lemonade
     model_id: Gemma4-26B-A4B-Uncensored-Vision-Q4_K_M
     size_gb: 17.1
+    tier: floating
     # On-demand vision lane — release the floating slot after an idle burst
     # (0011). Value provisional (render-only); hardware-tune on the physical box.
-    idle_unload_after_s: 300
+    idle_unload_after_s: 1800  # keep warm when MemAvailable high
 
   # Screen UI / OCR — was only registered in llm-litellm's config, never in
   # this file (pre-existing drift against CLAUDE.md §7's single-source-of-
@@ -420,6 +426,7 @@ models:
     backend: lemonade
     model_id: Qwen3VL-8B-Instruct-Q4_K_M
     size_gb: 5.4
+    tier: floating
     checkpoints:
       main: Qwen/Qwen3-VL-8B-Instruct-GGUF:Qwen3VL-8B-Instruct-Q4_K_M.gguf
       mmproj: Qwen/Qwen3-VL-8B-Instruct-GGUF:mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf

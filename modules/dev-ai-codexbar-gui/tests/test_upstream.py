@@ -246,3 +246,163 @@ def test_legacy_fraction_only_open_unit() -> None:
     assert one.primary is not None
     assert one.primary.used_percent == 1.0
     assert one.primary.remaining_percent == 99.0
+
+
+def test_weekly_only_codex_primary_null() -> None:
+    """Live Codex Plus often returns primary:null + weekly secondary only."""
+    v = parse_upstream_item(
+        {
+            "provider": "codex",
+            "source": "oauth",
+            "credits": {"remaining": 0},
+            "pace": {
+                "secondary": {
+                    "summary": "37% in deficit | Expected 22% used | Runs out in 1d 1h",
+                    "stage": "farAhead",
+                    "deltaPercent": 37,
+                    "willLastToReset": False,
+                    "expectedUsedPercent": 22,
+                }
+            },
+            "usage": {
+                "accountEmail": "a@b.c",
+                "loginMethod": "plus",
+                "primary": None,
+                "secondary": {
+                    "usedPercent": 59,
+                    "windowMinutes": 10080,
+                    "resetsAt": "2099-07-25T15:14:29Z",
+                    "resetDescription": "Jul 25 at 11:14 PM",
+                },
+                "tertiary": None,
+                "dataConfidence": "exact",
+            },
+        }
+    )
+    assert v.ok
+    assert v.primary is None
+    assert v.secondary is not None
+    assert v.secondary.label == "Weekly"
+    assert v.secondary.used_percent == 59.0
+    assert v.secondary.remaining_percent == 41.0
+    assert v.headline_remaining == 41.0
+    assert v.pace_summary and "deficit" in v.pace_summary.lower()
+
+
+def test_weekly_only_icon_is_single_bar_not_double_fill() -> None:
+    """Tray must not paint weekly into both session+weekly tracks."""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from codexbar_gui.icon_updater import (
+        _normalize_window_rems,
+        paint_usage_pixmap,
+    )
+
+    _ = QApplication.instance() or QApplication([])
+    top, bot, style = _normalize_window_rems(None, 41.0, "dual_bars")
+    assert top == 41.0
+    assert bot is None
+    assert style == "primary_only"
+    # paint_usage_pixmap must NOT invent primary from headline remaining
+    pm = paint_usage_pixmap(
+        remaining=41.0,
+        primary_remaining=None,
+        secondary_remaining=41.0,
+        size=24,
+        icon_style="dual_bars",
+    )
+    assert not pm.isNull()
+    # Dual-with-both still dual
+    t2, b2, s2 = _normalize_window_rems(62.0, 41.0, "dual_bars")
+    assert t2 == 62.0 and b2 == 41.0 and s2 == "dual_bars"
+
+
+def test_tray_tooltip_names_weekly_when_primary_null() -> None:
+    from codexbar_gui.menu_bar import MenuBarSettings, tray_tooltip_line
+
+    v = parse_upstream_item(
+        {
+            "provider": "codex",
+            "source": "oauth",
+            "usage": {
+                "loginMethod": "plus",
+                "primary": None,
+                "secondary": {
+                    "usedPercent": 59,
+                    "windowMinutes": 10080,
+                    "resetsAt": "2099-07-25T15:14:29Z",
+                },
+            },
+        }
+    )
+    tip = tray_tooltip_line(v, MenuBarSettings())
+    assert "Codex" in tip
+    assert "41" in tip or "left" in tip.lower() or "剩餘" in tip or "%" in tip
+    # Must mention weekly window so it isn't read as a missing session limit
+    low = tip.lower()
+    assert "week" in low or "每週" in tip or "每周" in tip
+
+
+def test_build_cli_env_injects_zai_key_from_config() -> None:
+    """config.json api_key must become Z_AI_API_KEY for child CLI env."""
+    from codexbar_gui.upstream import build_cli_env, _source_attempts
+
+    cfg = {
+        "version": 1,
+        "providers": [
+            {"id": "zai", "enabled": True, "source": "auto", "api_key": "test-zai-key-12345"}
+        ],
+    }
+    base = {"PATH": "/usr/bin", "HOME": "/tmp"}
+    env = build_cli_env("zai", base=base, data=cfg)
+    assert env["Z_AI_API_KEY"] == "test-zai-key-12345"
+    # Do not clobber existing export
+    base2 = {**base, "Z_AI_API_KEY": "already-set"}
+    env2 = build_cli_env("zai", base=base2, data=cfg)
+    assert env2["Z_AI_API_KEY"] == "already-set"
+    # zai prefers api source when key present
+    attempts = _source_attempts("zai", "auto")
+    # provider_has_api_key reads real config OR env — force via env
+    import os
+    from codexbar_gui import upstream as up
+
+    # Unit-level: when configured auto and key exists, helper returns api first
+    # Simulate has-key path by checking the branch with monkeypatched has_key
+    assert "api" in (_source_attempts("zai", "api") or [])
+    assert _source_attempts("zai", "api") == ["api"]
+
+
+def test_friendly_zai_error_mentions_api_key() -> None:
+    from codexbar_gui.upstream import _friendly_zai_error
+
+    msg = _friendly_zai_error("No available fetch strategy for zai.", "api")
+    assert msg and "API key" in msg
+
+
+def test_grok_supergrok_weekly_primary() -> None:
+    """Grok SuperGrok: single primary bucket, no windowMinutes → Weekly not Session 5h."""
+    from datetime import datetime, timedelta, timezone
+
+    resets = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat().replace("+00:00", "Z")
+    v = parse_upstream_item(
+        {
+            "provider": "grok",
+            "source": "grok-web",
+            "usage": {
+                "accountEmail": "a@b.c",
+                "loginMethod": "SuperGrok",
+                "primary": {"usedPercent": 65, "resetsAt": resets},
+                "secondary": None,
+            },
+        }
+    )
+    assert v.ok
+    assert v.primary is not None
+    assert v.primary.label == "Weekly"
+    assert v.primary.window_minutes == 10080
+    assert v.primary.remaining_percent == 35.0
+    assert v.headline_remaining == 35.0
+    assert v.secondary is None

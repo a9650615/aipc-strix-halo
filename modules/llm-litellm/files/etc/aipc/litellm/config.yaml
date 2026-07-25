@@ -201,20 +201,32 @@ model_list:
       max_input_tokens: 262144
       max_output_tokens: 8192
 
+  # Cloud aliases ride the Claude subscription through CLIProxy, not a paid
+  # ANTHROPIC_API_KEY — cloud-keys.env only ever carries CLIPROXY_API_KEY, so
+  # the anthropic/ backend these used to name was dead on arrival.
   - model_name: main-cloud
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/claude-sonnet-5
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
 
   - model_name: coder-cloud
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/claude-sonnet-5
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
 
   - model_name: thinking-cloud
     litellm_params:
-      model: anthropic/claude-opus-4-8
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/claude-opus-5
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
 
   - model_name: gpt4o-cloud
     litellm_params:
@@ -274,6 +286,134 @@ model_list:
       api_key: none
       timeout: 600
       num_retries: 0
+
+  # ------------------------------------------------------------------
+  # CLIProxy-backed surface (unified gateway, 2026-07-18)
+  # Hermes / voice / agents must call these names only via :4000.
+  # Upstream credentials live in CLIProxy; LiteLLM needs CLIPROXY_API_KEY
+  # in /etc/aipc/env.d/llm-litellm/cloud-keys.env (not in git).
+  # ------------------------------------------------------------------
+  - model_name: gpt-5.6-sol
+    litellm_params:
+      model: openai/gpt-5.6-sol
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+    model_info:
+      max_input_tokens: 1050000
+      max_output_tokens: 16384
+
+  - model_name: gpt-5.6-luna
+    litellm_params:
+      model: openai/gpt-5.6-luna
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+    model_info:
+      max_input_tokens: 1050000
+      max_output_tokens: 16384
+
+  - model_name: gpt-5.6-terra
+    litellm_params:
+      model: openai/gpt-5.6-terra
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+    model_info:
+      max_input_tokens: 1050000
+      max_output_tokens: 16384
+
+  - model_name: gpt-5.5
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+
+  - model_name: gpt-5.4
+    litellm_params:
+      model: openai/gpt-5.4
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+
+  - model_name: gpt-5.4-mini
+    litellm_params:
+      model: openai/gpt-5.4-mini
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+
+  - model_name: gpt-5.3-codex-spark
+    litellm_params:
+      model: openai/gpt-5.3-codex-spark
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+
+  - model_name: codex-auto-review
+    litellm_params:
+      model: openai/codex-auto-review
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+
+  # Claude / other cloud IDs Hermes already selects by bare name (via CLIProxy).
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: openai/claude-sonnet-4-6
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+
+  - model_name: claude-sonnet-5
+    litellm_params:
+      model: openai/claude-sonnet-5
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+
+  - model_name: claude-opus-5
+    litellm_params:
+      model: openai/claude-opus-5
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+
+  - model_name: claude-opus-4-8
+    litellm_params:
+      model: openai/claude-opus-4-8
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+
+  - model_name: claude-opus-4-7
+    litellm_params:
+      model: openai/claude-opus-4-7
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+
+  - model_name: claude-fable-5
+    litellm_params:
+      model: openai/claude-fable-5
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
 
 router_settings:
   timeout: 600

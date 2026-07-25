@@ -1,30 +1,55 @@
 ---
 import App from "../layouts/App.astro";
 ---
-<App title="AIPC Memory">
-  <section class="hero"><p class="eyebrow">MEM0 · LONG-TERM MEMORY</p><h1>Memory</h1><p id="summary">Loading memories…</p></section>
-  <section class="controls" aria-label="Memory filters">
-    <input id="query" placeholder="Semantic search…" />
-    <select id="user"><option value="">user_id (all)</option></select>
-    <select id="agent"><option value="">agent_id (all)</option></select>
-    <select id="app"><option value="">app_id (all)</option></select>
-    <button id="search">Search</button>
-    <button id="list">List all</button>
+<App title="AIPC 記憶">
+  <section class="hero memory-hero compact-hero">
+    <div class="hero-main">
+      <p class="eyebrow" data-i18n="memory.eyebrow">MEM0 · 長期記憶</p>
+      <h1 data-i18n="memory.title">記憶</h1>
+      <p id="summary" class="hero-summary" data-i18n="memory.loading">正在載入記憶…</p>
+    </div>
   </section>
-  <section aria-label="Stored memories"><ul id="memories"></ul></section>
+
+  <section class="memory-panel" aria-label="Memory workspace">
+    <div class="controls memory-controls" aria-label="Memory filters">
+      <input id="query" data-i18n-placeholder="memory.search.ph" placeholder="語意搜尋…" />
+      <select id="user"><option value="" data-i18n="memory.user">使用者（全部）</option></select>
+      <select id="agent"><option value="" data-i18n="memory.agent">代理人（全部）</option></select>
+      <select id="app"><option value="" data-i18n="memory.app">應用（全部）</option></select>
+      <button id="search" type="button" data-i18n="memory.search">搜尋</button>
+      <button id="list" type="button" data-i18n="memory.list">列出全部</button>
+    </div>
+    <ul id="memories" class="memory-list" aria-label="Stored memories"></ul>
+    <p id="memory-empty" class="empty hidden" data-i18n="memory.empty">沒有符合的記憶</p>
+  </section>
+
   <script>
+    import { t, applyDom } from "../scripts/i18n.js";
+
     const summary = document.querySelector("#summary");
+    const empty = document.querySelector("#memory-empty");
     const value = (id) => document.querySelector(`#${id}`).value.trim();
     const scope = () => Object.fromEntries(
       [["user_id", value("user")], ["agent_id", value("agent")], ["app_id", value("app")]].filter(([, v]) => v)
     );
+
     function renderRows(items) {
-      summary.textContent = `${items.length} memories`;
-      document.querySelector("#memories").replaceChildren(...items.map((m) => {
+      summary.textContent = t("memory.count", { n: items.length });
+      const list = document.querySelector("#memories");
+      if (!items.length) {
+        list.replaceChildren();
+        empty?.classList.remove("hidden");
+        return;
+      }
+      empty?.classList.add("hidden");
+      list.replaceChildren(...items.map((m) => {
         const row = document.createElement("li");
+        row.className = "memory-card";
         const text = document.createElement("p");
+        text.className = "memory-text";
         text.textContent = m.memory || m.data || JSON.stringify(m);
         const meta = document.createElement("small");
+        meta.className = "memory-meta";
         meta.textContent = [
           m.user_id && `user:${m.user_id}`,
           m.agent_id && `agent:${m.agent_id}`,
@@ -32,26 +57,34 @@ import App from "../layouts/App.astro";
           m.created_at?.slice(0, 19),
           typeof m.score === "number" && `score:${m.score.toFixed(3)}`,
         ].filter(Boolean).join(" · ");
-        const del = Object.assign(document.createElement("button"), { textContent: "Delete" });
+        const del = Object.assign(document.createElement("button"), {
+          type: "button",
+          textContent: t("memory.delete"),
+          className: "ops-btn danger",
+        });
         del.onclick = async () => {
-          if (!confirm("Delete this memory?")) return;
+          if (!confirm(t("memory.delete.confirm"))) return;
           await fetch(`/api/v1/memories/${m.id}`, { method: "DELETE" });
-          list();
+          listMemories();
         };
         row.append(text, meta, del);
         return row;
       }));
     }
-    async function list() {
+
+    async function listMemories() {
       try {
         const params = new URLSearchParams({ ...scope(), limit: "100" });
         const data = await fetch(`/api/v1/memories?${params}`).then((r) => r.ok ? r.json() : Promise.reject(r.status));
         renderRows(data.results || []);
-      } catch { summary.textContent = "Memory service unavailable"; }
+      } catch {
+        summary.textContent = t("memory.unavailable");
+      }
     }
+
     async function search() {
       const query = value("query");
-      if (!query) return list();
+      if (!query) return listMemories();
       try {
         const data = await fetch("/api/v1/memories/search", {
           method: "POST",
@@ -59,8 +92,11 @@ import App from "../layouts/App.astro";
           body: JSON.stringify({ query, ...scope(), limit: 20 }),
         }).then((r) => r.ok ? r.json() : Promise.reject(r.status));
         renderRows(data.results || []);
-      } catch { summary.textContent = "Memory service unavailable"; }
+      } catch {
+        summary.textContent = t("memory.unavailable");
+      }
     }
+
     async function loadFacets() {
       try {
         const facets = await fetch("/api/v1/memories/facets").then((r) => r.ok ? r.json() : Promise.reject(r.status));
@@ -68,12 +104,22 @@ import App from "../layouts/App.astro";
           const select = document.querySelector(`#${id}`);
           for (const v of facets[key] || []) select.append(new Option(v, v));
         }
-      } catch { /* dropdowns just stay empty-but-usable if facets fail */ }
+      } catch { /* dropdowns stay usable */ }
     }
+
     document.querySelector("#search").onclick = search;
-    document.querySelector("#list").onclick = list;
+    document.querySelector("#list").onclick = listMemories;
     document.querySelector("#query").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
+    window.addEventListener("aipc:lang", () => {
+      applyDom(document);
+      for (const [id, key] of [["user", "memory.user"], ["agent", "memory.agent"], ["app", "memory.app"]]) {
+        const opt = document.querySelector(`#${id} option[value=""]`);
+        if (opt) opt.textContent = t(key);
+      }
+      listMemories();
+    });
+    applyDom(document);
     loadFacets();
-    list();
+    listMemories();
   </script>
 </App>

@@ -11,18 +11,18 @@ sys.path.insert(0, str(GUI_DIR))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
-def test_primary_usage_ui_not_qmenu_popup() -> None:
-    """Tray primary path is UsagePopover (QWidget Tool), not QMenu.popup."""
+def test_primary_usage_ui_is_popover_via_shell_adapter() -> None:
+    """UI stays UsagePopover; shell_adapter may host it in SNI QMenu (no rewrite)."""
     tray = (GUI_DIR / "codexbar_gui" / "tray_app.py").read_text()
     pop = (GUI_DIR / "codexbar_gui" / "popover.py").read_text()
+    shell = (GUI_DIR / "codexbar_gui" / "shell_adapter.py").read_text()
     assert "from codexbar_gui.popover import UsagePopover" in tray
-    assert "UsagePopover" in tray
-    assert "setContextMenu" not in tray or "Do NOT use setContextMenu" in tray
-    assert ".popup(" not in tray
-    # Popover documents / avoids grabbing popup; class is QWidget Tool window.
+    assert "build_tray_shell" in tray
     assert "class UsagePopover(QWidget)" in pop
     assert "class UsagePopover(QMenu)" not in pop
-    assert "grabbing popup" in pop or "Wayland" in pop
+    assert "SniMenuTrayShell" in shell
+    assert "WindowTrayShell" in shell
+    assert "QWidgetAction" in shell
 
 
 def test_popover_constructs_with_web_url() -> None:
@@ -93,6 +93,33 @@ def test_paint_dual_bar_non_null() -> None:
     ).isNull()
 
 
+def test_paint_weekly_only_collapses_to_single_bar() -> None:
+    """primary=null + weekly secondary → single capsule, not empty+weekly."""
+    from PySide6.QtWidgets import QApplication
+
+    from codexbar_gui.icon_updater import (
+        _normalize_window_rems,
+        paint_dual_window_pixmap,
+        paint_usage_pixmap,
+    )
+
+    _ = QApplication.instance() or QApplication([])
+    top, bot, style = _normalize_window_rems(None, 41.0, "dual_bars")
+    assert (top, bot, style) == (41.0, None, "primary_only")
+    # Must not copy remaining into a fake session bar alongside weekly
+    pm = paint_usage_pixmap(
+        remaining=41.0,
+        primary_remaining=None,
+        secondary_remaining=41.0,
+        size=24,
+        icon_style="dual_bars",
+    )
+    assert not pm.isNull()
+    assert not paint_dual_window_pixmap(
+        primary_remaining=None, secondary_remaining=41.0, size=24
+    ).isNull()
+
+
 def test_webapp_html_and_api_handlers(monkeypatch) -> None:
     """Drive shipped Handler: GET / is HTML dashboard; /api/usage is JSON."""
     from http.client import HTTPConnection
@@ -144,6 +171,11 @@ def test_webapp_html_and_api_handlers(monkeypatch) -> None:
         assert "CodexBar" in body
         assert "<html" in body.lower()
         assert "costHtml" in body or "Cost" in body or "Refresh" in body
+        # Provider tabs must be interactive (not decorative spans)
+        assert "data-filter" in body
+        assert "setFilter" in body
+        assert 'data-filter="all"' in body
+        assert "data-provider=" in body
         conn.close()
 
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
@@ -152,6 +184,20 @@ def test_webapp_html_and_api_handlers(monkeypatch) -> None:
         health = resp.read().decode()
         assert resp.status == 200
         assert "codexbar-gui-web" in health
+        conn.close()
+
+        # Drop-in for aipc-usage / Hermes quota MCP (replaces :8080 /usage)
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/usage")
+        resp = conn.getresponse()
+        usage_body = resp.read().decode()
+        assert resp.status == 200
+        import json as _json
+
+        rows = _json.loads(usage_body)
+        assert isinstance(rows, list) and rows
+        assert "provider" in rows[0] and "snapshot" in rows[0]
+        assert rows[0]["snapshot"].get("status") in ("ok", "error")
         conn.close()
 
         conn = HTTPConnection("127.0.0.1", port, timeout=10)

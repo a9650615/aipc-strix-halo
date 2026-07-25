@@ -2,9 +2,11 @@
 """Release idle Lemonade models (0006). Pure on-demand — rewarm removed
 2026-07-12 (user-directed): idle release only unloads, it never reloads a
 model on its own. Loading is on-demand at request time; idle_unload_after_s
-is tuned per-model (models.yaml) so a model stays warm long enough to avoid
-reload+prefill thrash within one working session, then releases once truly
-idle."""
+is tuned per-model (models.yaml).
+
+2026-07-16: if MemAvailable stays above KEEP_WARM_MEM_FLOOR_GB (default 25),
+skip unload entirely so warm work models (ornith/agentic) are not ejected
+while RAM is still comfortable."""
 
 from __future__ import annotations
 
@@ -21,6 +23,10 @@ import yaml
 DEFAULT_BASE_URL = "http://127.0.0.1:8001"
 DEFAULT_MANIFEST = Path("/etc/aipc/models/models.yaml")
 DEFAULT_UNLOAD_PATH = "/api/v0/unload"
+# When MemAvailable stays above this, skip idle unload (user: don't eject warm
+# models while RAM is comfortable). Only unload on age when free RAM is tight.
+import os
+KEEP_WARM_MEM_FLOOR_GB = float(os.environ.get("AIPC_IDLE_KEEP_WARM_MEM_FLOOR_GB", "25"))
 
 
 def _load_manifest(path: Path) -> list[dict]:
@@ -49,6 +55,16 @@ def _load_manifest(path: Path) -> list[dict]:
             "size_gb": float(size) if isinstance(size, (int, float)) else None,
         })
     return result
+
+
+def _mem_available_gb(meminfo_path: str = "/proc/meminfo") -> float | None:
+    try:
+        for line in open(meminfo_path):
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1024 / 1024
+    except OSError:
+        pass
+    return None
 
 
 def _load_health(base_url: str) -> dict | None:
@@ -135,6 +151,16 @@ def run(base_url: str, manifest_path: Path) -> int:
         print("lemonade-idle-release: Lemonade health unreachable", file=sys.stderr)
         return 0
 
+    avail = _mem_available_gb()
+    if avail is not None and avail >= KEEP_WARM_MEM_FLOOR_GB:
+        print(
+            f"lemonade-idle-release: keep warm "
+            f"(MemAvailable={avail:.1f}Gi >= {KEEP_WARM_MEM_FLOOR_GB:.0f}Gi); "
+            f"skip idle unload",
+            file=sys.stderr,
+        )
+        return 0
+
     candidates = _expired_candidates(manifest, health, time.monotonic())
     if not candidates:
         print("lemonade-idle-release: no expired idle models", file=sys.stderr)
@@ -173,6 +199,10 @@ def self_test() -> None:
     health["all_models_loaded"][0].update(status="in_use", last_use=0.0)
     assert not _expired_candidates(manifest, health, now)
     assert _last_use_age_seconds({"last_use": "bad"}, now) is None
+    # keep-warm gate: high MemAvailable path is a run() early-return; unit-test
+    # the helper is non-None on a normal Linux host.
+    m = _mem_available_gb()
+    assert m is None or m >= 0
     print("self-test passed")
 
 

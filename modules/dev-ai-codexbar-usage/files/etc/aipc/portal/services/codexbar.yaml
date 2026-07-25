@@ -1,0 +1,13 @@
+id: codexbar
+title: CodexBar Usage
+module: dev-ai-codexbar-usage
+kind: agent
+systemd: aipc-usage.service
+systemd_scope: user
+health: http://127.0.0.1:8080/health
+endpoint: http://127.0.0.1:8080
+ui: http://127.0.0.1:8080/
+tags:
+  - agent
+  - quota
+  - subscription

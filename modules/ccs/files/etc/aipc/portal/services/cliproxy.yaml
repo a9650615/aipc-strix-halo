@@ -1,0 +1,14 @@
+id: cliproxy
+title: CLIProxy (CCS)
+module: ccs
+kind: llm
+systemd: ccs-cliproxy.service
+systemd_scope: user
+# Root path lists endpoints without API key; /v1/models returns 401.
+health: http://127.0.0.1:8317/
+endpoint: http://127.0.0.1:8317
+tags:
+  - llm
+  - gateway
+  - oauth
+  - subscription

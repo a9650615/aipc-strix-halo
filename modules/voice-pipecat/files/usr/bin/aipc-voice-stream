@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -187,6 +188,7 @@ def run_stream_turn(
     buffer = ""
     saw_done = False
     error_msg = ""
+    first_play_t: list[float] = []  # wall clock of first audible chunk
 
     def _mark(stage: str) -> None:
         if timer is not None:
@@ -197,6 +199,8 @@ def run_stream_turn(
 
     def _speak(t: str) -> bool:
         # First real chunk about to play → first audible sound of the turn.
+        if not first_play_t:
+            first_play_t.append(time.monotonic())
         _mark("play_start")
         _mark("tts_first_audio")
         if speak is not None:
@@ -233,7 +237,8 @@ def run_stream_turn(
                 _mark("llm_first_token")
                 full_parts.append(piece)
                 buffer += piece
-                _ux("thinking", "".join(full_parts)[-80:], force=False)
+                # 0014 #5: no per-token overlay ticker — visible text follows
+                # the per-sentence TTS callback so display tracks speech.
                 chunks, buffer = stream_mod.feed_sentence_chunks(buffer)
                 for ch in chunks:
                     _mark("tts_request")
@@ -270,6 +275,14 @@ def run_stream_turn(
         return False, "stream ended without done"
     if tts_q.error_count and not tts_q.played_count:
         return False, "tts_all_chunks_failed"
+    # Publish total playback length for the wake follow-up window (0014 #4):
+    # per-chunk speak() records only the last sentence's length, which would
+    # shrink the follow-up window to one sentence. Real-TTS turns only.
+    if speak is None and tts_mod is not None and first_play_t and tts_q.played_count:
+        try:
+            tts_mod.record_last_tts_seconds(time.monotonic() - first_play_t[0])
+        except Exception:
+            pass
     return True, full
 
 
@@ -340,7 +353,9 @@ def main(argv=None) -> int:
             except Exception:
                 pass
         print(f"aipc-voice-stream: ok reply={detail[:120]!r}", flush=True)
-        _ux("done", detail[:80], force=True)
+        # 0014 #4: end batch-style — done (hold) → followup via a detached
+        # child, instead of _ux("done") + exit which let the answer vanish.
+        stream_mod.finish_turn_ux(detail)
         return 0
 
     print(f"aipc-voice-stream: fail {detail}", file=sys.stderr, flush=True)
@@ -393,6 +408,54 @@ def _self_test() -> int:
         assert rec["llm_ttft_ms"] is not None
         assert rec["tts_ttfa_ms"] is not None
         assert rec["perceived_ms"] is not None
+
+    # 0014 #4: batch-style ending — done carries a hold, followup child follows
+    with tempfile.TemporaryDirectory() as td:
+        old_xdg = os.environ.get("XDG_RUNTIME_DIR")
+        os.environ["XDG_RUNTIME_DIR"] = td
+        try:
+            spawned: list[list[str]] = []
+            ts = stream_mod.finish_turn_ux("测试答案", spawn=spawned.append)
+            state_p = Path(td) / "aipc-voice-state.json"
+            st = json.loads(state_p.read_text(encoding="utf-8"))
+            assert st["state"] == "done" and float(st["ttl_s"]) >= 12.0
+            assert spawned, "followup child not spawned"
+            # wake's trailing listening write must not cancel the follow-up
+            assert stream_mod._followup_should_write(st, ts)
+            assert stream_mod._followup_should_write(
+                {"state": "listening", "ts": ts + 5}, ts
+            )
+            assert not stream_mod._followup_should_write(
+                {"state": "thinking", "ts": ts + 5}, ts
+            )
+            assert stream_mod._followup_main([str(state_p), f"{ts:.6f}", "0", "30"]) == 0
+            st2 = json.loads(state_p.read_text(encoding="utf-8"))
+            assert st2["state"] == "followup" and float(st2["ttl_s"]) > 0
+        finally:
+            if old_xdg is None:
+                os.environ.pop("XDG_RUNTIME_DIR", None)
+            else:
+                os.environ["XDG_RUNTIME_DIR"] = old_xdg
+
+    # farewell reply: short hold, no followup child spawned
+    with tempfile.TemporaryDirectory() as td:
+        old_xdg = os.environ.get("XDG_RUNTIME_DIR")
+        os.environ["XDG_RUNTIME_DIR"] = td
+        try:
+            spawned2: list[list[str]] = []
+            stream_mod.finish_turn_ux(
+                "好的，那我就先休息了。如果您需要我，随时可以叫我。", spawn=spawned2.append
+            )
+            state_p = Path(td) / "aipc-voice-state.json"
+            st = json.loads(state_p.read_text(encoding="utf-8"))
+            assert st["state"] == "done"
+            assert float(st["ttl_s"]) < 12.0, "farewell should not get the long hold"
+            assert not spawned2, "farewell must not spawn a followup child"
+        finally:
+            if old_xdg is None:
+                os.environ.pop("XDG_RUNTIME_DIR", None)
+            else:
+                os.environ["XDG_RUNTIME_DIR"] = old_xdg
 
     print("aipc-voice-stream: self-test OK")
     return 0

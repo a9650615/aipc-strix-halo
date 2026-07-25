@@ -396,6 +396,7 @@ def doctor() -> None:
         results.append(vectors)
 
     results.extend(doctor_mod.check_voice_once())
+    results.extend(doctor_mod.check_voice_wake())
 
     table = Table(title="aipc doctor")
     table.add_column("Module")
@@ -488,7 +489,7 @@ def _providers_sync_all() -> bool:
     consumers = [
         ("opencode", opencode_sync_mod.sync_config, opencode_sync_mod.DEFAULT_OPENCODE_CONFIG),
         ("ccs", ccs_sync_mod.sync_extra_models, ccs_sync_mod.DEFAULT_CCS_SETTINGS),
-        ("hermes", hermes_sync_mod.sync_config, hermes_sync_mod.DEFAULT_HERMES_CONFIG),
+        ("hermes", hermes_sync_mod.sync_all, hermes_sync_mod.DEFAULT_HERMES_HOME / "{,profiles/*/}config.yaml"),
     ]
     any_ok = False
     for name, sync_fn, target in consumers:

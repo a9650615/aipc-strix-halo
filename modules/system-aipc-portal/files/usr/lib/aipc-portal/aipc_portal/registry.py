@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import subprocess
 import urllib.error
 import urllib.request
@@ -19,6 +20,8 @@ class ServiceMetadata:
     module: str
     kind: str
     systemd: str | None = None
+    # system (default) | user — user units need --user -M <primary>@
+    systemd_scope: str = "system"
     health: str | None = None
     endpoint: str | None = None
     ui: str | None = None
@@ -76,13 +79,22 @@ def _to_meta(data: dict[str, object]) -> ServiceMetadata | None:
         tags = data.get("tags", [])
         ui_raw = data.get("ui")
         ui = None if ui_raw in (None, "", "null") else str(ui_raw)
+        health_raw = data.get("health")
+        health = (
+            None
+            if health_raw in (None, "", "null", "Null", "NULL", "~")
+            else str(health_raw)
+        )
+        scope_raw = str(data.get("systemd_scope") or "system").strip().lower()
+        scope = "user" if scope_raw in ("user", "usr") else "system"
         return ServiceMetadata(
             id=str(data["id"]),
             title=str(data["title"]),
             module=str(data["module"]),
             kind=str(data["kind"]),
             systemd=str(data["systemd"]) if data.get("systemd") else None,
-            health=str(data["health"]) if data.get("health") else None,
+            systemd_scope=scope,
+            health=health,
             endpoint=str(data["endpoint"]) if data.get("endpoint") else None,
             ui=ui,
             tags=tuple(str(t) for t in tags) if isinstance(tags, list) else (),
@@ -90,6 +102,58 @@ def _to_meta(data: dict[str, object]) -> ServiceMetadata | None:
         )
     except KeyError:
         return None
+
+
+def primary_user(env: dict[str, str] | None = None) -> str:
+    """Desktop user whose --user bus owns OAuth-backed units (CLIProxy, usage)."""
+    e = env if env is not None else os.environ
+    return (e.get("AIPC_PRIMARY_USER") or e.get("AIPC_HERMES_USER") or "").strip()
+
+
+def _user_runtime_dir(username: str) -> str:
+    """XDG_RUNTIME_DIR for a login user (needed by systemctl --user)."""
+    try:
+        import pwd
+
+        uid = pwd.getpwnam(username).pw_uid
+    except Exception:
+        return ""
+    return f"/run/user/{uid}"
+
+
+def unit_command(
+    action: str,
+    name: str,
+    *,
+    scope: str = "system",
+    user: str | None = None,
+) -> list[str]:
+    """Build systemctl argv for system or user scope.
+
+    User units are owned by the desktop session. Calling
+    ``systemctl --user -M user@`` from a long-running *system* service
+    (aipc-portal) fails on this host with ``Connection reset by peer`` /
+    disconnected bus. ``runuser`` + ``XDG_RUNTIME_DIR`` talks to the user
+    manager the same way an interactive shell would, and is hardware-proven
+    from the portal cgroup.
+    """
+    if scope == "user":
+        u = (user or primary_user()).strip() or "unknown"
+        runtime = _user_runtime_dir(u)
+        env_runtime = f"XDG_RUNTIME_DIR={runtime}" if runtime else "XDG_RUNTIME_DIR="
+        return [
+            "runuser",
+            "-u",
+            u,
+            "--",
+            "env",
+            env_runtime,
+            "systemctl",
+            "--user",
+            action,
+            name,
+        ]
+    return ["systemctl", action, name]
 
 
 def load_service_metadata(
@@ -116,9 +180,15 @@ def load_service_metadata(
     return services
 
 
-def unit_is_active(name: str, runner=subprocess.run) -> str:
+def unit_is_active(
+    name: str,
+    runner=subprocess.run,
+    *,
+    scope: str = "system",
+    user: str | None = None,
+) -> str:
     proc = runner(
-        ["systemctl", "is-active", name],
+        unit_command("is-active", name, scope=scope, user=user),
         capture_output=True,
         text=True,
         check=False,
@@ -126,7 +196,9 @@ def unit_is_active(name: str, runner=subprocess.run) -> str:
     return (proc.stdout or "").strip() or "inactive"
 
 
-def http_probe(url: str, timeout: float = 2.0) -> tuple[bool, str]:
+def http_probe(url: str, timeout: float = 0.5) -> tuple[bool, str]:
+    """Cheap liveness probe. Keep timeout short so a thrashing backend cannot
+    pin portal request threads (and pile ESTAB connections) for seconds."""
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             body = resp.read().decode(errors="replace")[:80].replace("\n", " ")
@@ -135,7 +207,7 @@ def http_probe(url: str, timeout: float = 2.0) -> tuple[bool, str]:
         return False, str(exc)
 
 
-def load_automation(url: str = AUTOMATION_URL, timeout: float = 1.0) -> list[dict[str, object]]:
+def load_automation(url: str = AUTOMATION_URL, timeout: float = 0.5) -> list[dict[str, object]]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -153,7 +225,12 @@ def probe_service(
 ) -> ServiceStatus:
     unit_state = "n/a"
     if meta.systemd:
-        unit_state = unit_active(meta.systemd)
+        scope = getattr(meta, "systemd_scope", "system") or "system"
+        try:
+            unit_state = unit_active(meta.systemd, scope=scope)
+        except TypeError:
+            # Older test doubles only accept the unit name.
+            unit_state = unit_active(meta.systemd)
     health_ok: bool | None = None
     health_detail = "not declared"
     if meta.health:
@@ -172,22 +249,31 @@ def probe_all(
     ]
 
 
-def start_unit(name: str, runner=subprocess.run) -> tuple[bool, str]:
+def start_unit(
+    name: str,
+    runner=subprocess.run,
+    *,
+    scope: str = "system",
+    user: str | None = None,
+) -> tuple[bool, str]:
     """Start a declared systemd unit (localhost manage action)."""
     if not name or not all(c.isalnum() or c in ".-_@" for c in name):
         return False, "invalid unit name"
-    for argv in (
-        ["systemctl", "start", name],
-        ["sudo", "-n", "systemctl", "start", name],
-    ):
+    if scope == "user" and not (user or primary_user()).strip():
+        return False, "AIPC_PRIMARY_USER unset (cannot start user unit)"
+    primary = unit_command("start", name, scope=scope, user=user)
+    candidates = [primary]
+    # System units may need passwordless sudo when portal is unprivileged.
+    if scope != "user":
+        candidates.append(["sudo", "-n", *primary])
+    last_detail = "start failed"
+    for argv in candidates:
         proc = runner(argv, capture_output=True, text=True, check=False)
         if proc.returncode == 0:
             return True, "started"
-        detail = (proc.stderr or proc.stdout or "").strip()
-        if "sudo" not in argv[0] and proc.returncode != 0:
-            continue
-        return False, detail or f"exit {proc.returncode}"
-    return False, "start failed"
+        last_detail = (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
+        # try next candidate
+    return False, last_detail
 
 
 def find_service(
@@ -211,7 +297,11 @@ def start_service(
         return False, "unknown service"
     if not meta.systemd:
         return False, "no systemd unit declared"
-    return start_unit(meta.systemd, runner=runner)
+    return start_unit(
+        meta.systemd,
+        runner=runner,
+        scope=getattr(meta, "systemd_scope", "system") or "system",
+    )
 
 
 def start_baseline_services(
@@ -223,7 +313,11 @@ def start_baseline_services(
     for meta in load_services(roots=roots):
         if "baseline" not in meta.tags or not meta.systemd:
             continue
-        ok, detail = start_unit(meta.systemd, runner=runner)
+        ok, detail = start_unit(
+            meta.systemd,
+            runner=runner,
+            scope=getattr(meta, "systemd_scope", "system") or "system",
+        )
         results.append((meta.id, ok, detail))
     return results
 

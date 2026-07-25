@@ -41,3 +41,6 @@ build/
 modules/system-aipc-portal/web/node_modules/
 modules/system-aipc-portal/web/.astro/
 modules/system-aipc-portal/web/dist/
+
+# Aider local config (cliproxy token)
+.aider.conf.yml

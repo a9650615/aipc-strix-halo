@@ -7,11 +7,23 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from aipc_portal import HOST, PORT
+from aipc_portal.agents import (
+    agents_snapshot,
+    get_delegation,
+    get_kanban,
+    log_tail,
+    resolve_hermes_home,
+)
 from aipc_portal.dashboard import device_snapshot, snapshot
+from aipc_portal.http_cache import TtlCache
 from aipc_portal.registry import render, start_baseline_services, start_service
+from aipc_portal.scheduling import scheduling_snapshot_cached
+
+_AGENTS_CACHE = TtlCache(ttl_s=3.0)
+_DASH_CACHE = TtlCache(ttl_s=2.5)
 
 STATIC_ROOT = Path(__file__).resolve().parent.parent / "static"
 MEM0_BASE = "http://127.0.0.1:7000"
@@ -44,7 +56,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "text/plain; charset=utf-8", b"ok\n")
             return
         if path == "/api/v1/dashboard":
-            self._send(200, "application/json; charset=utf-8", json.dumps(snapshot()).encode())
+            _value, body, etag = _DASH_CACHE.get_or_build(snapshot)
+            self._send_json_cached(body, etag)
             return
         if path == "/api/v1/device/events":
             self._stream_device_events()
@@ -54,6 +67,49 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/v1/memories":
             self._proxy_mem0("/memories" + (f"?{parsed.query}" if parsed.query else ""))
+            return
+        if path == "/api/v1/agents":
+            _value, body, etag = _AGENTS_CACHE.get_or_build(agents_snapshot)
+            self._send_json_cached(body, etag)
+            return
+        if path == "/api/v1/models":
+            _value, body, etag = scheduling_snapshot_cached()
+            self._send_json_cached(body, etag)
+            return
+        if path.startswith("/api/v1/agents/delegations/"):
+            delegation_id = path[len("/api/v1/agents/delegations/") :].strip("/")
+            if delegation_id and _safe_id(delegation_id):
+                detail = get_delegation(resolve_hermes_home(), delegation_id)
+                if detail is None:
+                    self._send(404, "application/json; charset=utf-8", b'{"detail":"not found"}')
+                    return
+                self._send(200, "application/json; charset=utf-8", json.dumps(detail).encode())
+                return
+            self._send(404, "application/json; charset=utf-8", b'{"detail":"not found"}')
+            return
+        if path.startswith("/api/v1/agents/kanban/"):
+            task_id = path[len("/api/v1/agents/kanban/") :].strip("/")
+            if task_id and _safe_id(task_id):
+                detail = get_kanban(resolve_hermes_home(), task_id)
+                if detail is None:
+                    self._send(404, "application/json; charset=utf-8", b'{"detail":"not found"}')
+                    return
+                self._send(200, "application/json; charset=utf-8", json.dumps(detail).encode())
+                return
+            self._send(404, "application/json; charset=utf-8", b'{"detail":"not found"}')
+            return
+        if path == "/api/v1/agents/logs":
+            qs = parse_qs(parsed.query or "")
+            query = (qs.get("q") or [""])[0]
+            try:
+                limit = int((qs.get("limit") or ["120"])[0])
+            except ValueError:
+                limit = 120
+            body = {
+                "logs": log_tail(resolve_hermes_home(), query=query, limit=limit),
+                "query": query,
+            }
+            self._send(200, "application/json; charset=utf-8", json.dumps(body).encode())
             return
         if self._send_static(path):
             return
@@ -163,6 +219,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_json_cached(self, body: bytes, etag: str) -> None:
+        """304 when client ETag matches — saves bandwidth and avoids SPA repaint."""
+        inm = (self.headers.get("If-None-Match") or "").strip()
+        if inm and inm == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "private, max-age=0, must-revalidate")
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "private, max-age=0, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
 
