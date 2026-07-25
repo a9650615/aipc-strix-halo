@@ -9,6 +9,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import yaml
+
 from aipc_portal.ops import service_can_start, service_display_state, service_group
 from aipc_portal.registry import ServiceStatus, load_automation, load_services, probe_all
 
@@ -26,6 +28,70 @@ SNAPSHOT_CACHE_S = 2.5
 _snapshot_lock = threading.Lock()
 _snapshot_cache: dict[str, object] | None = None
 _snapshot_cache_at = 0.0
+
+MODEL_MANIFEST = Path("/etc/aipc/models/models.yaml")
+IDLE_RELEASE_TIMER = "aipc-lemonade-idle-release.timer"
+
+
+def _systemctl_state(command: str) -> str:
+    try:
+        result = subprocess.run(
+            ["systemctl", command, IDLE_RELEASE_TIMER],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return "unknown"
+    return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+
+def compact_idle_snapshot(
+    models: list[dict[str, object]],
+    *,
+    manifest_path: Path = MODEL_MANIFEST,
+    now: float | None = None,
+    timer_enabled: str | None = None,
+    timer_active: str | None = None,
+) -> dict[str, object]:
+    enabled = timer_enabled if timer_enabled is not None else _systemctl_state("is-enabled")
+    active = timer_active if timer_active is not None else _systemctl_state("is-active")
+    timer = "active" if enabled == "enabled" and active == "active" else (
+        "inactive" if enabled == "enabled" else (
+            "disabled" if enabled == "disabled" else "unknown"
+        )
+    )
+    result: dict[str, object] = {
+        "model": "coder-compact", "state": "unknown", "timer": timer,
+        "timeout_s": None, "idle_s": None, "remaining_s": None,
+    }
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        policy = next(
+            row for row in manifest.get("models", [])
+            if row.get("alias") == "coder-compact"
+        )
+        model_id = str(policy["model_id"])
+        timeout = int(policy["idle_unload_after_s"])
+    except (OSError, yaml.YAMLError, AttributeError, TypeError, ValueError, KeyError, StopIteration):
+        return result
+    result["timeout_s"] = timeout
+    loaded = next(
+        (row for row in models
+         if row.get("backend") == "lemonade"
+         and row.get("model_name") == model_id),
+        None,
+    )
+    if loaded is None:
+        result["state"] = "unloaded"
+        return result
+    if loaded.get("status") == "in_use":
+        result["state"] = "in_use"
+        return result
+    last_use = loaded.get("last_use")
+    if not isinstance(last_use, (int, float)):
+        return result
+    idle = max(0, int((time.monotonic() if now is None else now) - last_use / 1000))
+    result.update(state="idle", idle_s=idle, remaining_s=max(0, timeout - idle))
+    return result
 
 
 def _read_text(path: Path) -> str | None:
@@ -657,6 +723,7 @@ def _build_snapshot(
         item.health_ok is not False and item.unit_state in ("active", "n/a") for item in statuses
     )
     runtime = runtime_snapshot(models, services)
+    runtime["compact_idle_release"] = compact_idle_snapshot(models)
     device = device_snapshot(device_path)
     npu = npu_snapshot(models, npu_device)
     platform = platform_snapshot()
