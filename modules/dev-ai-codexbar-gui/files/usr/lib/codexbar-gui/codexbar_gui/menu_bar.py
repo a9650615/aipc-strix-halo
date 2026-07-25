@@ -212,9 +212,13 @@ def tray_tooltip_line(
     if not getattr(view, "ok", False):
         err = (getattr(view, "error", None) or "unavailable")[:80]
         return f"{name}: {err}"
+    primary = getattr(view, "primary", None)
+    secondary = getattr(view, "secondary", None)
     rem = getattr(view, "headline_remaining", None)
-    if rem is None and getattr(view, "primary", None) is not None:
-        rem = getattr(view.primary, "remaining_percent", None)
+    if rem is None and primary is not None:
+        rem = getattr(primary, "remaining_percent", None)
+    if rem is None and secondary is not None:
+        rem = getattr(secondary, "remaining_percent", None)
     if rem is None:
         return str(name)
     if s.show_as == "used":
@@ -236,6 +240,17 @@ def tray_tooltip_line(
     bits = [str(name)]
     if plan:
         bits.append(str(plan))
+    # Weekly-only / session-only: name the window so tray tip isn't ambiguous
+    if primary is None and secondary is not None:
+        from codexbar_gui.i18n import t, translate_window_label
+
+        lab = getattr(secondary, "label", None) or t("weekly")
+        bits.append(translate_window_label(str(lab)))
+    elif primary is not None and secondary is None:
+        from codexbar_gui.i18n import t, translate_window_label
+
+        lab = getattr(primary, "label", None) or t("session")
+        bits.append(translate_window_label(str(lab)))
     if pct:
         bits.append(pct)
     return " · ".join(bits)

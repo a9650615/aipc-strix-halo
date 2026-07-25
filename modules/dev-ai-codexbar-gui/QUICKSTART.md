@@ -47,9 +47,10 @@ pip install PySide6>=6.6
 
 ## 啟動流程
 
-1. **自動啟動 HTTP server**（如果未運行）
-   - 默認端口：8080
+1. **常駐 usage web**（`codexbar-gui-web.service`，user unit）
+   - 埠：**8080**（HTML + `/usage` + `/health`，取代舊 `aipc-usage`）
    - 健康檢查：`http://127.0.0.1:8080/health`
+   - Hermes：`CODEXBAR_USAGE_BASE=http://127.0.0.1:8080`
 
 2. **創建系統托盤圖標**
    - 動態進度條圖標
@@ -57,7 +58,24 @@ pip install PySide6>=6.6
 
 3. **定期刷新數據**
    - 默認間隔：60 秒
-   - 從 HTTP server 獲取
+   - 優先讀官方 `codexbar usage` / 本機 web
+
+## 托盤定位（相容層）
+
+`shell_adapter` 只換「怎麼掛」，UI 仍是同一套 `UsagePopover`。
+
+| 環境變數 | 作用 |
+|----------|------|
+| （預設） | `window` — 自由視窗，**左鍵一定打得開**；假座標時貼該螢幕右上 |
+| `CODEXBAR_TRAY_SHELL=sni_menu` | 右鍵小選單 + 左鍵仍走 window（完整 UI 不能塞 QMenu.popup） |
+
+```bash
+# 預設即可
+flatpak run io.aipc.CodexBarGui
+```
+
+> Wayland 上完整 UI 用 `QMenu.popup` 會失敗（`Failed to create grabbing popup`），
+> 所以預設不再走那條路。
 
 ## 故障排除
 
@@ -81,10 +99,13 @@ Connection refused
 
 **解決方案**：
 ```bash
-# 手動啟動
-aipc-usage serve --port 8080 &
+# 正式：user unit（映像已 default.target.wants 啟用）
+systemctl --user enable --now codexbar-gui-web.service
 
-# 或通過 GUI 自動啟動（會自動檢測）
+# 或手動 web-only
+python3 -m codexbar_gui --web-only --web-port 8080
+
+# 不要再用 aipc-usage serve（legacy stub，不會綁 :8080）
 ```
 
 ### 圖標不顯示

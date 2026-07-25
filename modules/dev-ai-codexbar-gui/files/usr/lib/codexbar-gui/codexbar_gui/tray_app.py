@@ -25,6 +25,7 @@ from codexbar_gui.menu_bar import (
 )
 from codexbar_gui.popover import UsagePopover
 from codexbar_gui.server_launcher import kill_server, start_server
+from codexbar_gui.shell_adapter import build_tray_shell, choose_shell_mode
 from codexbar_gui.upstream import (
     ProviderView,
     fetch_enabled_providers,
@@ -86,6 +87,7 @@ class CodexBarApp:
         self._app: Optional[QApplication] = None
         self._tray: Optional[QSystemTrayIcon] = None
         self._popover: Optional[UsagePopover] = None
+        self._shell = None  # shell_adapter host (sni_menu | window)
         self._refresh_timer: Optional[QTimer] = None
         self._server_proc: Optional[subprocess.Popen] = None
         self._current_used: Optional[float] = None
@@ -147,9 +149,17 @@ class CodexBarApp:
             logger.warning("Web UI not started: %s", web_msg)
             print(f"CodexBar Web UI failed: {web_msg}", file=sys.stderr, flush=True)
 
-        self._popover = UsagePopover(self._host, self._port, web_url=self._web_url)
+        shell_mode = choose_shell_mode()
+        # Always a free top-level popover. (Embedding full UI in QMenu breaks
+        # left-click open on Wayland — no transient parent for grabbing popup.)
+        self._popover = UsagePopover(
+            self._host,
+            self._port,
+            web_url=self._web_url,
+            embedded=False,
+        )
         self._popover.quit_requested.connect(self._quit_app)
-        self._init_tray()
+        self._init_tray(shell_mode=shell_mode)
         self._start_server()
         self._refresh_data()
         self._start_refresh_timer()
@@ -161,38 +171,50 @@ class CodexBarApp:
                 "No system tray available.\nOpening usage window instead."
                 + (f"\nWeb: {self._web_url}" if self._web_url else ""),
             )
-            self._popover.show_at_tray(None)
+            if self._shell is not None:
+                self._shell.open()
+            else:
+                self._popover.show_at_tray(None)
         else:
             self._tray.show()
-            # Don't auto-pop in the center on launch — wait for tray click.
-            # (Previously singleShot(300) opened near cursor → looked centered.)
 
         try:
             return self._app.exec()
         finally:
             self._cleanup()
 
-    def _init_tray(self) -> None:
+    def _init_tray(self, *, shell_mode: Optional[str] = None) -> None:
         self._tray = QSystemTrayIcon()
         self._tray.setIcon(QIcon(make_simple_pixmap("C", DEFAULT_TRAY_SIZE, "#89b4fa")))
         tip = t("tray_tip")
         if self._web_url:
             tip += f"\nWeb: {self._web_url}"
         self._tray.setToolTip(tip)
-        # Do NOT use setContextMenu(QMenu) with QWidgetActions on Wayland.
+
+        mode = shell_mode or choose_shell_mode()
+        self._shell = build_tray_shell(self._tray, self._popover, mode=mode)
+        self._shell.attach()
+        logger.info("tray shell mode=%s", getattr(self._shell, "mode", mode))
+
+        # Left-click → shell.open(). sni_menu re-enters via SNI ContextMenu(x,y)
+        # so placement matches host right-click; window shell uses show_at_tray.
         self._tray.activated.connect(self._on_activated)
 
     def _open_popover(self, click_pos=None) -> None:
         if self._popover is None:
             return
         try:
-            if self._web_url:
+            if self._web_url and self._shell is not None:
+                self._shell.set_web_url(self._web_url)
+            elif self._web_url:
                 self._popover.set_web_url(self._web_url)
-            # Must pass click_pos from activated (Wayland seat serial / pointer)
             from PySide6.QtGui import QCursor
 
             pos = click_pos if click_pos is not None else QCursor.pos()
-            self._popover.show_at_tray(self._tray, click_pos=pos)
+            if self._shell is not None:
+                self._shell.open(click_pos=pos)
+            else:
+                self._popover.show_at_tray(self._tray, click_pos=pos)
         except Exception:
             logger.exception("failed to show popover")
 
@@ -267,7 +289,9 @@ class CodexBarApp:
                     tip = f"{head}\n{t('tray_tip')}\n{t('tray_click')}{extra}"
                 self._tray.setToolTip(tip)
             # Keep popover cache warm so open is instant (no blank Loading flash)
-            if self._popover is not None:
+            if self._shell is not None:
+                self._shell.on_views(typed)
+            elif self._popover is not None:
                 self._popover.apply_tray_views(typed)
         except Exception:
             logger.warning("apply views failed", exc_info=True)
@@ -322,9 +346,10 @@ class CodexBarApp:
                 click,
                 self._app.platformName() if self._app else "?",
             )
-            if self._popover is not None and self._popover.isVisible():
-                self._popover.hide()
-                return
+            # No isVisible() toggle: on xcb/Wayland a frameless top-level can
+            # stick at isVisible()=True while not mapped, which makes every click
+            # hit the close branch and the popover never opens. Always (re)open;
+            # dismissal is handled by unfocus / close button / Esc.
             self._open_popover(click_pos=click)
 
     def _quit_app(self) -> None:
@@ -356,7 +381,12 @@ class CodexBarApp:
                     self._fetch.terminate()
                     self._fetch.wait(500)
             self._fetch = None
-        # Stop popover reload worker
+        # Stop popover reload worker + shell host
+        if self._shell is not None:
+            try:
+                self._shell.close()
+            except Exception:
+                pass
         if self._popover is not None:
             worker = getattr(self._popover, "_worker", None)
             if worker is not None and worker.isRunning():

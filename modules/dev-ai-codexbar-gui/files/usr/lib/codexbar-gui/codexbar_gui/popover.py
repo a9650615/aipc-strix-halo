@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, List, Optional
+import time
+from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from codexbar_gui import kwin_place
 from codexbar_gui.cost import CostView, fetch_cost
 from codexbar_gui.i18n import t, translate_resets_in, translate_updated_label, translate_window_label
 from codexbar_gui.icon_updater import paint_dual_window_pixmap
@@ -702,6 +704,7 @@ class _ProviderCard(QFrame):
                 self._add_cost(root, cost)
             return
 
+        # Only render windows that exist — no "missing 5h/weekly" callouts.
         for win in view.all_windows():
             root.addWidget(_UsageMeter(win))
 
@@ -789,7 +792,7 @@ class _OverviewRow(QFrame):
         root.addLayout(head)
 
         if view.ok and (view.primary is not None or view.secondary is not None):
-            # Official overview: Session 5h + Weekly, each with pace vs expected
+            # Only existing windows (no empty Session/Weekly rows, no missing-limit notes)
             for win in (view.primary, view.secondary):
                 if win is None:
                     continue
@@ -824,7 +827,12 @@ class _OverviewRow(QFrame):
                             win.pace.expected_used_percent if win.pace else None
                         ),
                         color=color,
-                        height=12 if win is view.secondary else 14,
+                        # Single-window: use thicker bar; dual: weekly slightly thinner
+                        height=(
+                            14
+                            if view.primary is None or view.secondary is None
+                            else (12 if win is view.secondary else 14)
+                        ),
                     )
                 )
                 _add_pace_footer(
@@ -995,30 +1003,187 @@ def _is_wayland() -> bool:
     return False
 
 
+_NET_WORKAREA_CACHE: Optional[QRect] = None
+
+
+def _net_workarea() -> Optional[QRect]:
+    """X11 ``_NET_WORKAREA`` — the only reliable panel-aware rect under XWayland.
+
+    Qt's xcb ``availableGeometry`` ignores KDE/Wayland panels (DP-2 reports
+    avail=(0,0,full) so a top panel hides the popover). ``_NET_WORKAREA`` still
+    carries the real margins. Cached for the process (panel geometry is static).
+    """
+    global _NET_WORKAREA_CACHE
+    if _NET_WORKAREA_CACHE is not None:
+        return _NET_WORKAREA_CACHE if not _NET_WORKAREA_CACHE.isNull() else None
+    try:
+        import subprocess
+
+        out = subprocess.check_output(
+            ["xprop", "-root", "_NET_WORKAREA"], text=True, timeout=1
+        )
+        nums = [int(v) for v in out.split("=", 1)[1].replace(",", " ").split()]
+        _NET_WORKAREA_CACHE = QRect(nums[0], nums[1], nums[2], nums[3])
+    except Exception:
+        _NET_WORKAREA_CACHE = QRect()  # negative cache: xprop unavailable
+    return _NET_WORKAREA_CACHE if not _NET_WORKAREA_CACHE.isNull() else None
+
+
+def clamp_popover_rect(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    avail: QRect,
+    *,
+    margin: int = 4,
+    prefer_pin: bool = True,
+) -> Tuple[int, int, int, int]:
+    """Keep popover fully inside ``avail`` (multi-monitor / short screens).
+
+    When ``prefer_pin`` is True (default), shrink height first so the top-left
+    dock under the tray icon stays put — do not "float" the window to center.
+    Only shift Y when the pin itself is off-screen.
+    """
+    if avail.isNull() or avail.width() <= 0 or avail.height() <= 0:
+        return x, y, width, height
+
+    max_w = max(160, avail.width() - 2 * margin)
+    max_h = max(160, avail.height() - 2 * margin)
+    width = max(160, min(int(width), max_w))
+    height = max(160, min(int(height), max_h))
+
+    left = avail.left() + margin
+    right = avail.right() - margin
+    top = avail.top() + margin
+    bottom = avail.bottom() - margin
+
+    x = int(x)
+    y = int(y)
+    if x + width > right + 1:
+        x = right + 1 - width
+    if x < left:
+        x = left
+
+    if prefer_pin:
+        # Keep tray-following top edge; scroll body instead of sliding the window
+        if y < top:
+            y = top
+        if y > bottom - 160:
+            y = max(top, bottom - 160)
+        height = min(height, max(160, bottom + 1 - y))
+    else:
+        if y + height > bottom + 1:
+            y = bottom + 1 - height
+        if y < top:
+            y = top
+            height = min(height, max(160, bottom + 1 - y))
+
+    return x, y, width, height
+
+
+class _OutsideClickFilter(QObject):
+    """Hide popover on pointer press *outside* its window (Wayland-friendly).
+
+    Clicks on our own buttons/tabs must never dismiss — they often briefly
+    trip focusOut/ActivationChange on frameless Wayland windows.
+    """
+
+    def __init__(self, popover: "UsagePopover") -> None:
+        super().__init__(popover)
+        self._popover = popover
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        et = event.type()
+        if et not in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonDblClick,
+            QEvent.Type.MouseButtonRelease,
+        ):
+            return False
+        pop = self._popover
+        if not pop.isVisible() or pop._settings_open:
+            return False
+
+        # Any press/release on our widget tree = user interacting inside
+        if isinstance(obj, QWidget) and (obj is pop or pop.isAncestorOf(obj)):
+            pop._note_interaction()
+            return False
+
+        if et == QEvent.Type.MouseButtonRelease:
+            return False
+        if time.monotonic() < pop._open_grace_until:
+            return False
+
+        # Global position of the press
+        try:
+            gp = event.globalPosition().toPoint()  # type: ignore[attr-defined]
+        except Exception:
+            try:
+                gp = event.globalPos()  # type: ignore[attr-defined]
+            except Exception:
+                return False
+
+        # Geometry can lie on multi-monitor; also check widget under cursor
+        if pop.frameGeometry().adjusted(-8, -8, 8, 8).contains(gp):
+            pop._note_interaction()
+            return False
+        app = QApplication.instance()
+        if app is not None:
+            if app.activeModalWidget() is not None:
+                return False
+            try:
+                hit = app.widgetAt(gp)
+            except Exception:
+                hit = None
+            if hit is not None and (hit is pop or pop.isAncestorOf(hit)):
+                pop._note_interaction()
+                return False
+
+        pop._dismiss("press outside")
+        return False
+
+
 class UsagePopover(QWidget):
     """Tray popover shell. ``quit_requested`` exits the whole app (not just hide)."""
 
     quit_requested = Signal()
+
+    POINTER_LEAVE_GRACE = 2.0  # hovered, then moved the pointer away
+    UNTOUCHED_TIMEOUT = 8.0  # opened and never hovered at all
+    # KWin grants activation ~300ms after the map and often hands it straight back
+    # to the previously active app — ignore activation churn until it settles.
+    ACTIVATION_SETTLE = 2.5
 
     def __init__(
         self,
         host: str = "127.0.0.1",
         port: int = 8080,
         web_url: Optional[str] = None,
+        *,
+        embedded: bool = False,
     ) -> None:
-        # Tool + frameless: works as a tray popover under X11/XWayland.
-        # Pure Wayland Popup without a parent fails to map (see __main__ xcb prefer).
-        super().__init__(
-            None,
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.NoDropShadowWindowHint,
-        )
+        # embedded=True: plain child widget for SNI QMenu (shell positions us).
+        # embedded=False: free top-level window (legacy / X11 fallback).
+        self._embedded = embedded
+        self._host_closer = None  # optional callable from shell_adapter
+        if embedded:
+            super().__init__(None)
+        else:
+            # Frameless top-level for the window shell path.
+            super().__init__(
+                None,
+                Qt.WindowType.Window
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowStaysOnTopHint
+                | Qt.WindowType.NoDropShadowWindowHint,
+            )
         self.setObjectName("CodexBarPopover")
+        if not embedded:
+            # KWin matches this caption to dock us (see kwin_place).
+            self.setWindowTitle(kwin_place.WINDOW_TITLE)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        # True glass: transparent window; rounded shell paints the fill.
-        # Opaque surface + border-radius was the black corner "glue".
+        # True glass: transparent surface; rounded shell paints the fill.
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
@@ -1031,9 +1196,15 @@ class UsagePopover(QWidget):
         self._worker: Optional[_ReloadWorker] = None
         self._tab_buttons: Dict[str, _TabChip] = {}
         self._settings_open = False
-        self._hide_armed = False
-        self._last_anchor: Optional[QRect] = None
+        self._dismiss_watch: Optional[QTimer] = None
+        self._pointer_seen = False  # pointer entered the card at least once
+        self._pointer_left_at: Optional[float] = None
+        self._shown_at = 0.0
+        self._open_grace_until = 0.0  # ignore dismiss during open / in-panel clicks
+        self._outside_filter: Optional[_OutsideClickFilter] = None
+        self._last_anchor: Optional[QRect] = None  # tray/click rect used for dock
         self._pin_top_left: Optional[QPoint] = None  # keep corner after resize (Wayland)
+        self._dock_screen = None  # QScreen we must stay on (multi-monitor)
         self._ui_stale = True  # rebuild once when we have new data while hidden
 
         # Window itself is fully transparent; children sit in a glass shell.
@@ -1150,17 +1321,20 @@ class UsagePopover(QWidget):
 
         # Plain labels only — unicode icons break under Flatpak fontconfig
         self._btn_refresh = _MenuButton(t("refresh"))
+        self._btn_refresh.pressed.connect(self._note_interaction)
         self._btn_refresh.clicked.connect(lambda: self.reload(quiet=False))
         actions.addWidget(self._btn_refresh)
         self._web_btn = _MenuButton(t("usage_dashboard"))
+        self._web_btn.pressed.connect(self._note_interaction)
         self._web_btn.clicked.connect(self._open_web)
         actions.addWidget(self._web_btn)
         self._btn_settings = _MenuButton(t("settings"))
+        self._btn_settings.pressed.connect(self._note_interaction)
         self._btn_settings.clicked.connect(self._open_settings)
         actions.addWidget(self._btn_settings)
         self._btn_close = _MenuButton(t("close_panel"))
         self._btn_close.setToolTip(t("close_panel_tip"))
-        self._btn_close.clicked.connect(self.hide)
+        self._btn_close.clicked.connect(self.close_host)
         actions.addWidget(self._btn_close)
         self._btn_quit = _MenuButton(t("quit"))
         self._btn_quit.setToolTip(t("quit_tip"))
@@ -1172,10 +1346,47 @@ class UsagePopover(QWidget):
         self.setMinimumWidth(400)
         self.setMinimumHeight(280)
         self.resize(420, 520)
-        self._update_round_mask()
+        if not self._embedded:
+            self._update_round_mask()
+
+    def set_host_closer(self, closer) -> None:
+        """Shell adapter registers how to dismiss the host (e.g. close QMenu)."""
+        self._host_closer = closer
+
+    def prepare_open(self) -> None:
+        """Refresh body before the host shell shows us (menu aboutToShow)."""
+        if len(self._views) > 1:
+            self._active = "overview"
+        elif self._views and (
+            self._active is None
+            or (
+                self._active != "overview"
+                and self._active not in {v.provider for v in self._views}
+            )
+        ):
+            self._active = self._views[0].provider
+        if self._views:
+            if self._ui_stale or self._body_layout.count() == 0:
+                self._rebuild_tabs()
+                self._rebuild_body()
+                self._ui_stale = False
+            self.reload(quiet=True)
+        else:
+            self._status.setText(t("loading_providers"))
+            self.reload(quiet=False)
+
+    def close_host(self) -> None:
+        """Dismiss whatever is hosting us (SNI menu or free window)."""
+        if callable(self._host_closer):
+            try:
+                self._host_closer()
+                return
+            except Exception:
+                logger.debug("host_closer failed", exc_info=True)
+        self.hide()
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        # Keep window fully clear — only GlassShell draws the frosted panel
+        # Keep surface fully clear — only GlassShell draws the frosted panel
         del event
         p = QPainter(self)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
@@ -1184,10 +1395,13 @@ class UsagePopover(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        self._update_round_mask()
+        if not self._embedded:
+            self._update_round_mask()
 
     def _update_round_mask(self) -> None:
-        """Clip window to rounded rect so compositor cannot paint black corners."""
+        """Clip top-level window to rounded rect (skip when embedded in QMenu)."""
+        if self._embedded:
+            return
         r = self.rect()
         if r.width() < 4 or r.height() < 4:
             return
@@ -1216,7 +1430,7 @@ class UsagePopover(QWidget):
 
     def _request_quit(self) -> None:
         """Hide panel then ask the tray host to fully exit."""
-        self.hide()
+        self.close_host()
         self.quit_requested.emit()
 
     def show_at_cursor(self) -> None:
@@ -1232,34 +1446,102 @@ class UsagePopover(QWidget):
         if views:
             self._views = list(views)
 
+    def _bind_to_screen(self, screen) -> None:
+        """Map this window onto ``screen`` before geometry (multi-monitor critical)."""
+        if screen is None:
+            return
+        self._dock_screen = screen
+        try:
+            self.setScreen(screen)
+        except Exception:
+            pass
+        self.createWinId()
+        wh = self.windowHandle()
+        if wh is not None:
+            try:
+                wh.setScreen(screen)
+            except Exception:
+                pass
+
+    def _apply_global_geometry(self, x: int, y: int, w: int, h: int) -> None:
+        """Set geometry in global coords and push through QWindow APIs."""
+        self._pin_top_left = QPoint(x, y)
+        self.setGeometry(x, y, w, h)
+        self.move(x, y)
+        wh = self.windowHandle()
+        if wh is not None:
+            try:
+                wh.setGeometry(x, y, w, h)
+            except Exception:
+                pass
+            try:
+                wh.setPosition(x, y)
+            except Exception:
+                pass
+            try:
+                wh.setFramePosition(QPoint(x, y))
+            except Exception:
+                pass
+
     def _reassert_pin(self) -> None:
-        """Force window back to pinned top-left (WM sometimes recenters Tool)."""
+        """Force window back to pinned top-left on the dock screen."""
+        if self._embedded:
+            return
         if not self.isVisible() or self._pin_top_left is None:
             return
         p = self._pin_top_left
         w = max(self.width(), 420)
         h = max(self.height(), 200)
-        self.setGeometry(p.x(), p.y(), w, h)
-        self.move(p)
-        wh = self.windowHandle()
-        if wh is not None:
-            try:
-                wh.setFramePosition(p)
-            except Exception:
-                pass
+        x, y, w, h = self._clamp_to_screen(p.x(), p.y(), w, h)
+        self._pin_top_left = QPoint(x, y)
+        # If compositor put us on the wrong output, re-bind then place
+        target = self._dock_screen
+        if target is not None:
+            here = QGuiApplication.screenAt(self.frameGeometry().center())
+            if here is not None and here is not target:
+                self._bind_to_screen(target)
+                # Fall back to safe panel corner on the *correct* screen
+                avail = target.availableGeometry()
+                x = max(avail.left() + 8, min(x, avail.right() - w - 8))
+                y = avail.top() + 2
+                x, y, w, h = clamp_popover_rect(x, y, w, h, avail, prefer_pin=True)
+                self._pin_top_left = QPoint(x, y)
+        self._apply_global_geometry(x, y, w, h)
+
+    def _kwin_arm(
+        self, anchor: QRect, width: int, height: int, *, anchor_real: bool = True
+    ) -> None:
+        """Arm KWin to dock us the moment it maps the window (before first frame).
+
+        Docking *after* the map is visible as a jump from screen centre and
+        costs us activation. ``anchor_real=False`` tells KWin the rect is a guess,
+        so it derives one from the panel on the active output — that is what makes
+        multi-monitor work when Plasma reports no tray geometry.
+        """
+        if self._embedded or not _is_wayland():
+            return
+        kwin_place.arm(anchor, width, height, anchor_real=anchor_real)
+
+    def _kwin_disarm(self) -> None:
+        if self._embedded:
+            return
+        kwin_place.disarm()
 
     def show_at_tray(
         self,
         tray: Optional[QSystemTrayIcon] = None,
         click_pos: Optional[QPoint] = None,
     ) -> None:
-        """Open docked under the tray corner — keep last frame, no blank flash.
+        """Open docked under the tray icon — keep last frame, no blank flash.
 
         Critical: do **not** rebuild tabs/body on every open (deleteLater + glass
         compositing = ghost footer + blank). Reuse widgets; quiet-refresh only.
-        """
-        del click_pos  # intentionally ignored — unstable on KDE SNI
 
+        Multi-monitor: resolve the *screen* from the activation click first,
+        bind the window to that QScreen, then dock in that screen's available
+        rect. Never use XWayland-only global coords without setScreen — that
+        is what teleports the popover to the other monitor.
+        """
         if len(self._views) > 1:
             self._active = "overview"
         elif self._views and (
@@ -1271,16 +1553,53 @@ class UsagePopover(QWidget):
         ):
             self._active = self._views[0].provider
 
+        # Prefer activation seat position; fall back to live cursor
+        if click_pos is None:
+            try:
+                click_pos = QCursor.pos()
+            except Exception:
+                click_pos = None
+
         w = 420
         has_ui = self._body_layout.count() > 0 and not self._ui_stale
-        probe_h = max(self.height(), 400) if self._body_layout.count() > 0 else 400
-        x, y = self._stable_dock_pos(tray, w, probe_h)
-        self._pin_top_left = QPoint(x, y)
-        self._last_anchor = QRect(x + w - 28, y - 2, 24, 1)
+        # Compact tray card — never open as a near-fullscreen sheet (looks "centered")
+        probe_h = 480 if self._body_layout.count() == 0 else min(max(self.height(), 320), 560)
 
-        # Geometry BEFORE show so the WM maps at the dock, not screen center
-        self.setGeometry(x, y, w, probe_h)
-        self.move(x, y)
+        icon_rect = self._tray_icon_rect(tray)
+        anchor = icon_rect if icon_rect is not None else self._tray_anchor_rect(
+            tray, click_pos=click_pos
+        )
+        # Plasma SNI usually reports no icon rect; then the anchor is a guess and
+        # KWin must find the panel itself (multi-monitor: not always primary).
+        anchor_real = icon_rect is not None
+        self._last_anchor = QRect(anchor)
+        # screenAt() misreports the screen under multi-monitor HiDPI xcb (returns
+        # eDP-1 for a point inside DP-2), which makes _bind_to_screen teleport the
+        # window to the wrong monitor. Pin to the primary screen on xcb.
+        _app = QApplication.instance()
+        if _app is not None and _app.platformName() == "xcb":
+            screen = QGuiApplication.primaryScreen()
+        else:
+            screen = self._screen_at_point(anchor.center())
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        self._dock_screen = screen
+
+        if screen is not None:
+            avail_h = screen.availableGeometry().height()
+            probe_h = min(probe_h, max(240, int(avail_h * 0.55)), 640)
+
+        # Always dock top-right of the panel screen for tray UX (SNI click is often 0,0)
+        x, y = self._panel_corner_pos(screen, w, probe_h, click_pos=click_pos)
+        if screen is not None:
+            x, y, w, probe_h = clamp_popover_rect(
+                x, y, w, probe_h, screen.availableGeometry(), prefer_pin=True
+            )
+        self._pin_top_left = QPoint(x, y)
+
+        # Bind output FIRST so the compositor maps us on the tray's screen
+        self._bind_to_screen(screen)
+        self._apply_global_geometry(x, y, w, probe_h)
 
         if not has_ui:
             # First paint or data arrived while we were hidden
@@ -1298,90 +1617,393 @@ class UsagePopover(QWidget):
             self._status.setText(t("status_refreshing", base=base))
             self.reload(quiet=True)
 
+        # Same click that opened the tray must not immediately dismiss us
+        self._note_interaction(grace=0.5)
+        self._install_outside_filter()
+        # Wayland: KWin, not us, decides where the window goes — arm it before the
+        # map so placement happens in windowAdded, not as a jump after first paint.
+        # (No opacity gate: QWidget.setWindowOpacity is a no-op on Wayland.)
+        self._kwin_arm(anchor, w, probe_h, anchor_real=anchor_real)
         self.show()
+        # Re-apply after map + after content fit (compositor may ignore pre-show move)
         self._reassert_pin()
         self.raise_()
         self.activateWindow()
         self.setFocus(Qt.FocusReason.PopupFocusReason)
-        # WM may re-center Tool windows on map — pin again after events
         QTimer.singleShot(0, self._reassert_pin)
         QTimer.singleShot(50, self._reassert_pin)
-        QTimer.singleShot(200, self._reassert_pin)
+        QTimer.singleShot(150, self._reassert_pin)
+        QTimer.singleShot(300, self._reassert_pin)
+        QTimer.singleShot(1500, self._kwin_disarm)
+        self._start_dismiss_watch()
 
+        app = QApplication.instance()
+        plat = app.platformName() if app is not None else "?"
+        sname = screen.name() if screen is not None else "?"
+        edge = (
+            self._click_near_panel(anchor.center(), screen.availableGeometry())
+            if screen is not None
+            else "?"
+        )
+        fg = self.frameGeometry()
         logger.info(
-            "popover show pin=%s cached=%d has_ui=%s",
+            "popover show pin=%s fg=%s anchor=%s edge=%s screen=%s plat=%s cached=%d has_ui=%s",
             self._pin_top_left,
+            (fg.x(), fg.y(), fg.width(), fg.height()),
+            anchor,
+            edge or "mid(fallback-topright)",
+            sname,
+            plat,
             len(self._views),
             has_ui,
         )
 
     @staticmethod
-    def _stable_dock_pos(
+    def _tray_icon_rect(tray: Optional[QSystemTrayIcon]) -> Optional[QRect]:
+        """Return a usable tray icon rect, or None when the platform lies."""
+        if tray is None:
+            return None
+        try:
+            g = tray.geometry()
+        except Exception:
+            return None
+        # SNI often returns 0x0 at (0,0); require a real pixel size.
+        if not g.isValid() or not (2 < g.width() < 400 and 2 < g.height() < 200):
+            return None
+        return QRect(g)
+
+    @classmethod
+    def _tray_anchor_rect(
+        cls,
         tray: Optional[QSystemTrayIcon],
-        w: int,
-        h: int,
-    ) -> tuple[int, int]:
-        """Deterministic top-left for every open — same inputs → same (x, y)."""
-        margin = 8
-        screen = QGuiApplication.primaryScreen()
-        if screen is None:
-            return 80, 48
-        full = screen.geometry()
-        avail = screen.availableGeometry()
+        click_pos: Optional[QPoint] = None,
+    ) -> QRect:
+        """Icon rect to dock under: real tray geometry, else activation click."""
+        rect = cls._tray_icon_rect(tray)
+        if rect is not None:
+            return rect
 
-        # Prefer real tray icon rect when the platform provides it
-        if tray is not None:
-            try:
-                g = tray.geometry()
-                if (
-                    g.isValid()
-                    and 2 < g.width() < 400
-                    and 2 < g.height() < 200
-                    and (g.x() > 0 or g.y() > 0)
-                ):
-                    # Right-align popover under icon; y just below icon
-                    x = g.right() - w
-                    x = max(avail.left() + margin, min(x, avail.right() - w - margin))
-                    y = g.bottom() + 4
-                    # If icon is on bottom half, open upward
-                    if g.center().y() > full.center().y():
-                        y = g.top() - h - 4
-                    y = max(avail.top() + 2, min(y, avail.bottom() - 120))
-                    return int(x), int(y)
-            except Exception:
-                pass
+        # KDE StatusNotifierItem almost never exposes geometry — the click that
+        # opened us *is* the tray icon. Build a small rect around that point.
+        if click_pos is not None:
+            return QRect(click_pos.x() - 12, click_pos.y() - 12, 24, 24)
 
-        # Fixed panel corner (system tray cluster) — never depends on cursor
-        panel_top = avail.top() - full.top()
-        panel_bot = full.bottom() - avail.bottom()
-        x = avail.right() - w - margin
+        try:
+            c = QCursor.pos()
+            return QRect(c.x() - 12, c.y() - 12, 24, 24)
+        except Exception:
+            pass
 
-        if panel_top >= 8:
-            y = avail.top() + 2
-        elif panel_bot >= 8:
-            y = avail.bottom() - h - 2
-        else:
-            # No strut (XWayland/Plasma often): assume top panel ~40px, tray right
-            y = full.top() + 40 + 2
-
-        x = max(avail.left() + margin, min(x, full.right() - w - margin))
-        y = max(full.top() + 2, min(y, full.bottom() - 120))
-        return int(x), int(y)
-
-    def _apply_pinned_geometry(self, width: int, height: int) -> None:
-        """Resize only — never shift X/Y (stops multi-click / reload drift)."""
-        pin = self._pin_top_left
-        if pin is None:
-            self.resize(width, height)
-            return
+        # Last resort: top-right of primary
         screen = QGuiApplication.primaryScreen()
         if screen is not None:
             avail = screen.availableGeometry()
-            max_h = max(200, avail.bottom() - pin.y() - 8)
-            height = min(height, max_h)
-        # Keep exact pin — do not re-clamp X
-        self.setGeometry(pin.x(), pin.y(), width, height)
-        self.move(pin)
+            return QRect(avail.right() - 28, avail.top() + 4, 24, 24)
+        return QRect(80, 48, 24, 24)
+
+    @staticmethod
+    def _screen_at_point(point: QPoint):
+        """Best screen for a global point; fall back to primary."""
+        screen = QGuiApplication.screenAt(point)
+        if screen is not None:
+            return screen
+        return QGuiApplication.primaryScreen()
+
+    @classmethod
+    def _resolve_dock_screen(
+        cls,
+        tray: Optional[QSystemTrayIcon],
+        click_pos: Optional[QPoint] = None,
+    ):
+        """Pick the monitor that hosts the tray / click (multi-monitor safe).
+
+        Order: valid tray icon → click seat → cursor → primary.
+        """
+        rect = cls._tray_icon_rect(tray)
+        if rect is not None:
+            screen = cls._screen_at_point(rect.center())
+            if screen is not None:
+                return screen
+
+        if click_pos is not None:
+            screen = cls._screen_at_point(click_pos)
+            if screen is not None:
+                return screen
+
+        try:
+            screen = cls._screen_at_point(QCursor.pos())
+            if screen is not None:
+                return screen
+        except Exception:
+            pass
+
+        return QGuiApplication.primaryScreen()
+
+    def _screen_for_pin(self):
+        """Screen that owns the current pin (for height clamp on multi-monitor)."""
+        pin = self._pin_top_left
+        if pin is not None:
+            screen = self._screen_at_point(pin)
+            if screen is not None:
+                return screen
+        if self._last_anchor is not None:
+            screen = self._screen_at_point(self._last_anchor.center())
+            if screen is not None:
+                return screen
+        wh = self.windowHandle()
+        if wh is not None:
+            try:
+                screen = wh.screen()
+                if screen is not None:
+                    return screen
+            except Exception:
+                pass
+        return QGuiApplication.primaryScreen()
+
+    @staticmethod
+    def _click_near_panel(pt: QPoint, avail: QRect, *, band: int = 72) -> str:
+        """Return which panel edge a point sits on, or '' if mid-screen (unreliable).
+
+        Wayland SNI often reports a bogus cursor in the middle of the screen on
+        Activate — docking *under that point* looks "centered". Only trust the
+        click for fine X when it lies in a panel band.
+        """
+        if avail.isNull():
+            return ""
+        if pt.y() <= avail.top() + band:
+            return "top"
+        if pt.y() >= avail.bottom() - band:
+            return "bottom"
+        if pt.x() <= avail.left() + band:
+            return "left"
+        if pt.x() >= avail.right() - band:
+            return "right"
+        return ""
+
+    @classmethod
+    def _panel_corner_pos(
+        cls,
+        screen,
+        w: int,
+        h: int,
+        click_pos: Optional[QPoint] = None,
+    ) -> tuple[int, int]:
+        """Anchor to the click (tray icon) — the only trustworthy position under
+        multi-monitor HiDPI xcb, where ``screenAt()``/``availableGeometry()``
+        disagree with the actual coordinate space and shuffle the window to the
+        wrong monitor. Panel edge comes from ``_NET_WORKAREA`` (real margins).
+        """
+        if click_pos is None:
+            try:
+                click_pos = QCursor.pos()
+            except Exception:
+                click_pos = QPoint(80, 48)
+        cx, cy = click_pos.x(), click_pos.y()
+        wa = _net_workarea()
+        # Bounds come from the screen that hosts the tray/click — never primary,
+        # which teleports the card to the other monitor on multi-head setups.
+        ps = screen or QGuiApplication.screenAt(click_pos) or QGuiApplication.primaryScreen()
+        psg = ps.geometry() if ps else QRect(0, 0, 2262, 1272)
+        # wa spans the whole virtual desktop and, under XWayland, in *device*
+        # pixels — only believe its top margin when it reads like a real panel
+        # on this screen.
+        panel_gap = (wa.y() - psg.top()) if (wa and wa.isValid()) else 0
+        panel_top = psg.top() + panel_gap if 0 < panel_gap <= 160 else psg.top()
+        work_bottom, wx, ww = psg.bottom(), psg.x(), psg.width()
+        # SNI Activate often reports a bogus mid-desktop cursor — docking under it
+        # looks "centered". Fall back to the panel's tray cluster instead.
+        if not cls._click_near_panel(QPoint(cx, cy), psg):
+            cx, cy = psg.right() - 16, panel_top + 4
+        # tray on top panel → grow down from panel bottom; bottom panel → grow up
+        if cy < panel_top + 120:
+            y = panel_top
+        else:
+            y = work_bottom - h
+        x = cx - w // 2  # center popover on the tray icon
+        x = max(wx + 8, min(x, wx + ww - w - 8))
+        y = max(panel_top, min(y, work_bottom - h))
+        return int(x), int(y)
+
+    @classmethod
+    def _dock_top_left(cls, anchor: QRect, w: int, h: int) -> tuple[int, int]:
+        """Top-left dock — delegates to panel-corner placement."""
+        screen = cls._screen_at_point(anchor.center())
+        return cls._panel_corner_pos(screen, w, h, click_pos=anchor.center())
+
+    @classmethod
+    def _stable_dock_pos(
+        cls,
+        tray: Optional[QSystemTrayIcon],
+        w: int,
+        h: int,
+        click_pos: Optional[QPoint] = None,
+    ) -> tuple[int, int]:
+        """Back-compat wrapper — dock under tray/click anchor."""
+        return cls._dock_top_left(cls._tray_anchor_rect(tray, click_pos=click_pos), w, h)
+
+    def _avail_for_pin(self, tray=None, click_pos=None) -> QRect:
+        screen = self._dock_screen
+        if screen is None and self._pin_top_left is not None:
+            screen = self._screen_for_pin()
+        if screen is None:
+            screen = self._resolve_dock_screen(tray, click_pos=click_pos)
+        if screen is None:
+            return QRect(0, 0, 1280, 800)
+        return screen.availableGeometry()
+
+    def _screen_max_height(self, tray=None, click_pos=None) -> int:
+        avail = self._avail_for_pin(tray, click_pos)
+        return max(200, avail.height() - 8)
+
+    def _clamp_to_screen(
+        self,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        *,
+        tray=None,
+        click_pos=None,
+    ) -> Tuple[int, int, int, int]:
+        avail = self._avail_for_pin(tray, click_pos)
+        return clamp_popover_rect(x, y, width, height, avail)
+
+    def _apply_pinned_geometry(self, width: int, height: int) -> None:
+        """Resize; clamp fully on-screen (may shift pin up if bottom would clip)."""
+        pin = self._pin_top_left
+        if pin is None:
+            x, y, width, height = self._clamp_to_screen(
+                self.x(), self.y(), width, height
+            )
+            self.setGeometry(x, y, width, height)
+            return
+        x, y, width, height = self._clamp_to_screen(pin.x(), pin.y(), width, height)
+        # Persist adjusted pin so reassert / grow-down stay consistent
+        self._pin_top_left = QPoint(x, y)
+        self.setGeometry(x, y, width, height)
+        self.move(x, y)
+
+    def _note_interaction(self, grace: float = 0.55) -> None:
+        """User is clicking/using the panel — do not auto-dismiss for a moment."""
+        self._open_grace_until = max(
+            self._open_grace_until, time.monotonic() + grace
+        )
+
+    def _pointer_inside(self) -> bool:
+        """True if cursor is over this popover or any descendant."""
+        # underMouse() rides enter/leave events — the only reliable signal on
+        # Wayland, where QCursor.pos() is frozen at the last position *we* saw
+        # and frameGeometry() is what we asked for, not where we are.
+        if self.underMouse():
+            return True
+        if _is_wayland():
+            return False
+        try:
+            pos = QCursor.pos()
+        except Exception:
+            return False
+        if self.frameGeometry().adjusted(-12, -12, 12, 12).contains(pos):
+            return True
+        app = QApplication.instance()
+        if app is None:
+            return False
+        try:
+            hit = app.widgetAt(pos)
+        except Exception:
+            hit = None
+        return hit is not None and (hit is self or self.isAncestorOf(hit))
+
+    def _install_outside_filter(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        if self._outside_filter is None:
+            self._outside_filter = _OutsideClickFilter(self)
+        app.installEventFilter(self._outside_filter)
+
+    def _remove_outside_filter(self) -> None:
+        app = QApplication.instance()
+        if app is None or self._outside_filter is None:
+            return
+        app.removeEventFilter(self._outside_filter)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        if not self._embedded:
+            self._remove_outside_filter()
+            self._stop_dismiss_watch()
+            self._kwin_disarm()
+        super().hideEvent(event)
+
+    def _start_dismiss_watch(self) -> None:
+        """Pointer-driven auto-dismiss.
+
+        Activation is not a usable signal on Plasma Wayland: KWin grants it a few
+        hundred ms after the map, then hands it straight back to whatever was
+        active before (observed: browser regains focus ~1.2s after open). So the
+        card would either close on its own or — when activation never arrives, so
+        ActivationChange never fires — stay open forever. The pointer is the one
+        thing we can read reliably (enter/leave events).
+        """
+        if self._embedded:
+            return
+        self._pointer_seen = False
+        self._pointer_left_at = None
+        self._shown_at = time.monotonic()
+        if self._dismiss_watch is None:
+            self._dismiss_watch = QTimer(self)
+            self._dismiss_watch.setInterval(400)
+            self._dismiss_watch.timeout.connect(self._dismiss_tick)
+        self._dismiss_watch.start()
+
+    def _stop_dismiss_watch(self) -> None:
+        if self._dismiss_watch is not None:
+            self._dismiss_watch.stop()
+
+    def _dismiss_tick(self) -> None:
+        if not self.isVisible():
+            self._stop_dismiss_watch()
+            return
+        if self._settings_open:
+            return
+        now = time.monotonic()
+        if now < self._open_grace_until:
+            return
+        if self._pointer_inside():
+            self._pointer_seen = True
+            self._pointer_left_at = None
+            return
+        if self._pointer_seen:
+            if self._pointer_left_at is None:
+                self._pointer_left_at = now
+            elif now - self._pointer_left_at >= self.POINTER_LEAVE_GRACE:
+                self._dismiss("pointer left the card")
+        elif now - self._shown_at >= self.UNTOUCHED_TIMEOUT and not self.isActiveWindow():
+            self._dismiss("opened but never touched")
+
+    def _dismiss(self, reason: str) -> None:
+        """Single dismiss path — the reason is the only way to debug auto-hide."""
+        logger.info("popover dismiss: %s", reason)
+        self.hide()
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        if self._embedded:
+            super().changeEvent(event)
+            return
+        # Lost focus to another window → close. On xcb the ActivationChange +
+        # isActiveWindow() pair is the reliable signal; per-app event filters
+        # can't see clicks outside our process, and QCursor-based "pointer
+        # inside" checks misfire under multi-monitor HiDPI.
+        if (
+            event.type() == QEvent.Type.ActivationChange
+            and self.isVisible()
+            and not self.isActiveWindow()
+            and not self._settings_open
+            and not self._pointer_inside()
+            and time.monotonic() >= self._open_grace_until
+            and time.monotonic() - self._shown_at >= self.ACTIVATION_SETTLE
+        ):
+            self._dismiss("activation lost")
+        super().changeEvent(event)
 
     def _status_base(self) -> str:
         """Stable status line without the transient 'refreshing' suffix."""
@@ -1483,10 +2105,24 @@ class UsagePopover(QWidget):
         for v in self._views:
             rem: Optional[float] = None
             exp: Optional[float] = None
-            if v.ok and v.primary is not None:
-                rem = v.primary.remaining_percent
-                if v.primary.pace is not None:
-                    exp = v.primary.pace.expected_used_percent
+            # Tab meter prefers Session/5h; when missing (Codex Plus / Grok
+            # weekly-only) fall back to Weekly → tertiary → extras → headline.
+            if v.ok:
+                win = None
+                if v.primary is not None:
+                    win = v.primary
+                elif v.secondary is not None:
+                    win = v.secondary
+                elif v.tertiary is not None:
+                    win = v.tertiary
+                elif v.extra_windows:
+                    win = v.extra_windows[0]
+                if win is not None:
+                    rem = win.remaining_percent
+                    if win.pace is not None:
+                        exp = win.pace.expected_used_percent
+                elif v.headline_remaining is not None:
+                    rem = v.headline_remaining
             chip = _TabChip(
                 v.display_name,
                 accent=_PROVIDER_ACCENT.get(v.provider.lower(), C["accent"]),
@@ -1510,11 +2146,13 @@ class UsagePopover(QWidget):
         self._tabs.invalidate()
 
     def _select_tab(self, key: str) -> None:
+        self._note_interaction()
         self._active = key
         self._paint_tabs()
         self._rebuild_body()
         # Keep focus so focusOut does not dismiss mid-click on Wayland
         self.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.activateWindow()
 
     def _paint_tabs(self) -> None:
         for k, chip in self._tab_buttons.items():
@@ -1577,7 +2215,21 @@ class UsagePopover(QWidget):
         self._fit_height()
 
     def _fit_height(self) -> None:
-        """Size window to content; scroll only when taller than screen budget."""
+        """Size window to content; scroll when taller than remaining screen space."""
+        if self._embedded:
+            # Host menu sizes us; just let content decide a sensible fixed size.
+            QApplication.processEvents()
+            self._body.adjustSize()
+            content_h = max(
+                self._body.sizeHint().height(),
+                self._body_layout.sizeHint().height(),
+                80,
+            )
+            tab_h = self._tab_wrap.sizeHint().height() if hasattr(self, "_tab_wrap") else 56
+            foot_h = self._foot.sizeHint().height() if hasattr(self, "_foot") else 150
+            total = max(280, min(tab_h + foot_h + content_h + 24, 880))
+            self.setFixedSize(420, total)
+            return
         QApplication.processEvents()
         self._body.adjustSize()
         content_h = max(
@@ -1593,35 +2245,43 @@ class UsagePopover(QWidget):
         if foot_h < 80:
             foot_h = 150
 
-        screen = QGuiApplication.primaryScreen()
-        avail = screen.availableGeometry().height() if screen else 900
-        # Leave room for panel margins on Plasma
-        max_total = max(360, int(avail * 0.88))
-        chrome = tab_h + foot_h + 8
-        max_scroll = max(160, max_total - chrome)
+        avail = self._avail_for_pin()
+        pin = self._pin_top_left
+        # Compact tray card: ~half screen max, never a full-height sheet
+        if pin is not None:
+            space_below = max(200, avail.bottom() - pin.y() - 6)
+        else:
+            space_below = max(200, avail.height() - 8)
+        max_total = min(int(avail.height() * 0.55), 640, space_below)
+        max_total = max(260, max_total)
 
-        # Prefer full content height when it fits; otherwise scroll.
-        scroll_h = min(content_h + 8, max_scroll)
-        # Ensure enough room for card + cost chart
-        scroll_h = max(scroll_h, min(content_h + 8, max_scroll))
+        chrome = tab_h + foot_h + 8
+        max_scroll = max(120, max_total - chrome)
+
         if content_h > max_scroll:
             scroll_h = max_scroll
         else:
             # Tight fit — no empty void below last card
             scroll_h = content_h + 12
 
-        self._scroll.setMinimumHeight(min(scroll_h, max_scroll))
+        scroll_h = min(scroll_h, max_scroll)
+        self._scroll.setMinimumHeight(scroll_h)
         self._scroll.setMaximumHeight(max_scroll)
-        self._scroll.setFixedHeight(min(scroll_h, max_scroll))
+        self._scroll.setFixedHeight(scroll_h)
 
-        total = chrome + min(scroll_h, max_scroll)
-        total = max(280, min(total, max_total))
+        total = chrome + scroll_h
+        total = max(220, min(total, max_total))
         width = max(420, min(self.width() if self.width() > 200 else 420, 480))
         if self.isVisible() and self._pin_top_left is not None:
-            # Grow/shrink height only — top-left stays put (no re-dock, no drift)
             self._apply_pinned_geometry(width, total)
         else:
-            self.resize(width, total)
+            x, y, width, total = self._clamp_to_screen(
+                self.x() if self.x() else 80,
+                self.y() if self.y() else 48,
+                width,
+                total,
+            )
+            self.setGeometry(x, y, width, total)
         self._body.updateGeometry()
         self.updateGeometry()
 
@@ -1638,37 +2298,28 @@ class UsagePopover(QWidget):
             self._settings_open = False
         # Language / display prefs may have changed
         self.retranslate_chrome()
+        self._open_grace_until = time.monotonic() + 0.3
+        self._install_outside_filter()
         self.show()
         self.raise_()
         self.activateWindow()
         self.reload()
 
     def focusOutEvent(self, event) -> None:  # noqa: N802
-        # Debounced outside-click dismiss — never hide while interacting with self/dialogs
-        if not self._hide_armed:
-            self._hide_armed = True
-            QTimer.singleShot(220, self._maybe_hide)
+        # Embedded in SNI menu: the menu owns dismiss. Free window: auto-hide.
+        if self._embedded:
+            super().focusOutEvent(event)
+            return
+        # Backup dismiss path; changeEvent(ActivationChange) is the primary one.
+        if (
+            not self.isActiveWindow()
+            and not self._settings_open
+            and not self._pointer_inside()
+            and time.monotonic() >= self._open_grace_until
+            and time.monotonic() - self._shown_at >= self.ACTIVATION_SETTLE
+        ):
+            self._dismiss("focus out")
         super().focusOutEvent(event)
-
-    def _maybe_hide(self) -> None:
-        self._hide_armed = False
-        if not self.isVisible() or self._settings_open:
-            return
-        app = QApplication.instance()
-        if app is None:
-            return
-        if app.activeModalWidget() is not None:
-            return
-        active = app.activeWindow()
-        if active is self:
-            return
-        # Click landed on our widget tree (tabs/buttons often steal focus first)
-        w = app.widgetAt(QCursor.pos())
-        if w is not None and (w is self or self.isAncestorOf(w)):
-            return
-        if self.underMouse():
-            return
-        self.hide()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:

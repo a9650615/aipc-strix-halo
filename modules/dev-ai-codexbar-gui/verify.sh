@@ -19,6 +19,9 @@ required_files=(
     "modules/dev-ai-codexbar-gui/files/usr/lib/codexbar-gui/codexbar_gui/icon_updater.py"
     "modules/dev-ai-codexbar-gui/files/usr/lib/codexbar-gui/codexbar_gui/config_dialog.py"
     "modules/dev-ai-codexbar-gui/files/usr/lib/codexbar-gui/codexbar_gui/server_launcher.py"
+    "modules/dev-ai-codexbar-gui/files/usr/lib/codexbar-gui/codexbar_gui/webapp.py"
+    "modules/dev-ai-codexbar-gui/files/usr/lib/codexbar-gui/codexbar-gui-web.sh"
+    "modules/dev-ai-codexbar-gui/files/usr/lib/systemd/user/codexbar-gui-web.service"
     "modules/dev-ai-codexbar-gui/files/usr/lib/codexbar-gui/pyproject.toml"
     "modules/dev-ai-codexbar-gui/packages.txt"
     "modules/dev-ai-codexbar-gui/post-install.sh"
@@ -70,8 +73,17 @@ python3 -m py_compile codexbar_gui/usage_panel.py
 python3 -m py_compile codexbar_gui/icon_updater.py
 python3 -m py_compile codexbar_gui/config_dialog.py
 python3 -m py_compile codexbar_gui/server_launcher.py
+python3 -m py_compile codexbar_gui/webapp.py
+python3 -m py_compile codexbar_gui/upstream.py
 cd - > /dev/null
 echo "✓ All Python modules compile successfully"
+
+# User unit enabled for login sessions
+if [ ! -e "modules/dev-ai-codexbar-gui/files/usr/lib/systemd/user/default.target.wants/codexbar-gui-web.service" ]; then
+    echo "ERROR: codexbar-gui-web not in default.target.wants" >&2
+    exit 1
+fi
+echo "✓ codexbar-gui-web enabled for user default.target"
 
 echo ""
 echo "dev-ai-codexbar-gui: verification passed"

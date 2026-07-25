@@ -42,4 +42,16 @@ if [ -f /usr/lib/codexbar-gui/autostart/codexbar-gui.desktop ]; then
     echo "dev-ai-codexbar-gui: installed /etc/xdg/autostart/codexbar-gui.desktop"
 fi
 
+# Headless usage web (replaces aipc-usage on :8080). Declarative enable only —
+# no systemctl --now at build time.
+if [ -f /usr/lib/codexbar-gui/codexbar-gui-web.sh ]; then
+    chmod +x /usr/lib/codexbar-gui/codexbar-gui-web.sh
+fi
+mkdir -p /usr/lib/systemd/user/default.target.wants
+if [ -f /usr/lib/systemd/user/codexbar-gui-web.service ]; then
+    ln -sf ../codexbar-gui-web.service \
+        /usr/lib/systemd/user/default.target.wants/codexbar-gui-web.service
+    echo "dev-ai-codexbar-gui: enabled user unit codexbar-gui-web.service"
+fi
+
 echo "dev-ai-codexbar-gui: installed successfully"

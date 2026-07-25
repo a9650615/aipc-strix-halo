@@ -1,0 +1,14 @@
+[Unit]
+Description=CodexBar usage web (HTML UI + /usage JSON; replaces aipc-usage)
+Documentation=file:///usr/lib/codexbar-gui
+After=network.target
+Conflicts=aipc-usage.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/codexbar-gui/codexbar-gui-web.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

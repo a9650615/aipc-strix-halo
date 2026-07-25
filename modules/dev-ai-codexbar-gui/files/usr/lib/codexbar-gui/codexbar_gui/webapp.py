@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import urlparse
@@ -18,7 +19,8 @@ from codexbar_gui.upstream import fetch_enabled_providers, find_codexbar_binary
 
 logger = logging.getLogger("codexbar_gui.webapp")
 
-DEFAULT_WEB_PORT = 8787
+# Canonical port — replaces legacy aipc-usage on :8080 (HTML + /usage JSON).
+DEFAULT_WEB_PORT = 8080
 DEFAULT_WEB_HOST = "127.0.0.1"
 
 _HTML = r"""<!DOCTYPE html>
@@ -56,8 +58,11 @@ _HTML = r"""<!DOCTYPE html>
   .tab {
     background: #313244; color: var(--text); border-radius: 999px;
     padding: .35rem .9rem; font-size: .85rem; font-weight: 600;
+    cursor: pointer; border: 0; user-select: none;
   }
+  .tab:hover { background: #3f4155; }
   .tab.active { background: #45475a; box-shadow: inset 0 0 0 1px #585b70; }
+  .card.hidden { display: none; }
   .grid {
     display: grid; gap: 1.1rem;
     grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
@@ -140,8 +145,8 @@ _HTML = r"""<!DOCTYPE html>
   <button type="button" id="refresh">Refresh Now</button>
 </header>
 <p class="note">
-  Usage dashboard on <strong>:8787</strong> (this page). Official
-  <code>codexbar serve</code> on :8080 is JSON-only — not a missing UI.
+  Usage dashboard on <strong>:8080</strong> (this page). Replaces legacy
+  <code>aipc-usage</code>. Official CLI data via <code>codexbar usage</code>.
   Layout follows official CodexBar provider panel fields from CLI JSON.
 </p>
 <div class="tabs" id="tabs"></div>
@@ -213,14 +218,16 @@ function fmtTok(n) {
   return String(n);
 }
 function card(p) {
+  const pid = (p.provider || '').toLowerCase();
   if (p.error) {
-    return `<article class="card"><div class="head"><div><h2>${p.display_name || p.provider}</h2>
+    return `<article class="card" data-provider="${pid}"><div class="head"><div><h2>${p.display_name || p.provider}</h2>
       <div class="sub">${p.source || ''}</div></div></div>
       <div class="err">${p.error}</div></article>`;
   }
   const sub = [p.updated_label, p.source].filter(Boolean).join(' · ');
   const extras = (p.extra_windows || []).map(winHtml).join('');
-  return `<article class="card">
+  // Only render windows that exist — no "missing limit" callouts.
+  return `<article class="card" data-provider="${pid}">
     <div class="head">
       <div>
         <h2>${p.display_name || p.provider}</h2>
@@ -240,6 +247,17 @@ function card(p) {
     ${costHtml(p.cost)}
   </article>`;
 }
+let activeFilter = 'all';
+function setFilter(id) {
+  activeFilter = id || 'all';
+  document.querySelectorAll('#tabs .tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.filter === activeFilter);
+  });
+  document.querySelectorAll('#root .card').forEach(c => {
+    const show = activeFilter === 'all' || c.dataset.provider === activeFilter;
+    c.classList.toggle('hidden', !show);
+  });
+}
 async function load() {
   const meta = document.getElementById('meta');
   const root = document.getElementById('root');
@@ -252,9 +270,21 @@ async function load() {
       root.innerHTML = `<div class="empty">${data.detail || 'No providers'}</div>`;
       tabs.innerHTML = '';
     } else {
-      tabs.innerHTML = data.providers.map((p,i) =>
-        `<span class="tab ${i===0?'active':''}">${p.display_name || p.provider}</span>`).join('');
+      const tabHtml = [`<button type="button" class="tab" data-filter="all">All</button>`]
+        .concat(data.providers.map(p => {
+          const id = (p.provider || '').toLowerCase();
+          const label = p.display_name || p.provider;
+          return `<button type="button" class="tab" data-filter="${id}">${label}</button>`;
+        })).join('');
+      tabs.innerHTML = tabHtml;
+      tabs.querySelectorAll('.tab').forEach(t => {
+        t.onclick = () => setFilter(t.dataset.filter);
+      });
       root.innerHTML = data.providers.map(card).join('');
+      // keep previous filter if still valid
+      const still = activeFilter === 'all' ||
+        data.providers.some(p => (p.provider || '').toLowerCase() === activeFilter);
+      setFilter(still ? activeFilter : 'all');
     }
     meta.textContent = (data.source || 'cli') + ' · ' + new Date().toLocaleTimeString();
   } catch (e) {
@@ -360,8 +390,48 @@ def _views_to_json() -> dict:
     return {"providers": providers, "source": f"cli:{binary}"}
 
 
+def _provider_to_aipc_snapshot(p: dict) -> dict:
+    """Map rich GUI provider JSON → aipc-usage / Hermes snapshot shape."""
+    err = p.get("error")
+    status = "error" if err else "ok"
+    identity: dict = {}
+    if p.get("account"):
+        identity["email"] = p["account"]
+    if p.get("plan") or p.get("plan_label"):
+        identity["plan"] = p.get("plan_label") or p.get("plan")
+    snap = {
+        "provider": p.get("provider"),
+        "display_name": p.get("display_name") or p.get("provider"),
+        "status": status,
+        "source": p.get("source"),
+        "primary": p.get("primary"),
+        "secondary": p.get("secondary"),
+        "tertiary": p.get("tertiary"),
+        "identity": identity,
+        "credits": p.get("credits_remaining"),
+        "updated_at": p.get("updated_at"),
+        "pace_summary": p.get("pace_summary"),
+        "headline_remaining": p.get("headline_remaining"),
+    }
+    if err:
+        snap["error"] = err
+    return snap
+
+
+def _views_to_aipc_usage_list() -> list:
+    """Hermes / aipc-usage compatible GET /usage body: list[{provider, snapshot}]."""
+    data = _views_to_json()
+    rows = []
+    for p in data.get("providers") or []:
+        if not isinstance(p, dict):
+            continue
+        pid = p.get("provider") or "unknown"
+        rows.append({"provider": pid, "snapshot": _provider_to_aipc_snapshot(p)})
+    return rows
+
+
 class _Handler(BaseHTTPRequestHandler):
-    server_version = "codexbar-gui-web/0.4"
+    server_version = "codexbar-gui-web/0.5"
 
     def log_message(self, fmt: str, *args) -> None:
         logger.debug("%s - %s", self.address_string(), fmt % args)
@@ -387,19 +457,47 @@ class _Handler(BaseHTTPRequestHandler):
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self._send(200, raw, "application/json; charset=utf-8")
             return
+        # aipc-usage / Hermes quota MCP drop-in (replaces :8080 JSON)
+        if path == "/usage":
+            try:
+                payload = _views_to_aipc_usage_list()
+            except Exception as exc:
+                payload = [
+                    {
+                        "provider": "error",
+                        "snapshot": {
+                            "provider": "error",
+                            "status": "error",
+                            "error": str(exc),
+                            "primary": None,
+                            "secondary": None,
+                            "identity": {},
+                        },
+                    }
+                ]
+            raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self._send(200, raw, "application/json; charset=utf-8")
+            return
         if path == "/health":
             raw = json.dumps(
                 {
                     "status": "ok",
                     "role": "codexbar-gui-web",
+                    "version": "0.5.0",
                     "binary": find_codexbar_binary(),
+                    "endpoints": ["/", "/api/usage", "/usage", "/health"],
                 }
             ).encode()
             self._send(200, raw, "application/json; charset=utf-8")
             return
         self._send(
             404,
-            json.dumps({"error": "not found", "hint": "GET / or /api/usage"}).encode(),
+            json.dumps(
+                {
+                    "error": "not found",
+                    "hint": "GET / | /api/usage | /usage | /health",
+                }
+            ).encode(),
             "application/json; charset=utf-8",
         )
 
@@ -408,19 +506,64 @@ _httpd: Optional[ThreadingHTTPServer] = None
 _thread: Optional[threading.Thread] = None
 
 
+def _probe_our_web(host: str, port: int) -> Optional[str]:
+    """If host:port already serves this webapp, return its URL."""
+    try:
+        conn = http.client.HTTPConnection(host, port, timeout=1.5)
+        conn.request("GET", "/health")
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8", errors="replace")
+        conn.close()
+        if resp.status != 200:
+            return None
+        data = json.loads(body)
+        if isinstance(data, dict) and data.get("role") == "codexbar-gui-web":
+            return f"http://{host}:{port}/"
+        # Accept healthy generic status only if /usage also lists providers.
+        if isinstance(data, dict) and data.get("status") == "ok":
+            conn2 = http.client.HTTPConnection(host, port, timeout=1.5)
+            conn2.request("GET", "/usage")
+            r2 = conn2.getresponse()
+            b2 = r2.read()
+            conn2.close()
+            if r2.status == 200:
+                rows = json.loads(b2.decode("utf-8", errors="replace"))
+                if isinstance(rows, list):
+                    return f"http://{host}:{port}/"
+    except Exception:
+        return None
+    return None
+
+
 def start_web(
     host: str = DEFAULT_WEB_HOST,
     port: int = DEFAULT_WEB_PORT,
 ) -> tuple[bool, str]:
-    """Start background web UI. Returns (ok, url_or_error)."""
+    """Start background web UI. Returns (ok, url_or_error).
+
+    If ``port`` is already owned by this app (e.g. systemd ``codexbar-gui-web``),
+    reuse it instead of binding a second listener.
+    """
     global _httpd, _thread
     if _httpd is not None:
         return True, f"http://{host}:{_httpd.server_address[1]}/"
 
+    existing = _probe_our_web(host, port)
+    if existing:
+        logger.info("web UI already up: %s", existing)
+        return True, existing
+
     try:
         httpd = ThreadingHTTPServer((host, port), _Handler)
     except OSError as exc:
-        for alt in (port + 1, port + 2, 8790, 8791):
+        # Prefer reusing our own service over hopping to a random alt port.
+        existing = _probe_our_web(host, port)
+        if existing:
+            logger.info("bind failed; reusing existing web UI: %s", existing)
+            return True, existing
+        for alt in (8787, port + 1, port + 2, 8790, 8791):
+            if alt == port:
+                continue
             try:
                 httpd = ThreadingHTTPServer((host, alt), _Handler)
                 port = alt

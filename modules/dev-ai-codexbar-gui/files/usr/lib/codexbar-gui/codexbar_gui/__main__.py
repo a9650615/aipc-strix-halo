@@ -8,38 +8,41 @@ import os
 import sys
 
 
-def _prefer_xcb_for_tray() -> None:
-    """On KDE/GNOME Wayland, Qt Tool windows cannot be positioned (move ignored)
-    and Popup without a parent fails to map at all.
+def _configure_qt_platform() -> None:
+    """Pick a Qt platform that can track the tray across monitors.
 
-    Prefer XWayland (xcb) when DISPLAY is available so the tray popover can
-    open under the system tray. Opt out with CODEXBAR_NATIVE_WAYLAND=1.
+    Plasma multi-monitor + fractional scaling: XWayland virtual desktop does
+    **not** match KWin logical layout (different origins / DPR). Forcing xcb
+    then makes the popover appear on the wrong screen.
+
+    Default: stay on Wayland when available.
+    Escape hatch: CODEXBAR_FORCE_XCB=1 (single-monitor / debugging only).
     """
-    if os.environ.get("CODEXBAR_NATIVE_WAYLAND", "").strip().lower() in {
+    if os.environ.get("CODEXBAR_FORCE_XCB", "").strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }:
+        if os.environ.get("DISPLAY"):
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+            os.environ.setdefault("GDK_BACKEND", "x11")
         return
-    if os.environ.get("QT_QPA_PLATFORM"):
+
+    # Leave explicit QT_QPA_PLATFORM alone (tests use offscreen, etc.)
+    if os.environ.get("QT_QPA_PLATFORM", "").strip():
         return
-    wayland = (
-        os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
-        or bool(os.environ.get("WAYLAND_DISPLAY"))
-    )
-    if not wayland:
-        return
-    if not os.environ.get("DISPLAY"):
-        return
-    # Must be set before QApplication is constructed (any Qt import that
-    # creates app, and ideally before QtWidgets is first loaded).
-    os.environ["QT_QPA_PLATFORM"] = "xcb"
-    os.environ.setdefault("GDK_BACKEND", "x11")
+
+    if os.environ.get("WAYLAND_DISPLAY") or os.environ.get(
+        "XDG_SESSION_TYPE", ""
+    ).lower() == "wayland":
+        os.environ["QT_QPA_PLATFORM"] = "wayland"
+    elif os.environ.get("DISPLAY"):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 
 # BEFORE importing tray_app / QtWidgets
-_prefer_xcb_for_tray()
+_configure_qt_platform()
 
 from codexbar_gui.tray_app import (  # noqa: E402
     DEFAULT_HOST,
@@ -47,6 +50,7 @@ from codexbar_gui.tray_app import (  # noqa: E402
     REFRESH_INTERVAL_MS,
     main as _tray_main,
 )
+from codexbar_gui.webapp import DEFAULT_WEB_PORT  # noqa: E402
 
 
 def entry_point(argv: list[str] | None = None) -> int:
@@ -70,8 +74,8 @@ def entry_point(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--web-port",
         type=int,
-        default=8787,
-        help="Local web UI port (default 8787)",
+        default=DEFAULT_WEB_PORT,
+        help="Local web UI + /usage JSON port (default 8080; replaces aipc-usage)",
     )
     parser.add_argument(
         "--log-level",

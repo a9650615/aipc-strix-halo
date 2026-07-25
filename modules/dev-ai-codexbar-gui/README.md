@@ -48,24 +48,24 @@ On start you get:
 |---------|------|
 | **Tray icon** | Remaining % digits + bottom bar (HiDPI; not an empty meter) |
 | **Click tray** | Popover with **big remaining %** header + Session/Weekly cards |
-| **Web UI** | `http://127.0.0.1:8787/` — **this** is the HTML UI |
+| **Web UI** | `http://127.0.0.1:8080/` — HTML + Hermes-compatible `/usage` JSON |
 
-**Port map (do not confuse):**
+**Port map:**
 
 | Port | Role |
 |------|------|
-| **8787** | CodexBar GUI web dashboard (HTML) — open this in browser |
-| **8080** | Official `codexbar serve` JSON only — `GET /` is 404 by design |
-| 8000 | Unused |
+| **8080** | CodexBar GUI web (`codexbar-gui-web.service`) — HTML UI + `/usage` + `/health` (replaces `aipc-usage`) |
 
 ```sh
-# Restart after pulling (old process has no web / old icon):
-pkill -f 'python3 -m codexbar_gui' || true
-codexbar-gui
-# open http://127.0.0.1:8787/
+# Headless usage server (replaces aipc-usage):
+systemctl --user enable --now codexbar-gui-web.service
+# open http://127.0.0.1:8080/
 
-# Web only (no tray)
-python3 -m codexbar_gui --web-only --web-port 8787
+# Tray + optional second web bind (reuses :8080 if already up)
+codexbar-gui
+
+# Web only
+python3 -m codexbar_gui --web-only --web-port 8080
 ```
 
 Data path is always official:
@@ -94,14 +94,93 @@ codexbar_gui/
 ├── upstream.py          # Parse official JSON only
 ├── server_launcher.py   # codexbar serve only
 ├── icon_updater.py      # Painted tray meter
+├── claude_oauth.py      # Claude session token bridge for the CLI
+├── kwin_place.py        # KDE Wayland popover docking
 └── config_dialog.py     # Thin settings (shared config file path)
 ```
+
+## Claude session token (ccs bridge)
+
+The official CLI reads Claude credentials from `~/.claude/.credentials.json`
+only — `CLAUDE_CONFIG_DIR` does not redirect it. `ccs` keeps the live tokens in
+`~/.ccs/instances/<name>/.credentials.json` and leaves the shared file blank, so
+`--source oauth` reported *"Claude OAuth access token missing"* on every poll
+while Claude Code was logged in.
+
+`claude_oauth.py` picks the freshest credential file, refreshes an expired
+access token against the official endpoint, writes the rotated pair back (Claude
+Code's own login would break otherwise), and hands the token to the CLI as
+`CODEXBAR_CLAUDE_OAUTH_TOKEN`. Refresh failures back off for 5 minutes and the
+stale token is still passed through — the API decides, not our clock.
+
+Overrides: `CODEXBAR_CLAUDE_OAUTH_TOKEN` (skip the bridge entirely),
+`CODEXBAR_CLAUDE_OAUTH_CLIENT_ID`, `CODEXBAR_CLAUDE_TOKEN_URL`.
+
+## Popover placement on KDE Wayland
+
+KWin drops client-set positions for `xdg_toplevel` surfaces: `move()` /
+`QWindow.setPosition()` are ignored, Qt keeps reporting the *requested* rect, and
+the popover actually lands wherever KWin placed it (screen centre). Qt's
+`availableGeometry()` equals the full screen there, and `_NET_WORKAREA` is
+XWayland-only, device-pixel scaled and unioned across outputs — on this machine
+it claimed a 351 px top panel.
+
+`kwin_place.py` therefore asks KWin itself: load a KWin script over D-Bus, read
+`workspace.clientArea(PlacementArea)` for the output under the tray icon (the
+only panel-aware work area on Wayland), and set `frameGeometry`. The window is
+matched by caption (`CodexBar Usage Popover`).
+
+The script is armed *before* `show()` and docks from `workspace.windowAdded`, not
+after the map: placing later is visible as a jump from screen centre, and a
+geometry change after KWin granted activation silently drops that activation.
+(`QWidget.setWindowOpacity` cannot be used to hide the first frame — measured to
+be a no-op on Wayland.)
+
+Multi-monitor: the output comes from the tray icon rect, so the card docks on the
+screen that owns the panel — never on the primary one by default. Plasma usually
+reports **no** icon rect over SNI; then `anchor_real=False` and KWin looks up the
+largest `dock` window on the active output and derives the anchor from its
+geometry (right end for a horizontal panel, bottom end for a vertical one).
+Hardware-verified on DP-1 `0,0 2560x1440` + eDP-1 `2560,204 1707x1067`: top tray
+on either screen, bottom-edge panel (card grows upward), and the panel-derived
+fallback all land inside the correct output's work area.
+
+## Auto-dismiss
+
+Activation is not a trustworthy dismiss signal here: KWin grants it ~300 ms after
+the map and then hands it back to whatever was active before (measured: browser
+reclaims focus ~1.2 s after open), and when it never arrives at all no
+`ActivationChange` ever fires and the card stays open forever. So dismissal is
+guarded and polled (`_dismiss_tick`, 400 ms):
+
+| Trigger | Rule |
+|---|---|
+| Activation / focus lost | only when the pointer is not on the card **and** we have been open ≥ `ACTIVATION_SETTLE` (2.5 s) |
+| Pointer left the card | `POINTER_LEAVE_GRACE` (2 s) after it was hovered |
+| Never hovered at all | `UNTOUCHED_TIMEOUT` (8 s), and only while unfocused |
+| Press outside / Esc / close button | immediate |
+
+Hovering the card always keeps it alive. `_pointer_inside()` trusts only
+`underMouse()` on Wayland — `QCursor.pos()` freezes at the last position our own
+surface saw. Every dismissal logs its reason (`popover dismiss: …`).
+
+## Tray shell (compatibility layer)
+
+`codexbar_gui/shell_adapter.py` hosts the **same** `UsagePopover`:
+
+| Mode | Default | Behavior |
+|------|---------|----------|
+| `window` | **yes** | Free top-level `show_at_tray`; docks top-right when SNI click is (0,0) |
+| `sni_menu` | opt-in | Right-click small menu; left-click still uses window (full UI cannot use Wayland `QMenu.popup`) |
+
+Override: `CODEXBAR_TRAY_SHELL=window|sni_menu`.
 
 ## Out of scope
 
 - Reimplementing providers, OAuth, cookies, pace math
 - Python `dev-ai-codexbar-usage` as the GUI data plane
 - macOS menu-bar pixel parity (Merge Icons, widgets, Sparkle)
+- Full Plasma plasmoid rewrite (optional later; thin shell first)
 
 ## Tests
 

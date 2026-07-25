@@ -156,6 +156,29 @@ def _fill_color(remaining: Optional[float], show_as: str, fallback: QColor) -> Q
     return QColor(get_color_for_remaining(rem))
 
 
+def _normalize_window_rems(
+    primary_remaining: Optional[float],
+    secondary_remaining: Optional[float],
+    icon_style: str,
+) -> tuple[Optional[float], Optional[float], str]:
+    """Handle providers with only weekly (no session/daily).
+
+    Live Codex Plus often returns ``primary: null`` + weekly secondary only
+    (same for some Grok plans). Never invent a fake session bar by copying
+    weekly into primary, and don't leave an empty top track in dual mode.
+    """
+    style = icon_style if icon_style in {"dual_bars", "primary_only", "brand_percent"} else "dual_bars"
+    if primary_remaining is None and secondary_remaining is not None:
+        # Weekly-only → single main capsule
+        if style == "dual_bars":
+            style = "primary_only"
+        return secondary_remaining, None, style
+    if primary_remaining is not None and secondary_remaining is None and style == "dual_bars":
+        # Session-only → single main capsule (no empty weekly track)
+        return primary_remaining, None, "primary_only"
+    return primary_remaining, secondary_remaining, style
+
+
 def paint_dual_window_pixmap(
     primary_remaining: Optional[float] = None,
     secondary_remaining: Optional[float] = None,
@@ -168,8 +191,15 @@ def paint_dual_window_pixmap(
     show_as: str = "remaining",
     icon_style: str = "dual_bars",
 ) -> QPixmap:
-    """Official dual-bar meter only (no side digits, no dark tile)."""
+    """Official dual-bar meter only (no side digits, no dark tile).
+
+    Weekly-only / session-only collapse to a single centered bar so missing
+    limits are not drawn as empty tracks.
+    """
     del show_percent
+    primary_remaining, secondary_remaining, icon_style = _normalize_window_rems(
+        primary_remaining, secondary_remaining, icon_style
+    )
     size = max(16, int(size))
     pixmap, painter = _new_canvas(size)
     dim = 0.5 if stale else 1.0
@@ -282,16 +312,19 @@ def paint_usage_pixmap(
     show_as: str = "remaining",
     icon_style: str = "dual_bars",
 ) -> QPixmap:
-    """Tray entry point — dual bars (or primary-only / brand)."""
+    """Tray entry point — dual bars (or primary-only / brand).
+
+    Do **not** copy headline ``remaining`` into primary when only weekly is
+    present — that used to paint identical session+weekly bars for Codex
+    weekly-only accounts.
+    """
     del show_percent
     if remaining is None and percent is not None:
         remaining = 100.0 - _clamp(percent)
 
     if primary_remaining is not None or secondary_remaining is not None:
         return paint_dual_window_pixmap(
-            primary_remaining=primary_remaining
-            if primary_remaining is not None
-            else remaining,
+            primary_remaining=primary_remaining,
             secondary_remaining=secondary_remaining,
             size=size,
             credits_remaining=credits_remaining,
@@ -302,6 +335,8 @@ def paint_usage_pixmap(
         )
 
     if remaining is not None or error:
+        # Headline-only fallback: single bar (no fake dual empty weekly)
+        style = icon_style if icon_style == "brand_percent" else "primary_only"
         return paint_dual_window_pixmap(
             primary_remaining=remaining,
             secondary_remaining=None,
@@ -310,7 +345,7 @@ def paint_usage_pixmap(
             stale=stale,
             error=error,
             show_as=show_as,
-            icon_style=icon_style,
+            icon_style=style,
         )
 
     return paint_dual_window_pixmap(
