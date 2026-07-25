@@ -371,6 +371,14 @@ model_list:
       timeout: 600
       num_retries: 1
 
+  - model_name: claude-opus-5
+    litellm_params:
+      model: openai/claude-opus-5
+      api_base: http://127.0.0.1:8317/v1
+      api_key: os.environ/CLIPROXY_API_KEY
+      timeout: 600
+      num_retries: 1
+
   - model_name: claude-opus-4-8
     litellm_params:
       model: openai/claude-opus-4-8
