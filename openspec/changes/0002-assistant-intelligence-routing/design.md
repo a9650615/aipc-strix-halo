@@ -25,7 +25,7 @@ existing runtimes remain responsible for executing that decision.
 |---|---|---|
 | A | TaskEnvelope, shadow planner, unified entries, local ladder, quality gates, spoken summary, traces | main delivery; paid providers disabled |
 | B | Codex/Claude **subscription CLI** adapters, one-shot ask grants, canary | only after Slice A local gate |
-| C | Z.AI GLM `ask_glm` tool canary | SOPS key + CodexBar quota + hardware evidence |
+| C | Z.AI GLM dynamic advisor via global Hermes MCP + Daily adapter | SOPS key + CodexBar quota + hardware evidence |
 | D | automatic **subscription** escalation | hardware evidence + separate user approval |
 | ~~D-metered~~ | generic metered API escalation / hard-cap ledger | deferred; the GLM canary is the sole exception |
 
@@ -36,15 +36,19 @@ Slice A keeps paid providers off. When Slice B/C enable subscription:
 1. **Subscription (Codex CLI / Claude Code):** interactive → **ask once**
    (session-scoped grant is enough; do not re-prompt every turn).
    Unattended/background → `deny` until an explicit time-bounded grant.
-2. **Z.AI GLM API:** one monthly-subscription exception is permitted as
-   `ask_glm`, a tool
-   available to the local main model rather than a default or fallback route.
-   It is foreground-only and uses CodexBar's `zai` usage snapshot for remaining
-   quota and reset time. Unknown or exhausted quota leaves the task local. No
-   other metered LiteLLM cloud route is enabled for assistant traffic.
-3. **Remote data:** default scopes = `prompt` only; coding may add an
-   explicitly scoped workspace; personal docs/email/calendar/screen/mem0
-   default deny; secrets/credential stores non-exportable always.
+2. **Z.AI GLM API:** one monthly-subscription exception is permitted as an
+   on-demand advisor, not a default or fallback route. Every Hermes platform
+   and inherited subagent toolset receives the global MCP `consult_models`
+   tool; Daily Assistant may keep `ask_glm`. Hermes supplies an explicit
+   agent-curated question and remains the aggregator. Foreground and background
+   agents may call it. CodexBar's `zai` snapshot gates remaining quota and reset
+   time; unknown or exhausted quota leaves the task local.
+3. **Remote data:** the tool never receives transcript, memory, files, or tool
+   results implicitly. The agent may include necessary code or selected context
+   in its explicit question. Credential-shaped substrings are masked before
+   dispatch; no broad personal-data classifier or private-context taint is
+   required. Agents are instructed to keep likely provider-moderated requests
+   local. Secret and credential-store contents remain non-exportable.
 
 ## Goals
 

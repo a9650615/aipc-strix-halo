@@ -67,6 +67,36 @@ def _post_glm(prompt: str) -> str:
     return str(payload["choices"][0]["message"]["content"]).strip()
 
 
+def mask_credentials(text: str) -> str:
+    return _SECRET.sub("[REDACTED]", text)
+
+
+def consult_glm(
+    question: str,
+    *,
+    lookup: Callable[[str], dict[str, Any]] | None = None,
+    post: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    question = question.strip()
+    if not question:
+        return {"status": "error", "advisor": "glm", "detail": "question is empty"}
+    try:
+        quota = (lookup or _lookup_zai)("zai")
+    except (ImportError, OSError, ValueError) as exc:
+        return {"status": "local_only", "advisor": "glm", "detail": str(exc)}
+    if not _quota_available(quota):
+        return {
+            "status": "local_only",
+            "advisor": "glm",
+            "detail": "Z.AI quota unavailable or exhausted",
+        }
+    try:
+        content = (post or _post_glm)(mask_credentials(question))
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        return {"status": "local_only", "advisor": "glm", "detail": str(exc)}
+    return {"status": "ok", "advisor": "glm", "content": content}
+
+
 def ask_glm(
     prompt: str,
     data_scope: str,
@@ -89,18 +119,7 @@ def ask_glm(
             "tool": "ask_glm",
             "detail": "prompt contains credential-shaped data",
         }
-    try:
-        quota = (lookup or _lookup_zai)("zai")
-    except (ImportError, OSError, ValueError) as exc:
-        return {"status": "local_only", "tool": "ask_glm", "detail": str(exc)}
-    if not _quota_available(quota):
-        return {
-            "status": "local_only",
-            "tool": "ask_glm",
-            "detail": "Z.AI quota unavailable or exhausted",
-        }
-    try:
-        content = (post or _post_glm)(prompt)
-    except Exception as exc:  # noqa: BLE001
-        return {"status": "error", "tool": "ask_glm", "detail": str(exc)}
-    return {"status": "ok", "tool": "ask_glm", "content": content}
+    result = consult_glm(prompt, lookup=lookup, post=post)
+    result["tool"] = "ask_glm"
+    del result["advisor"]
+    return result
