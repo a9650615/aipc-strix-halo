@@ -260,8 +260,24 @@ import App from "../layouts/App.astro";
       }
     }
 
+    const duration = (seconds) => {
+      if (!Number.isFinite(seconds)) return "unknown";
+      const minutes = Math.floor(seconds / 60);
+      const rest = seconds % 60;
+      return minutes ? `${minutes}m${rest ? `${rest}s` : ""}` : `${rest}s`;
+    };
+
+    const compactText = (value) => {
+      const timer = `timer ${value?.timer || "unknown"}`;
+      if (value?.state === "unloaded") return `Compact unloaded · auto-release ${duration(value.timeout_s)} · ${timer}`;
+      if (value?.state === "in_use") return `Compact in use · ${timer}`;
+      if (value?.state === "idle") return `Compact idle ${duration(value.idle_s)} · release in ${duration(value.remaining_s)} · ${timer}`;
+      return `Compact unknown · ${timer}`;
+    };
+
     function renderRuntime(runtime) {
-      show("ai", runtime?.summary || "—");
+      const compact = runtime?.compact_idle_release;
+      show("ai", compact ? `${runtime?.summary || "—"} · ${compactText(compact)}` : (runtime?.summary || "—"));
       const models = runtime?.models || [];
       const rows = models.length
         ? models.map((m) => {
