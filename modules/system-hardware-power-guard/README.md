@@ -1,91 +1,83 @@
 # system-hardware-power-guard
 
-Host daemon that prevents battery **back-feed drain** on weak AC adapters and
-**persists the charge cap** across reboots. Runs on host (not a container) so
-it can write the cpufreq/EPP/charge sysfs nodes that need root.
+Host daemon **`aipc-power-agent`**: one process, two orthogonal power policies
+sharing a poll loop (not a shared decision state machine).
 
-## What it does
+| Policy | Trigger | Action |
+|---|---|---|
+| **backfeed** | weak AC / battery back-feed while plugged in | clamp `scaling_max_freq` + EPP; persist charge cap |
+| **core_parking** | user selects PPD `power-saver` | offline half the logical CPUs (GZ302EA cores 8–15 + SMT) |
 
-1. **Back-feed clamp.** When the SoC draws more than the AC adapter supplies,
-   BAT0 back-feeds the gap (`status` flips to Discharging while AC0 is online,
-   or `power_now` goes negative). Sustained back-feed degrades the battery.
-   The guard clamps CPU `scaling_max_freq` + amd-pstate EPP, then releases
-   adaptively as the supply margin recovers (state machine:
-   EMERGENCY → RECONNECTING → EXPANDING ⇄ CAUTIONARY; offline → DISCHARGING).
-2. **Charge-cap persistence.** ASUS EC resets
-   `charge_control_end_threshold` to 100 at boot; KDE only re-applies it after
-   login. The guard re-applies `charge_threshold_percent` on boot, closing the
-   reboot gap.
+Replaces the former pair of units:
 
-## Coexistence with tuned / powerdevil (no EPP fight)
+- `power-guard.service` → transitional **Alias** of `aipc-power-agent.service`
+- `aipc-usbc-core-policy.service` → **absorbed** (core parking policy; no longer keys off USB-C PD)
 
-`tuned` (active on this image) and KDE `powerdevil` both write amd-pstate EPP.
-This guard does **not** fight them for EPP outside emergencies:
+## Why not one state machine
 
-- `scaling_max_freq` (hard frequency ceiling) is the guard's alone — tuned/
-  powerdevil never write it, so it is the clamp that actually bounds draw.
-- EPP is written **only** in EMERGENCY/RECONNECTING (`power`). Once stable
-  (EXPANDING/CAUTIONARY) and on `_release`, the guard stops touching EPP and
-  lets tuned/powerdevil own it. Result: no per-poll EPP oscillation.
+Triggers and actuators differ (supply emergency vs user power mode). Merging
+decisions recreated the old “USB-C ⇒ park cores” footgun. Shared I/O only.
 
-## Startup behavior (INIT also observes)
+## Unit / paths
 
-At daemon start (boot or restart) the adapter is unknown (could be 65W or
-140W), so INIT enters RECONNECTING — it clamps to `reconnect_freq_factor` and
-observes for `reconnect_observe_period_s` before expanding. Cost: a brief
-throttle after every start. This is deliberate: a wrong guess here back-feeds
-the battery.
+| Item | Path |
+|---|---|
+| Service | `aipc-power-agent.service` (Alias: `power-guard.service`) |
+| Binary | `/usr/lib/aipc-power-agent/agent.py` |
+| Config | `/etc/aipc/power-agent/config.yaml` |
+| State | `/var/lib/aipc-power-agent/state.json` |
+| Agent kill switch | `/etc/aipc/power-agent.disabled` |
+| Backfeed kill switch | `/etc/aipc/power-agent/backfeed.disabled` (also legacy `/etc/aipc/power-guard.disabled`) |
+| Core-parking kill switch | `/etc/aipc/power-agent/core-parking.disabled` |
 
-## Controls (AMD Ryzen AI MAX+ 395, amd-pstate-epp)
+## CLI
 
-- `scaling_max_freq` — hard frequency ceiling (fraction of `cpuinfo_max_freq`)
-- `energy_performance_preference` — EPP hint (`power … performance`)
-- `charge_control_end_threshold` — charge cap (%)
+```bash
+aipc power-agent enable|disable|status
+aipc power-guard enable|disable|status   # same unit; legacy name
+```
 
-## Detection (read from `/sys/class/power_supply`)
+## Backfeed policy (detail)
 
-- `status in (Discharging, Not charging)` AND `AC0 online == 1` → definite
-  back-feed. `Not charging` matters: the EC pauses the charge circuit right
-  at the `charge_threshold_percent` boundary, and the gap there is fed
-  straight from the battery — a plain `Discharging` check misses it (this
-  slipped past a full clamp/release cycle live on this AI PC before the
-  check was widened).
-- `power_now < drain_threshold_uw` → early numeric back-feed
-- `energy_now` falling for 2 consecutive polls while AC is online → back-feed
-  catch-all, independent of whatever `status` string the EC reports
-- `power_now` trending down → caution (approaching the limit)
+When SoC draw exceeds the adapter, BAT0 back-feeds (`Discharging` while AC
+online, negative `power_now`, or falling `energy_now`). Clamp frequency, then
+release adaptively: EMERGENCY → RECONNECTING → EXPANDING ⇄ CAUTIONARY.
+
+EPP is written only in EMERGENCY/RECONNECTING; once stable, tuned/powerdevil own
+EPP again. `scaling_max_freq` is the hard bound this policy alone owns.
+
+Charge cap: re-applies `charge_threshold_percent` on start (ASUS EC resets to
+100 at boot before KDE runs).
+
+## Core-parking policy (detail)
+
+- **Authoritative:** tuned-ppd `ActiveProfile == power-saver`
+- **Fallback:** ASUS `platform_profile == quiet` if PPD unavailable
+- Debounced (default 2 polls × `poll_interval_s`)
+- On stop / disable: restores all targeted CPUs
 
 ## Configuration
 
-`/etc/aipc/power-guard/config.yaml` — all thresholds/timing are tunable.
-Ships `dry_run: true` (observe-only); flip to `false` once the event log shows
-correct reactions, then it actually clamps.
+See `files/etc/aipc/power-agent/config.yaml`. Nested `backfeed:` / `core_parking:`
+sections; legacy flat power-guard YAML still loads as backfeed-only defaults with
+core_parking enabled.
 
-## Kill switch
-
-- `/etc/aipc/power-guard.disabled` — `ConditionPathExists=!…` keeps the unit
-  from autostarting; the daemon also checks it each poll and freezes (monitor-only).
-- Manage via `aipc power-guard enable|disable|status`.
+Ships `backfeed.dry_run: true` (observe-only). Flip to `false` after a real
+back-feed calibration on hardware.
 
 ## Dependencies
 
 - `python3`, `python3-pyyaml`
-- Mirrors `system-memory-oom-guard`'s host-unit approach (not a quadlet).
+- Host unit (writes sysfs) — not a container/quadlet
+- Optional: `busctl` + `tuned-ppd` for PPD profile (core parking)
 
-## Verification tier
+## Verification
 
-**Hardware-verified** (CLAUDE.md §9). A real back-feed event occurred on this
-AI PC on 2026-07-06 (CPU-stress + 36B LLM inference load on a smaller/weaker
-charger): the guard entered EMERGENCY, clamped to `emergency_freq_factor`
-(0.45), held the clamp across repeated EMERGENCY↔RECONNECTING cycles while
-the load persisted, and released back to full frequency once the load ended
-— battery capacity dropped only 1% over the whole episode. The `.disabled`
-build-time marker has been removed accordingly.
+- `verify.sh` — syntax, self-test (live sysfs read), unit shape
+- `tools/tests/test_power_guard_charge_cap.py` — backfeed charge-cap / EPP handoff
+- `tools/tests/test_power_agent_core_parking.py` — PPD-driven park/restore
 
-## Note: the "unknown battery"
+## Coexistence
 
-KDE may show an `ELAN… Stylus` battery with a red ✕ — that is an ELAN
-touchpad/stylus HID descriptor reporting a `power_supply` with `PRESENT=0`
-(`hid-0018:04F3:43C7.0003-battery`). It is harmless and `upower` already marks
-it `power supply: no`; this guard only watches `BAT0`. Hiding it is a KDE
-desktop setting, not a system-module concern.
+Does **not** manage ASUS EC `platform_profile` (that was `platform-profile-*`,
+separate). Does not fight tuned for EPP outside backfeed emergencies.

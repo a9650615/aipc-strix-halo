@@ -53,11 +53,14 @@ def main() -> None:
     """aipc — render, doctor, and secrets for the AI PC image."""
 
 
-# ponytail: power-guard enable/disable/status — 3 short systemctl/sentinel ops,
-# not worth a sibling module. sudo-prefixed when run as a normal user.
-POWER_GUARD_UNIT = "power-guard.service"
-POWER_GUARD_SENTINEL = "/etc/aipc/power-guard.disabled"
-POWER_GUARD_STATE = "/var/lib/aipc-power-guard/state.json"
+# ponytail: power-agent enable/disable/status — short systemctl/sentinel ops.
+# Unified unit (backfeed + core parking). Legacy name power-guard remains an alias.
+POWER_AGENT_UNIT = "aipc-power-agent.service"
+POWER_GUARD_UNIT = POWER_AGENT_UNIT  # legacy alias name in CLI
+POWER_AGENT_SENTINEL = "/etc/aipc/power-agent.disabled"
+POWER_GUARD_SENTINEL = "/etc/aipc/power-guard.disabled"  # backfeed-only legacy switch
+POWER_AGENT_STATE = "/var/lib/aipc-power-agent/state.json"
+POWER_GUARD_STATE = "/var/lib/aipc-power-guard/state.json"  # mirrored legacy state
 LEMONADE_BASE_URL = "http://127.0.0.1:8001"
 LEMONADE_UNLOAD_PATH = "/api/v0/unload"
 BACKEND_HTTP_ERRORS = (urllib.error.URLError, TimeoutError, OSError)
@@ -126,32 +129,9 @@ def storage_reclaim_live(confirm: bool) -> None:
     sys.exit(storage_reclaim_mod.run_reclaim(confirm))
 
 
-@main.group("power-guard")
-def power_guard_cmd() -> None:
-    """Battery back-feed guard: clamp CPU on weak AC + persist charge cap."""
+def _power_agent_status_table(title: str) -> None:
+    """Shared status for aipc-power-agent (and legacy power-guard CLI name)."""
 
-
-@power_guard_cmd.command("enable")
-def power_guard_enable() -> None:
-    """Start the guard now and at boot (clears the kill-switch sentinel)."""
-    _sudo(["rm", "-f", POWER_GUARD_SENTINEL], check=False)
-    _sudo(["systemctl", "daemon-reload"], check=False)
-    _sudo(["systemctl", "enable", "--now", POWER_GUARD_UNIT])
-    click.echo("power-guard enabled — active now, autostarts at boot.")
-
-
-@power_guard_cmd.command("disable")
-def power_guard_disable() -> None:
-    """Stop the guard and prevent autostart (sets the kill-switch sentinel)."""
-    # --now sends SIGTERM → daemon's signal handler releases any clamp first.
-    _sudo(["systemctl", "disable", "--now", POWER_GUARD_UNIT], check=False)
-    _sudo(["touch", POWER_GUARD_SENTINEL], check=False)
-    click.echo("power-guard disabled — kill switch set; any clamp released on stop.")
-
-
-@power_guard_cmd.command("status")
-def power_guard_status() -> None:
-    """Show guard state, kill switch, and live sysfs values."""
     def _read(p: str) -> str:
         try:
             return Path(p).read_text().strip()
@@ -159,35 +139,114 @@ def power_guard_status() -> None:
             return "?"
 
     svc = subprocess.run(
-        ["systemctl", "is-active", POWER_GUARD_UNIT],
-        capture_output=True, text=True,
+        ["systemctl", "is-active", POWER_AGENT_UNIT],
+        capture_output=True,
+        text=True,
     ).stdout.strip() or "unknown"
     enabled = subprocess.run(
-        ["systemctl", "is-enabled", POWER_GUARD_UNIT],
-        capture_output=True, text=True,
+        ["systemctl", "is-enabled", POWER_AGENT_UNIT],
+        capture_output=True,
+        text=True,
     ).stdout.strip() or "unknown"
-    sentinel = os.path.exists(POWER_GUARD_SENTINEL)
+    agent_sw = os.path.exists(POWER_AGENT_SENTINEL)
+    backfeed_sw = os.path.exists(POWER_GUARD_SENTINEL) or os.path.exists(
+        "/etc/aipc/power-agent/backfeed.disabled"
+    )
+    parking_sw = os.path.exists("/etc/aipc/power-agent/core-parking.disabled")
     state: dict = {}
-    try:
-        import json
-        state = json.loads(Path(POWER_GUARD_STATE).read_text())
-    except (OSError, ValueError):
-        pass
+    for state_path in (POWER_AGENT_STATE, POWER_GUARD_STATE):
+        try:
+            state = json.loads(Path(state_path).read_text())
+            break
+        except (OSError, ValueError):
+            continue
+    policies = state.get("policies") if isinstance(state.get("policies"), dict) else {}
+    parking = policies.get("core_parking") if isinstance(policies, dict) else {}
 
-    table = Table(title="aipc power-guard")
+    table = Table(title=title)
     table.add_column("key")
     table.add_column("value")
+    table.add_row("service", POWER_AGENT_UNIT)
     table.add_row("service active", svc)
     table.add_row("autostart", enabled)
-    table.add_row("kill switch", "SET (disabled)" if sentinel else "clear")
-    table.add_row("daemon state", str(state.get("state", "?")))
-    table.add_row("dry_run", str(state.get("dry_run", "?")))
-    table.add_row("ac online", str(state.get("ac_online", _read("/sys/class/power_supply/AC0/online"))))
-    table.add_row("bat status", str(state.get("bat_status", _read("/sys/class/power_supply/BAT0/status"))))
-    table.add_row("power_now uW", str(state.get("power_now_uw", _read("/sys/class/power_supply/BAT0/power_now"))))
+    table.add_row("agent kill switch", "SET" if agent_sw else "clear")
+    table.add_row("backfeed kill switch", "SET" if backfeed_sw else "clear")
+    table.add_row("core_parking kill switch", "SET" if parking_sw else "clear")
+    table.add_row("backfeed state", str(state.get("state", "?")))
+    table.add_row("backfeed dry_run", str(state.get("dry_run", "?")))
+    table.add_row("core_parking applied", str((parking or {}).get("applied", "?")))
+    table.add_row("core_parking reason", str((parking or {}).get("reason", "?")))
+    table.add_row(
+        "ac online",
+        str(state.get("ac_online", _read("/sys/class/power_supply/AC0/online"))),
+    )
+    table.add_row(
+        "bat status",
+        str(state.get("bat_status", _read("/sys/class/power_supply/BAT0/status"))),
+    )
+    table.add_row(
+        "power_now uW",
+        str(state.get("power_now_uw", _read("/sys/class/power_supply/BAT0/power_now"))),
+    )
     table.add_row("cur freq factor", str(state.get("cur_factor", "?")))
-    table.add_row("charge cap", _read("/sys/class/power_supply/BAT0/charge_control_end_threshold") + "%")
+    table.add_row(
+        "charge cap",
+        _read("/sys/class/power_supply/BAT0/charge_control_end_threshold") + "%",
+    )
+    table.add_row("nproc", str(os.cpu_count() or "?"))
     Console().print(table)
+
+
+@main.group("power-agent")
+def power_agent_cmd() -> None:
+    """Unified power agent: back-feed clamp + power-saver core parking."""
+
+
+@power_agent_cmd.command("enable")
+def power_agent_enable() -> None:
+    """Start the agent now and at boot (clears agent + legacy kill switches)."""
+    _sudo(["rm", "-f", POWER_AGENT_SENTINEL, POWER_GUARD_SENTINEL], check=False)
+    _sudo(["systemctl", "daemon-reload"], check=False)
+    _sudo(["systemctl", "disable", "--now", "aipc-usbc-core-policy.service"], check=False)
+    _sudo(["systemctl", "enable", "--now", POWER_AGENT_UNIT])
+    click.echo("aipc-power-agent enabled — active now, autostarts at boot.")
+
+
+@power_agent_cmd.command("disable")
+def power_agent_disable() -> None:
+    """Stop the agent and prevent autostart (sets agent kill-switch sentinel)."""
+    _sudo(["systemctl", "disable", "--now", POWER_AGENT_UNIT], check=False)
+    _sudo(["touch", POWER_AGENT_SENTINEL], check=False)
+    click.echo("aipc-power-agent disabled — kill switch set; clamps/cores restored on stop.")
+
+
+@power_agent_cmd.command("status")
+def power_agent_status() -> None:
+    """Show agent state, policy kill switches, and live sysfs values."""
+    _power_agent_status_table("aipc power-agent")
+
+
+@main.group("power-guard")
+def power_guard_cmd() -> None:
+    """Legacy alias for `aipc power-agent` (same unit)."""
+
+
+@power_guard_cmd.command("enable")
+def power_guard_enable() -> None:
+    """Legacy alias → aipc power-agent enable."""
+    power_agent_enable()
+
+
+@power_guard_cmd.command("disable")
+def power_guard_disable() -> None:
+    """Legacy alias → aipc power-agent disable."""
+    power_agent_disable()
+
+
+@power_guard_cmd.command("status")
+def power_guard_status() -> None:
+    """Legacy alias → aipc power-agent status."""
+    _power_agent_status_table("aipc power-guard (alias of power-agent)")
 
 
 @main.group("agent")

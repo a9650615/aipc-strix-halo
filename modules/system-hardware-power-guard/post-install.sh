@@ -1,16 +1,17 @@
 #!/bin/bash
 # post-install.sh for system-hardware-power-guard
-# Build-time only (CLAUDE.md §8): enable the unit (a symlink write, not a
-# running process) and stage the state dir. NO systemctl --now — the build
-# container has no running init and no live sysfs to read.
+# Build-time only (CLAUDE.md §8): enable the unit (symlink write, not a
+# running process) and stage state dirs. NO systemctl --now.
 set -euo pipefail
 
-# Enable at boot (does not start). The .disabled marker in this module
-# (shipped separately) plus ConditionPathExists keeps it from auto-starting
-# until a hardware-verified run flips it off — see CLAUDE.md §9.
-systemctl enable power-guard.service 2>/dev/null || true
-
-# Stage the writable state dir.
+install -d -m 0755 /var/lib/aipc-power-agent
 install -d -m 0755 /var/lib/aipc-power-guard
+install -d -m 0755 /etc/aipc/power-agent
 
-echo "power-guard: unit enabled (start via: systemctl start power-guard OR aipc power-guard enable)"
+# Prefer the unified agent; drop legacy unit enablement if present on the image.
+systemctl disable power-guard.service 2>/dev/null || true
+systemctl disable aipc-usbc-core-policy.service 2>/dev/null || true
+systemctl enable aipc-power-agent.service 2>/dev/null || true
+
+echo "aipc-power-agent: unit enabled (start via: systemctl start aipc-power-agent OR aipc power-agent enable)"
+echo "aipc-power-agent: legacy power-guard / aipc-usbc-core-policy should be disabled; agent owns both policies"

@@ -1,39 +1,37 @@
 #!/bin/bash
-# verify.sh for system-hardware-power-guard
-# Static + live-read checks (CLAUDE.md §9). Render-verified, NOT
-# hardware-verified until a real back-feed event is observed on the AI PC.
-# Exit 0 = pass, 2 = intentionally disabled/optional, other non-zero = fail.
+# verify.sh for system-hardware-power-guard / aipc-power-agent
 set -euo pipefail
 
 MOD="modules/system-hardware-power-guard"
-PY="$MOD/files/usr/lib/aipc-power-guard/power_guard.py"
+AGENT="$MOD/files/usr/lib/aipc-power-agent/agent.py"
+UNIT="$MOD/files/etc/systemd/system/aipc-power-agent.service"
+CFG="$MOD/files/etc/aipc/power-agent/config.yaml"
 
-fail() { echo "power-guard verify FAIL: $*" >&2; exit 1; }
+fail() { echo "aipc-power-agent verify FAIL: $*" >&2; exit 1; }
 
-# 1. Syntax + self-test (reads live sysfs; safe, no writes).
-python3 -c "import ast; ast.parse(open('$PY').read())" || fail "python syntax"
-python3 "$PY" --self-test || fail "self-test (live sysfs read)"
+python3 -c "import ast; ast.parse(open('$AGENT').read())" || fail "agent.py syntax"
+python3 -c "import ast; ast.parse(open('$MOD/files/usr/lib/aipc-power-agent/backfeed.py').read())" || fail "backfeed.py syntax"
+python3 -c "import ast; ast.parse(open('$MOD/files/usr/lib/aipc-power-agent/core_parking.py').read())" || fail "core_parking.py syntax"
+python3 "$AGENT" --self-test || fail "self-test (live sysfs read)"
 
-# 2. Config parses.
-python3 -c "import yaml,sys; yaml.safe_load(open('$MOD/files/etc/aipc/power-guard/config.yaml'))" \
-  || fail "config.yaml parse"
+python3 -c "import yaml; yaml.safe_load(open('$CFG'))" || fail "config.yaml parse"
 
-# 3. Service unit has the kill switch + runs on host (not a container).
-grep -q 'ConditionPathExists=!/etc/aipc/power-guard.disabled' \
-  "$MOD/files/etc/systemd/system/power-guard.service" \
+grep -q 'ConditionPathExists=!/etc/aipc/power-agent.disabled' "$UNIT" \
   || fail "missing ConditionPathExists kill switch"
-grep -q 'ExecStart=/usr/bin/python3' \
-  "$MOD/files/etc/systemd/system/power-guard.service" \
-  || fail "must run as host python, not a container"
+grep -q 'ExecStart=/usr/bin/python3 /usr/lib/aipc-power-agent/agent.py' "$UNIT" \
+  || fail "ExecStart must run host agent.py"
+grep -q 'Alias=power-guard.service' "$UNIT" \
+  || fail "missing transitional Alias=power-guard.service"
 
-# 4. No leftover quadlet container (host service is the correct shape).
-[ ! -f "$MOD/files/quadlet/power-guard.container" ] \
-  || fail "quadlet container removed — daemon must run on host for sysfs writes"
+# Must not ship the old separate usbc unit from this module.
+[ ! -f "$MOD/files/etc/systemd/system/aipc-usbc-core-policy.service" ] \
+  || fail "usbc-core-policy unit must not be shipped; absorbed into agent"
+[ ! -f "$MOD/files/etc/systemd/system/power-guard.service" ] \
+  || fail "power-guard.service file must not be shipped; use Alias on aipc-power-agent"
 
-# .disabled marker present → module is render-verified but not yet enabled.
 if [ -f "$MOD/.disabled" ]; then
-  echo "power-guard verify OK (render-verified; module .disabled until hardware-verified)"
+  echo "aipc-power-agent verify OK (render-verified; module .disabled)"
   exit 2
 fi
 
-echo "power-guard verify OK (render-verified + enabled)"
+echo "aipc-power-agent verify OK (render-verified + enabled)"

@@ -1,0 +1,20 @@
+[Unit]
+Description=AIPC power agent (back-feed guard + power-saver core parking)
+After=local-fs.target
+# Whole-agent kill switch: touch /etc/aipc/power-agent.disabled to prevent start.
+ConditionPathExists=!/etc/aipc/power-agent.disabled
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/lib/aipc-power-agent/agent.py
+Environment=AIPC_POWER_AGENT_CONFIG=/etc/aipc/power-agent/config.yaml
+Environment=AIPC_POWER_AGENT_LOG=INFO
+# Writes cpufreq/EPP/charge + cpuN/online (all root-owned).
+ReadWritePaths=/var/lib/aipc-power-agent /var/lib/aipc-power-guard
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+# Transitional aliases for older docs/CLI that still name power-guard.
+Alias=power-guard.service

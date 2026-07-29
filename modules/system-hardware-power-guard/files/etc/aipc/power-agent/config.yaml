@@ -1,0 +1,36 @@
+# aipc-power-agent — shared poll + two orthogonal policies.
+# See modules/system-hardware-power-guard/README.md
+
+poll_interval_s: 3
+log_level: INFO
+# Whole-agent kill switch (file presence): /etc/aipc/power-agent.disabled
+# state_file: /var/lib/aipc-power-agent/state.json
+
+# --- Policy A: weak-AC battery back-feed clamp + charge-cap persistence ---
+backfeed:
+  enabled: true
+  # OBSERVE-ONLY until calibrated on hardware; flip to false to clamp for real.
+  dry_run: true
+  disable_sentinel: /etc/aipc/power-agent/backfeed.disabled
+  # Also honours legacy /etc/aipc/power-guard.disabled
+  reconnect_observe_period_s: 30
+  drain_threshold_uw: -1000000
+  charge_threshold_percent: 85
+  emergency_freq_factor: 0.45
+  reconnect_freq_factor: 0.60
+  recover_freq_factor: 0.80
+  expand_step: 0.10
+  epp_emergency: power
+  epp_normal: default
+
+# --- Policy B: park half CPUs when user selects power-saver (PPD) ---
+# Absorbs former aipc-usbc-core-policy (no longer keys off USB-C PD).
+core_parking:
+  enabled: true
+  dry_run: false
+  disable_sentinel: /etc/aipc/power-agent/core-parking.disabled
+  debounce_polls: 2
+  # GZ302EA / Ryzen AI MAX+ 395: physical cores 8-15 + SMT siblings (+16)
+  park_core_lo: 8
+  park_core_hi: 15
+  smt_offset: 16
