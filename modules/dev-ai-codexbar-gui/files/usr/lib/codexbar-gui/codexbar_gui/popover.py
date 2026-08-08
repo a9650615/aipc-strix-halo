@@ -46,6 +46,7 @@ from codexbar_gui.upstream import (
     PaceInfo,
     ProviderView,
     RateWindowView,
+    card_label,
     fetch_enabled_providers,
     find_codexbar_binary,
     format_pace_lines,
@@ -874,14 +875,14 @@ class _ReloadWorker(QThread):
             logger.warning("reload failed", exc_info=True)
             views = []
         costs: Dict[str, CostView] = {}
-        for v in views:
+        for pid in dict.fromkeys(v.provider for v in views):
             # Cost is local and useful even when usage timed out (Claude)
             try:
-                c = fetch_cost(provider=v.provider, days=30, timeout=40.0)
+                c = fetch_cost(provider=pid, days=30, timeout=40.0)
             except Exception:
                 c = None
             if c is not None and (c.daily or c.period_cost or c.today_tokens):
-                costs[v.provider] = c
+                costs[pid] = c
         self.done.emit(views, costs)
 
 
@@ -1364,10 +1365,10 @@ class UsagePopover(QWidget):
             self._active is None
             or (
                 self._active != "overview"
-                and self._active not in {v.provider for v in self._views}
+                and self._active not in {v.key for v in self._views}
             )
         ):
-            self._active = self._views[0].provider
+            self._active = self._views[0].key
         if self._views:
             if self._ui_stale or self._body_layout.count() == 0:
                 self._rebuild_tabs()
@@ -1554,10 +1555,10 @@ class UsagePopover(QWidget):
             self._active is None
             or (
                 self._active != "overview"
-                and self._active not in {v.provider for v in self._views}
+                and self._active not in {v.key for v in self._views}
             )
         ):
-            self._active = self._views[0].provider
+            self._active = self._views[0].key
 
         # Prefer activation seat position; fall back to live cursor
         if click_pos is None:
@@ -2119,11 +2120,11 @@ class UsagePopover(QWidget):
         self._costs = dict(costs)
         if self._active is None or (
             self._active != "overview"
-            and self._active not in {v.provider for v in self._views}
+            and self._active not in {v.key for v in self._views}
         ):
             # Prefer overview when multi, else first provider
             self._active = (
-                "overview" if len(self._views) > 1 else (self._views[0].provider if self._views else "overview")
+                "overview" if len(self._views) > 1 else (self._views[0].key if self._views else "overview")
             )
         self._set_footer_enabled(True)
         # Rebuild when open; if hidden, mark stale so next show paints once
@@ -2175,14 +2176,14 @@ class UsagePopover(QWidget):
                 elif v.headline_remaining is not None:
                     rem = v.headline_remaining
             chip = _TabChip(
-                v.display_name,
+                card_label(v, self._views),
                 accent=_PROVIDER_ACCENT.get(v.provider.lower(), C["accent"]),
                 remaining=rem,
                 expected_used=exp,
                 show_bar=True,
             )
-            chip.clicked.connect(lambda p=v.provider: self._select_tab(p))
-            self._tab_buttons[v.provider] = chip
+            chip.clicked.connect(lambda p=v.key: self._select_tab(p))
+            self._tab_buttons[v.key] = chip
             self._tabs.addWidget(chip)
         self._paint_tabs()
         # Always 3 columns → ceil(n/3) rows
@@ -2244,13 +2245,13 @@ class UsagePopover(QWidget):
                 self._body_layout.addWidget(
                     _OverviewRow(
                         v,
-                        on_open=lambda p=v.provider: self._select_tab(p),
+                        on_open=lambda p=v.key: self._select_tab(p),
                         cost=self._costs.get(v.provider),
                     )
                 )
         else:
             view = next(
-                (v for v in self._views if v.provider == self._active),
+                (v for v in self._views if v.key == self._active),
                 self._views[0],
             )
             cost = self._costs.get(view.provider)

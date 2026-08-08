@@ -15,7 +15,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from codexbar_gui.cost import fetch_cost
-from codexbar_gui.upstream import fetch_enabled_providers, find_codexbar_binary
+from codexbar_gui.upstream import card_label, fetch_enabled_providers, find_codexbar_binary
 
 logger = logging.getLogger("codexbar_gui.webapp")
 
@@ -218,9 +218,9 @@ function fmtTok(n) {
   return String(n);
 }
 function card(p) {
-  const pid = (p.provider || '').toLowerCase();
+  const pid = (p.key || p.provider || '').toLowerCase();
   if (p.error) {
-    return `<article class="card" data-provider="${pid}"><div class="head"><div><h2>${p.display_name || p.provider}</h2>
+    return `<article class="card" data-provider="${pid}"><div class="head"><div><h2>${p.label || p.display_name || p.provider}</h2>
       <div class="sub">${p.source || ''}</div></div></div>
       <div class="err">${p.error}</div></article>`;
   }
@@ -230,7 +230,7 @@ function card(p) {
   return `<article class="card" data-provider="${pid}">
     <div class="head">
       <div>
-        <h2>${p.display_name || p.provider}</h2>
+        <h2>${p.label || p.display_name || p.provider}</h2>
         <div class="sub">${sub}</div>
       </div>
       <div class="right">
@@ -272,8 +272,8 @@ async function load() {
     } else {
       const tabHtml = [`<button type="button" class="tab" data-filter="all">All</button>`]
         .concat(data.providers.map(p => {
-          const id = (p.provider || '').toLowerCase();
-          const label = p.display_name || p.provider;
+          const id = (p.key || p.provider || '').toLowerCase();
+          const label = p.label || p.display_name || p.provider;
           return `<button type="button" class="tab" data-filter="${id}">${label}</button>`;
         })).join('');
       tabs.innerHTML = tabHtml;
@@ -283,7 +283,7 @@ async function load() {
       root.innerHTML = data.providers.map(card).join('');
       // keep previous filter if still valid
       const still = activeFilter === 'all' ||
-        data.providers.some(p => (p.provider || '').toLowerCase() === activeFilter);
+        data.providers.some(p => (p.key || p.provider || '').toLowerCase() === activeFilter);
       setFilter(still ? activeFilter : 'all');
     }
     meta.textContent = (data.source || 'cli') + ' · ' + new Date().toLocaleTimeString();
@@ -329,13 +329,18 @@ def _win_json(win) -> Optional[dict]:
 def _views_to_json() -> dict:
     views = fetch_enabled_providers(timeout=35.0) or []
     providers = []
+    cost_cache: dict = {}
     for v in views:
         cost = None
         if v.ok:
-            try:
-                cv = fetch_cost(provider=v.provider, days=30, timeout=40.0)
-            except Exception:
-                cv = None
+            if v.provider in cost_cache:
+                cv = cost_cache[v.provider]
+            else:
+                try:
+                    cv = fetch_cost(provider=v.provider, days=30, timeout=40.0)
+                except Exception:
+                    cv = None
+                cost_cache[v.provider] = cv
             if cv is not None:
                 cost = {
                     "today_cost": cv.today_cost,
@@ -356,7 +361,9 @@ def _views_to_json() -> dict:
         providers.append(
             {
                 "provider": v.provider,
+                "key": v.key,
                 "display_name": v.display_name,
+                "label": card_label(v, views),
                 "source": v.source,
                 "error": v.error,
                 "account": v.account,
@@ -421,13 +428,24 @@ def _provider_to_aipc_snapshot(p: dict) -> dict:
 def _views_to_aipc_usage_list() -> list:
     """Hermes / aipc-usage compatible GET /usage body: list[{provider, snapshot}]."""
     data = _views_to_json()
-    rows = []
+    # One row per provider: consumers look up by id, so a multi-account provider
+    # reports its most constrained account (lowest remaining).
+    def rank(q: dict) -> tuple:
+        rem = q.get("headline_remaining")
+        return (q.get("error") is not None, 999.0 if rem is None else float(rem))
+
+    best: dict = {}
     for p in data.get("providers") or []:
         if not isinstance(p, dict):
             continue
         pid = p.get("provider") or "unknown"
-        rows.append({"provider": pid, "snapshot": _provider_to_aipc_snapshot(p)})
-    return rows
+        prev = best.get(pid)
+        if prev is None or rank(p) < rank(prev):
+            best[pid] = p
+    return [
+        {"provider": pid, "snapshot": _provider_to_aipc_snapshot(p)}
+        for pid, p in best.items()
+    ]
 
 
 class _Handler(BaseHTTPRequestHandler):

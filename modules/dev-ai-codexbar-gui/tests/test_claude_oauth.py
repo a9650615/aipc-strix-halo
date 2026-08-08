@@ -89,6 +89,79 @@ def test_fresher_instance_wins(monkeypatch, tmp_path) -> None:
     assert claude_oauth.access_token(now_ms=NOW) == "new"
 
 
+def test_is_ccs_owned_is_case_insensitive() -> None:
+    """The official (Swift) CLI reformats UUIDs to uppercase when it rewrites
+    config.json (observed on the live machine after ``codexbar config
+    validate``); ``uuid5`` always renders lowercase. A ccs-synced row must
+    still be recognized as ccs-owned regardless of which case is on disk —
+    otherwise the sync would treat its own rows as user-owned and stop
+    refreshing their tokens."""
+    import uuid
+
+    label = "a9650615@gmail.com"
+    lower_id = str(uuid.uuid5(claude_oauth.ACCOUNT_NS, label))
+    upper_id = lower_id.upper()
+
+    assert claude_oauth.is_ccs_owned({"id": lower_id, "label": label}) is True
+    assert claude_oauth.is_ccs_owned({"id": upper_id, "label": label}) is True
+    assert claude_oauth.is_ccs_owned({"id": "not-a-match", "label": label}) is False
+
+
+def test_sync_recognizes_uppercase_ids_from_official_cli(monkeypatch, tmp_path) -> None:
+    """Regression: a ccs row whose id was uppercased by ``codexbar config
+    validate`` must still get its token refreshed on the next sync, not be
+    frozen in place as if it were user-owned."""
+    import uuid
+
+    home = _home(monkeypatch, tmp_path)
+    _write(home / ".claude" / ".credentials.json", "tok-personal", "r1", NOW + 600_000)
+    _write(
+        home / ".ccs" / "instances" / "work" / ".credentials.json",
+        "tok-work",
+        "r2",
+        NOW + 600_000,
+    )
+
+    cfg_path = home / ".config" / "codexbar" / "config.json"
+    cfg_path.parent.mkdir(parents=True)
+    upper_id = str(uuid.uuid5(claude_oauth.ACCOUNT_NS, "default")).upper()
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "providers": [
+                    {
+                        "id": "claude",
+                        "enabled": True,
+                        "tokenAccounts": {
+                            "version": 1,
+                            "activeIndex": 0,
+                            "accounts": [
+                                {
+                                    "id": upper_id,
+                                    "label": "default",
+                                    "token": "tok-personal-STALE",
+                                    "addedAt": 1,
+                                    "lastUsed": 1,
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        )
+    )
+
+    claude_oauth.sync_token_accounts(min_accounts=1)
+
+    entry = next(
+        p for p in json.loads(cfg_path.read_text())["providers"] if p["id"] == "claude"
+    )
+    accounts = entry["tokenAccounts"]["accounts"]
+    default = next(a for a in accounts if a["label"] == "default")
+    assert default["token"] == "tok-personal"  # refreshed, not frozen as "STALE"
+
+
 def test_build_cli_env_injects_claude_token(monkeypatch, tmp_path) -> None:
     from codexbar_gui import upstream
 

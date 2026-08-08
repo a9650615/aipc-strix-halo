@@ -348,6 +348,17 @@ class ProviderView:
         return out
 
     @property
+    def key(self) -> str:
+        """Stable per-card id — one provider can return several accounts."""
+        acct = (self.account or "").strip()
+        return f"{self.provider}:{acct}" if acct else self.provider
+
+    @property
+    def account_label(self) -> str:
+        acct = (self.account or "").strip()
+        return acct.split("@", 1)[0] if "@" in acct else acct
+
+    @property
     def display_name(self) -> str:
         return self.provider.replace("_", " ").title()
 
@@ -377,6 +388,14 @@ class ProviderView:
             or self.secondary is not None
             or bool(self.extra_windows)
         )
+
+
+def card_label(view: ProviderView, views: List[ProviderView]) -> str:
+    """Tab/card title — appends the account when one provider has several."""
+    same = sum(1 for v in views if v.provider == view.provider)
+    if same < 2 or not view.account_label:
+        return view.display_name
+    return f"{view.display_name} · {view.account_label}"
 
 
 def find_codexbar_binary() -> Optional[str]:
@@ -713,10 +732,17 @@ def fetch_from_http(
 
 
 def _official_config_paths() -> List[Path]:
-    return [
-        Path.home() / ".config" / "codexbar" / "config.json",
-        Path.home() / ".codexbar" / "config.json",
-    ]
+    """Same resolution order as the official CLI (upstream docs/configuration.md)."""
+    paths: List[Path] = []
+    env = (os.environ.get("CODEXBAR_CONFIG") or "").strip()
+    if env:
+        paths.append(Path(env).expanduser())
+    xdg = (os.environ.get("XDG_CONFIG_HOME") or "").strip()
+    if xdg.startswith("/"):
+        paths.append(Path(xdg) / "codexbar" / "config.json")
+    paths.append(Path.home() / ".config" / "codexbar" / "config.json")
+    paths.append(Path.home() / ".codexbar" / "config.json")
+    return paths
 
 
 def load_official_config() -> Optional[dict[str, Any]]:
@@ -744,6 +770,43 @@ def enabled_providers_from_config() -> List[str]:
         if out:
             return out
     return ["codex"]
+
+
+def token_account_labels(
+    provider_id: Optional[str],
+    data: Optional[dict[str, Any]] = None,
+) -> List[str]:
+    """Labels of the official ``tokenAccounts`` block (multi-account providers)."""
+    if not provider_id:
+        return []
+    cfg = data if data is not None else load_official_config()
+    if not cfg:
+        return []
+    want = provider_id.lower().strip()
+    for p in cfg.get("providers") or []:
+        if not isinstance(p, dict) or str(p.get("id") or "").lower() != want:
+            continue
+        block = p.get("tokenAccounts")
+        if not isinstance(block, dict):
+            return []
+        return [
+            str(a["label"])
+            for a in block.get("accounts") or []
+            if isinstance(a, dict) and a.get("label")
+        ]
+    return []
+
+
+def prepare_accounts(provider_id: str) -> List[str]:
+    """Refresh/mirror local logins into ``tokenAccounts``, then list the labels."""
+    if provider_id.lower().strip() == "claude":
+        try:
+            from codexbar_gui.claude_oauth import sync_token_accounts
+
+            sync_token_accounts()
+        except Exception:
+            logger.warning("Claude token-account sync failed", exc_info=True)
+    return token_account_labels(provider_id)
 
 
 # Provider id → env vars the official CLI accepts for API-key auth.
@@ -813,6 +876,7 @@ def build_cli_env(
     *,
     base: Optional[dict[str, str]] = None,
     data: Optional[dict[str, Any]] = None,
+    all_accounts: bool = False,
 ) -> dict[str, str]:
     """Child env for ``codexbar usage``: inject config keys only if unset.
 
@@ -843,7 +907,9 @@ def build_cli_env(
             names[0],
             pid,
         )
-    if any(str(p).lower() == "claude" for p in ids):
+    # In --all-accounts mode every token comes from tokenAccounts; a single
+    # ambient token would only shadow one of them.
+    if not all_accounts and any(str(p).lower() == "claude" for p in ids):
         _inject_claude_oauth(env)
     return env
 
@@ -893,10 +959,12 @@ def fetch_enabled_providers(
     # Cap concurrent-feeling sequential fetches
     max_n = int(os.environ.get("CODEXBAR_MAX_PROVIDERS", "8"))
     ids = ids[: max(1, max_n)]
+    force_accounts = os.environ.get("CODEXBAR_ALL_ACCOUNTS", "").lower() in {"1", "true", "yes"}
     views: List[ProviderView] = []
     for pid in ids:
+        all_accounts = force_accounts or len(prepare_accounts(pid)) > 1
         try:
-            batch = fetch_from_cli(provider=pid, timeout=timeout)
+            batch = fetch_from_cli(provider=pid, timeout=timeout, all_accounts=all_accounts)
         except Exception:
             logger.warning("fetch %s failed", pid, exc_info=True)
             batch = None
@@ -919,10 +987,7 @@ def _usage_source_for_provider(provider_id: Optional[str]) -> Optional[str]:
     """Read official config.json ``source`` (auto|oauth|cli|web|api)."""
     if not provider_id:
         return None
-    for path in (
-        Path.home() / ".config" / "codexbar" / "config.json",
-        Path.home() / ".codexbar" / "config.json",
-    ):
+    for path in _official_config_paths():
         if not path.is_file():
             continue
         try:
@@ -1045,6 +1110,7 @@ def fetch_from_cli(
     provider: Optional[str] = None,
     timeout: float = CLI_TIMEOUT,
     source: Optional[str] = None,
+    all_accounts: bool = False,
 ) -> Optional[List[ProviderView]]:
     binary = find_codexbar_binary()
     if not binary:
@@ -1056,6 +1122,9 @@ def fetch_from_cli(
         if _claude_has_placeholder_api_key():
             configured = "auto"
     attempts = _source_attempts(prov, configured)
+    if all_accounts and (prov or "").lower() == "claude":
+        # Token accounts are OAuth/cookie tokens; the CLI PTY has no account notion.
+        attempts = [a for a in attempts if a != "cli"] or ["oauth"]
 
     last: Optional[List[ProviderView]] = None
     pid_l = (prov or "").lower()
@@ -1065,6 +1134,7 @@ def fetch_from_cli(
             provider=prov,
             source=src,
             timeout=timeout,
+            all_accounts=all_accounts,
         )
         if not views:
             continue
@@ -1093,10 +1163,7 @@ def fetch_from_cli(
 
 
 def _claude_has_placeholder_api_key() -> bool:
-    for path in (
-        Path.home() / ".config" / "codexbar" / "config.json",
-        Path.home() / ".codexbar" / "config.json",
-    ):
+    for path in _official_config_paths():
         if not path.is_file():
             continue
         try:
@@ -1122,6 +1189,7 @@ def _run_usage_cli(
     provider: Optional[str],
     source: Optional[str],
     timeout: float,
+    all_accounts: bool = False,
 ) -> Optional[List[ProviderView]]:
     web_to = max(5, min(int(timeout), 45))
     # Claude oauth is usually fast; keep web scrape short to avoid multi-minute hangs
@@ -1139,8 +1207,10 @@ def _run_usage_cli(
         cmd.extend(["--provider", provider])
     if source:
         cmd.extend(["--source", source])
+    if all_accounts:
+        cmd.append("--all-accounts")
     logger.info("CLI: %s", " ".join(cmd))
-    child_env = build_cli_env(provider)
+    child_env = build_cli_env(provider, all_accounts=all_accounts)
     try:
         proc = subprocess.run(
             cmd,

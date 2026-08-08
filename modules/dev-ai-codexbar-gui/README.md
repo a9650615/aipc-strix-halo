@@ -96,7 +96,7 @@ codexbar_gui/
 ├── icon_updater.py      # Painted tray meter
 ├── claude_oauth.py      # Claude session token bridge for the CLI
 ├── kwin_place.py        # KDE Wayland popover docking
-└── config_dialog.py     # Thin settings (shared config file path)
+└── config_dialog.py     # Settings dialog — category sidebar + provider/token editor
 ```
 
 ## Claude session token (ccs bridge)
@@ -115,6 +115,62 @@ stale token is still passed through — the API decides, not our clock.
 
 Overrides: `CODEXBAR_CLAUDE_OAUTH_TOKEN` (skip the bridge entirely),
 `CODEXBAR_CLAUDE_OAUTH_CLIENT_ID`, `CODEXBAR_CLAUDE_TOKEN_URL`.
+
+## Multiple accounts (2+ Claude logins)
+
+Account handling is upstream's, not ours: the official CLI keeps multi-account
+tokens in `providers[].tokenAccounts` of its config and fetches them all with
+`codexbar usage --provider <id> --all-accounts` (upstream `docs/cli.md`
+"Token accounts"). On Linux those logins live in ccs profiles instead, so before
+each poll `claude_oauth.sync_token_accounts()` mirrors one entry per profile
+into that block — label = the profile's account email (else the ccs profile
+name), token = the freshest access token, refreshed on demand. The config is
+rewritten only when a token actually rotated.
+
+- Fewer than 2 logins → nothing is written; the single-token ambient path stays.
+- 2+ logins → `--all-accounts`, and the ambient `CODEXBAR_CLAUDE_OAUTH_TOKEN`
+  is *not* injected (one ambient token would shadow every account).
+- The block must be camelCase `tokenAccounts`; a snake_case key is ignored by
+  the CLI ("No token accounts configured").
+- `CODEXBAR_ALL_ACCOUNTS=1` forces `--all-accounts` for every provider (Codex
+  enumerates its own visible accounts without any config).
+- Ownership is per-row, not per-provider: `sync_token_accounts()` only ever
+  touches the accounts *it* generated — id `uuid5(ACCOUNT_NS, label)` — so an
+  account added by hand in Settings keeps its position and `addedAt` across
+  every resync, and a ccs profile logging out drops only its own row. The id
+  match is case-insensitive: the official (Swift) CLI reformats UUIDs to
+  uppercase when it rewrites `config.json` (e.g. after `codexbar config
+  validate`), while Python's `uuid5` always renders lowercase — confirmed on
+  this machine's real config. `claude_oauth.is_ccs_owned()` is the single
+  source of truth for that check; the Settings token-account editor uses it
+  too, to badge and lock those rows (see below).
+
+Each account gets its own tab/card, keyed `provider:account`; titles gain a
+`Claude · <account>` suffix only when one provider returns several accounts.
+The Hermes-compatible `GET /usage` stays one row per provider and reports the
+most constrained account.
+
+## Settings dialog
+
+`config_dialog.py` follows the official CodexBar Settings shape instead of one
+long scroll of every provider: a category sidebar on the left (**General** ·
+**Providers** · **Advanced**), detail pane on the right. Providers has its own
+list+detail split — a scannable list (name, enabled dot, usage source, account
+count) on the left, the selected provider's full form on the right — so only
+one provider's fields are on screen at a time.
+
+Every provider's detail pane has a **Token accounts** editor (Add / Edit /
+Remove / Set active), writing the same camelCase `tokenAccounts` block
+described above — this works for any provider in the catalog, not just
+Claude (upstream accepts token accounts broadly; Claude specifically takes
+`sk-ant-oat…` OAuth tokens or a `sessionKey` cookie). Token fields are always
+masked (`QLineEdit.EchoMode.Password`) and never appear in a log line or
+message box.
+
+Rows the ccs bridge generated show a **"ccs auto-sync" badge** and a locked
+Edit button — editing would be pointless, the next poll overwrites the token
+anyway. Everything else (hand-added via Add, or an id that predates the ccs
+bridge) stays fully editable and survives every resync untouched.
 
 ## Popover placement on KDE Wayland
 

@@ -128,6 +128,36 @@ _EN: Dict[str, str] = {
     "failed_save": "Failed to save: {err}",
     "showing_featured": "Showing featured + enabled ({n}). Full catalog on disk: {total} — tick “Show all providers”.",
     "seconds_suffix": " s",
+    # Settings — sidebar categories
+    "category_general": "General",
+    "category_providers": "Providers",
+    "category_advanced": "Advanced",
+    "settings_about": "Advanced · Config file",
+    # Settings — token accounts editor
+    "token_accounts_heading": "Token accounts (multiple logins)",
+    "token_accounts_hint": (
+        "Add more than one login for this provider. The active one is starred; "
+        "the CLI fetches every account when 2+ are present."
+    ),
+    "no_token_accounts": "No token accounts yet — click Add to log in a second account.",
+    "token_account_add_btn": "Add…",
+    "token_account_edit_btn": "Edit…",
+    "token_account_remove_btn": "Remove",
+    "token_account_set_active_btn": "Set active",
+    "token_account_ccs_badge": "ccs auto-sync",
+    "token_account_ccs_locked": "Managed by ccs sync — edits would be overwritten on the next poll.",
+    "token_account_ccs_locked_remove": (
+        "Managed by ccs sync — log out that ccs profile to remove this account; "
+        "the next poll would just re-add it."
+    ),
+    "token_account_add": "Add token account",
+    "token_account_edit": "Edit token account",
+    "token_account_label": "Label",
+    "token_account_label_ph": "e.g. work@example.com",
+    "token_account_token": "Token",
+    "token_account_token_ph": "API key / OAuth token / session cookie",
+    "token_account_required": "Label and token are both required.",
+    "remove_account_confirm": "Remove token account “{label}”?",
     # Tray
     "tray_tip": "CodexBar — click for usage",
     "tray_click": "(click tray icon)",
@@ -242,6 +272,28 @@ _ZH_TW: Dict[str, str] = {
     "failed_save": "儲存失敗：{err}",
     "showing_featured": "顯示精選與已啟用（{n}）。磁碟上共 {total} 個 — 勾選「顯示全部供應商」。",
     "seconds_suffix": " 秒",
+    "category_general": "一般",
+    "category_providers": "供應商",
+    "category_advanced": "進階",
+    "settings_about": "進階 · 設定檔",
+    "token_accounts_heading": "多組登入權杖",
+    "token_accounts_hint": "為此供應商加入多組登入。使用中的帳號會加星號；有 2 組以上時 CLI 會取得每一組的用量。",
+    "no_token_accounts": "尚無權杖帳號 — 按「新增」加入第二組登入。",
+    "token_account_add_btn": "新增…",
+    "token_account_edit_btn": "編輯…",
+    "token_account_remove_btn": "移除",
+    "token_account_set_active_btn": "設為使用中",
+    "token_account_ccs_badge": "ccs 自動同步",
+    "token_account_ccs_locked": "由 ccs 自動同步管理，編輯會在下次輪詢時被覆蓋。",
+    "token_account_ccs_locked_remove": "由 ccs 自動同步管理 — 請登出該 ccs 個人資料以移除；否則下次輪詢會再加回來。",
+    "token_account_add": "新增權杖帳號",
+    "token_account_edit": "編輯權杖帳號",
+    "token_account_label": "標籤",
+    "token_account_label_ph": "例如 work@example.com",
+    "token_account_token": "權杖",
+    "token_account_token_ph": "API 金鑰／OAuth 權杖／session cookie",
+    "token_account_required": "標籤與權杖皆為必填。",
+    "remove_account_confirm": "確定要移除權杖帳號「{label}」嗎？",
     "tray_tip": "CodexBar — 點一下查看用量",
     "tray_click": "（點系統匣圖示）",
     "tray_timeout": "CLI 逾時或無資料 — 點一下查看詳情",
@@ -466,13 +518,31 @@ def t(key: str, **kwargs: Any) -> str:
 
 
 def translate_window_label(label: str) -> str:
-    """Map Session/Weekly labels to locale."""
-    low = (label or "").lower()
-    if "5h" in low or low in {"session", "session (5h)", "primary"}:
+    """Map canonical Session/Weekly/Daily labels to locale.
+
+    Named extras (e.g. ``Codex Spark Weekly``, ``Daily Routines``) must keep
+    their product title — substring matching on ``week``/`daily` collapses them
+    into a duplicate bare "Weekly"/"Daily" row (Codex Plus weekly-only UI bug).
+    """
+    raw = (label or "").strip()
+    if not raw:
+        return raw
+    low = raw.lower()
+    # Exact / canonical primary-lane names only
+    if low in {"session", "session (5h)", "primary"}:
         return t("session_5h")
-    if "week" in low or low in {"weekly", "secondary"}:
+    if low in {"weekly", "secondary", "week"}:
         return t("weekly")
-    return label
+    if low in {"daily"}:
+        # Prefer dedicated key when present; fall back to English word
+        cat = _CATALOGS.get(_current) or _EN
+        if "daily" in cat or "daily" in _EN:
+            return t("daily")
+        return raw
+    # "Session (5h)" variants from CLI — only when the whole label is the session lane
+    if low.startswith("session") and ("5h" in low or low == "session"):
+        return t("session_5h")
+    return raw
 
 
 def translate_resets_in(text: str) -> str:

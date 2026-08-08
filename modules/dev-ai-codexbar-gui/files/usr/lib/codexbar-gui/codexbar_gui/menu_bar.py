@@ -183,15 +183,18 @@ def order_overview_views(
     Non-empty → that order first (official “up to 3” is a soft guide; we allow more).
     """
     s = settings.normalized()
-    by_id = {str(getattr(v, "provider", "")).lower(): v for v in views}
+    by_id: dict = {}
+    for v in views:
+        by_id.setdefault(str(getattr(v, "provider", "")).lower(), []).append(v)
     if not s.overview_providers:
         return list(views)
     ordered: List[Any] = []
     seen = set()
     for pid in s.overview_providers:
-        v = by_id.get(pid.lower())
-        if v is not None and pid.lower() not in seen:
-            ordered.append(v)
+        group = by_id.get(pid.lower())
+        if group and pid.lower() not in seen:
+            # One provider can hold several accounts — keep them all.
+            ordered.extend(group)
             seen.add(pid.lower())
     # Append remaining enabled not listed (still visible, after picks)
     for v in views:
