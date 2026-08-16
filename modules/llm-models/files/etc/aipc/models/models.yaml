@@ -25,35 +25,47 @@
 # 2026-07-06 for phase-2-memory (see rag-embedder module) — mem0 and the
 # RAG watchers need a real embedding alias behind the gateway.
 models:
-  # Small, always-on general-purpose assistant model.
+  # Small, always-on general-purpose assistant model. ESP32 LLM host
+  # (2026-08-17): this alias is also the target for a LAN-exposed endpoint
+  # (litellm-external.service, :4001) an ESP32 device talks to directly —
+  # see llm-litellm's README for the auth/network split.
   #
-  # 2026-08-17 (lemonade v10.8.1 -> v11.6.0 bump): the 2026-07-12 plan below
-  # (swap to qwen3.5-4b-FLM) was never actually applied to this machine —
-  # hardware-checked before this change: the live server still had
-  # gemma4-it-e4b-FLM downloaded/resident, not qwen3.5-4b-FLM. Rather than
-  # apply the year-old plan as-is, re-checked the FLM catalog fresh against
-  # the newly-pulled v11.6.0 image (`lemonade backends install flm:npu` +
-  # `lemonade list` on a throwaway probe container) since a newer option
-  # exists now: qwen3vl-it-4b-FLM — dedicated Qwen3-VL vision-language
-  # architecture (vs qwen3.5-4b-FLM's bolted-on Image-Text-to-Text), smaller
-  # (3.9GB vs 5.2GB), labels vision+tool-calling. Picked over qwen3.5-4b-FLM
-  # for being the newer/purpose-built VL model at a smaller footprint; picked
-  # over staying on gemma4-it-e4b-FLM (9.1GB, adds audio+reasoning labels)
-  # for size, since this machine's voice pipeline doesn't feed audio to this
-  # model anyway (SenseVoice STT :9001 -> text -> /chat -> Kokoro/CosyVoice
-  # TTS). The CREATE_HWCTX -22 coexistence constraint the 2026-07-12 note
-  # flagged is moot here since resident-small is the only model ever loaded
-  # on the NPU/FLM backend, no second FLM model is ever resident alongside
-  # it. Hardware-verified 2026-08-17: real pull + load on the running box
-  # (not just the probe container), a plain-text completion, and a vision
-  # completion (128x128 solid-color PNG, correctly identified) both against
-  # `/api/v1/health`-confirmed `device: npu` residency. Real
-  # `max_context_window` is 40960 (not the model card's larger claim) — see
-  # llm-litellm's config.yaml comment for where that number is used.
+  # 2026-08-17 (lemonade v10.8.1 -> v11.6.0 bump), two swaps same day:
+  # 1) gemma4-it-e4b-FLM -> qwen3vl-it-4b-FLM: the 2026-07-12 plan to swap to
+  #    qwen3.5-4b-FLM was never actually applied to this machine (live still
+  #    had gemma4-it-e4b-FLM). Re-checked the FLM catalog fresh instead of
+  #    applying the stale plan and picked qwen3vl-it-4b-FLM — dedicated
+  #    Qwen3-VL architecture (the ONLY model in FastFlowLM 0.9.46's official
+  #    catalog shipping real `vision_attn.xclbin`+`vision_mm.xclbin` kernels;
+  #    every other FLM vision-labeled model, including the 24.3GB
+  #    qwen3.6-moe-35b-a3b-FLM, only carries a bare `vision_weight.q4nx` with
+  #    no dedicated NPU vision kernel — confirmed via
+  #    `/opt/lemonade/.cache/lemonade/bin/flm/npu/model_info.json`'s per-model
+  #    file manifest), smaller (3.9GB vs 9.1GB), vision+tool-calling.
+  # 2) qwen3vl-it-4b-FLM -> back to gemma4-it-e4b-FLM (user decision): needs
+  #    to directly consume raw audio (ESP32 host use case) — hardware-tested
+  #    both with a real espeak-ng WAV via `input_audio` chat content: gemma4
+  #    correctly transcribed a spoken digit, qwen3vl hallucinated a wrong
+  #    answer (no audio_weight.q4nx in its manifest at all). Trade one thing
+  #    back for it: gemma4's vision is the bare-weight kind (no dedicated
+  #    kernel, see above) — accepted, since audio is the hard requirement
+  #    here and vision quality is secondary for this alias.
+  # ctx_size 32768 (not the 131072 model-card max): resident-small is a
+  # small-talk lane, not a document/long-context lane (those route to
+  # coder-agentic/ornith-35b/coder-122b) — user-directed trim for lower
+  # KV-cache footprint. `--pinned` set at load time (not expressible in this
+  # YAML — see llm-lemonade's ensure-resident-small.sh / the `lemonade load`
+  # invocation in llm-lemonade's README) so it survives eviction pressure
+  # now that an external, less-trusted network path can reach it.
+  # `max_context_window` was hardware-confirmed 131072 via
+  # GET /api/v1/models/gemma4-it-e4b-FLM before the ctx_size trim was chosen.
   - alias: resident-small
     backend: lemonade
-    model_id: qwen3vl-it-4b-FLM
-    size_gb: 3.9
+    model_id: gemma4-it-e4b-FLM
+    size_gb: 9.1
+    recipe: flm
+    recipe_options:
+      ctx_size: 32768
     # NPU/FLM — outside the GPU/GTT pool, invisible to the 0012 memory
     # scheduler (it only budgets Vulkan models).
     pool: npu

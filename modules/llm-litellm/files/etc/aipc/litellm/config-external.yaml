@@ -1,0 +1,32 @@
+# Separate, minimal config for litellm-external.service (LAN-facing, :4001,
+# ESP32 LLM host — see README "External LAN gateway (ESP32 host)"). Deliberately
+# NOT the same config.yaml the internal :4000 gateway uses:
+#
+# - Only resident-small is listed. The 0012 memory scheduler
+#   (scheduler_hook.py) tracks GPU admission state in-process; running two
+#   independent litellm processes against the *same* GPU-gated aliases
+#   (coder-agentic, ornith-35b, assistant-gemma, qwythos-9b, coder-122b)
+#   would let each admit requests without seeing the other's budget,
+#   risking double-admission/OOM. resident-small is NPU/FLM — exempt from
+#   that scheduler already (see models.yaml) — so it's the only alias safe
+#   to serve from a second, uncoordinated process. Widening this file to
+#   more aliases needs a real shared-state fix in scheduler_hook.py first.
+# - No scheduler_hook callback: nothing here needs it, and the container
+#   doesn't mount scheduler_hook.py or models.yaml at all (see the
+#   litellm-external.container quadlet).
+# - master_key is required (unlike every entry in the internal config.yaml):
+#   this listener is reachable from the LAN, not just loopback.
+model_list:
+  - model_name: resident-small
+    litellm_params:
+      model: openai/gemma4-it-e4b-FLM
+      api_base: http://127.0.0.1:8001/v1
+      api_key: none
+      timeout: 1800
+      num_retries: 0
+    model_info:
+      max_input_tokens: 32768
+      max_output_tokens: 4096
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

@@ -8,23 +8,16 @@
 # phase-2-memory: mem0 and the RAG watchers need it behind the gateway
 # (see modules/rag-embedder).
 model_list:
-  # Small, always-on general-purpose assistant — swapped 2026-08-17 (lemonade
-  # v10.8.1 -> v11.6.0 bump) from gemma4-it-e4b-FLM straight to
-  # qwen3vl-it-4b-FLM (the 2026-07-12 qwen3.5-4b-FLM plan was written but
-  # never actually applied — see models.yaml for the full rationale on why
-  # qwen3vl was picked over both). Same resident NPU slot, not an added
-  # resident NPU model. No enable_thinking flag: qwen3vl-it-4b-FLM's catalog
-  # labels are vision+tool-calling only, no reasoning label, so unlike the
-  # never-applied qwen3.5-4b-FLM plan this is not a hybrid-thinking model —
-  # confirm this holds if reasoning_content ever shows up empty-content
-  # symptoms (the same failure mode already fixed for assistant-gemma/
-  # coder-agentic). Runs on Lemonade's NPU/FLM backend, not Ollama —
-  # hardware-verified 2026-07-04 end-to-end (prior model) including
-  # persistence across a service restart, so an always-on model doesn't
-  # permanently compete with big interactive models for iGPU/GTT memory.
+  # Small, always-on general-purpose assistant — see models.yaml for the full
+  # 2026-08-17 history (gemma4-it-e4b-FLM -> qwen3vl-it-4b-FLM -> back to
+  # gemma4-it-e4b-FLM same day, for real NPU-native raw-audio input the ESP32
+  # LLM-host use case needs). No enable_thinking flag: gemma4 is not
+  # hybrid-thinking (unlike the qwen3.x family — see coder-agentic/
+  # assistant-gemma below for that failure mode). ctx_size 32768 pinned at
+  # `lemonade load` time (see models.yaml), not expressible here.
   - model_name: resident-small
     litellm_params:
-      model: openai/qwen3vl-it-4b-FLM
+      model: openai/gemma4-it-e4b-FLM
       api_base: http://127.0.0.1:8001/v1
       api_key: none
       # timeout/num_retries: see coder-agentic below for why local
@@ -32,10 +25,7 @@ model_list:
       timeout: 1800
       num_retries: 0
     model_info:
-      # 40960 hardware-confirmed 2026-08-17 via GET /api/v1/models/qwen3vl-it-4b-FLM
-      # (max_context_window) and the live /api/v1/health recipe_options.ctx_size
-      # after a real load — smaller than the guessed 131072.
-      max_input_tokens: 40960
+      max_input_tokens: 32768
       max_output_tokens: 4096
 
   # Compact / Haiku-tier, swapped 2026-07-12 (0008 fleet refresh): Unsloth

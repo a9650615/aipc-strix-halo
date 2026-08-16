@@ -404,3 +404,24 @@ registered again later; not a concern right now since none is registered.
   container's `llamacpp:vulkan` backend (see above) makes this more
   likely to matter, not less. Pass a lower value via `--vllm-args` if
   this becomes relevant again.
+
+## `aipc-resident-small.service` was live-disabled despite `post-install.sh` (2026-08-17)
+
+`post-install.sh` has called `systemctl enable aipc-resident-small.service`
+since it was written, but `systemctl status` on this machine showed
+`disabled` — same class of drift as `docs/live-hotfix-workflow.md` warns
+about: this box was live-hotfixed at some point via file copies, which never
+runs `post-install.sh`, so the enable never actually landed. Not caught
+earlier because nothing depended on `resident-small` surviving a restart
+unattended. It matters now: an ESP32 device uses `resident-small`
+(`gemma4-it-e4b-FLM`, pinned, `ctx_size: 32768` — see `llm-models`) as its
+LLM host over `llm-litellm`'s new external gateway (see that module's
+README), so losing the pin on a routine `lemonade.service` restart (driver
+update, reboot, `--rm` container recreation) would silently break it.
+`systemctl enable`d live and hardware-verified: a real `systemctl restart
+lemonade.service` followed by `aipc-resident-small.service` firing
+automatically (`WantedBy=lemonade.service`) re-pinned `gemma4-it-e4b-FLM` on
+`device: npu` with `ctx_size: 32768` intact (persisted via
+`recipe_options.json` on the mounted cache volume, independent of the
+`--rm` container's own lifecycle) before the watchdog's own chat-probe
+retries would have reported failure.

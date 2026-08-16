@@ -96,6 +96,57 @@ the backstop for when it isn't run that way.
 boot. `post-install.sh` only stages `config.yaml` + the endpoint file — it no
 longer hand-copies the unit or runs `systemctl --user`.
 
+`quadlet/litellm-external.container` is placed the same way and starts
+`litellm-external.service` alongside it — see the next section.
+
+## External LAN gateway (ESP32 host) (2026-08-17)
+
+A second, independent litellm process — `litellm-external.service`, port
+`4001`, bound `0.0.0.0` (host networking, so it's reachable on every
+interface: LAN wifi `192.168.3.x` and the `tailscale0` tailnet IP both
+hardware-confirmed reachable; firewalld's `tailscale` zone is `trusted` by
+Tailscale's own install, LAN wifi's `FedoraWorkstation` zone already had
+`1025-65535/tcp` open, neither needed a firewall change) — added because an
+ESP32 needs to reach `resident-small` (now `gemma4-it-e4b-FLM`, pinned NPU
+resident, `ctx_size: 32768` — see `llm-models`) directly as its LLM host,
+and the internal gateway (`litellm.service`, `127.0.0.1:4000`) is loopback-
+only and has **no auth at all** — every `model_list` entry there is
+`api_key: none` and no `general_settings.master_key` is set, because every
+existing consumer (Hermes, CCS, the 0012 scheduler) calls it unauthenticated
+from the same host. Opening that same process to the LAN would have put
+every alias — including the cloud ones billed against a real subscription —
+behind zero auth for anyone on the network.
+
+Deliberately a **second process with its own minimal config**
+(`config-external.yaml`), not the same `litellm.service` reconfigured, for
+two independent reasons:
+
+- **Auth must not leak onto the internal path.** The master key lives in its
+  own `external-key.env` (`LITELLM_MASTER_KEY`, not in git), read only by
+  `litellm-external.service`'s `EnvironmentFile=`. `litellm.service` keeps
+  reading only `cloud-keys.env`, which does not carry that key — so it stays
+  keyless and every existing internal caller is unaffected. (Tried once:
+  appending `LITELLM_MASTER_KEY` to the shared `cloud-keys.env` would have
+  put both processes behind auth, breaking every header-less internal
+  caller — reverted before restart, never live.)
+- **`config-external.yaml` lists only `resident-small`.** The 0012 memory
+  scheduler (`scheduler_hook.py`) tracks GPU admission state in-process; a
+  second litellm process serving the same GPU-gated aliases
+  (`coder-agentic`/`ornith-35b`/`assistant-gemma`/`qwythos-9b`/`coder-122b`)
+  would admit requests with no visibility into what the internal process
+  already admitted — real double-admission/OOM risk. `resident-small` is
+  NPU/FLM, already exempt from that scheduler (see `llm-models`), so it's
+  the only alias safe to serve from an uncoordinated second process without
+  a real shared-state fix in `scheduler_hook.py` first. The external
+  container doesn't mount `scheduler_hook.py` or `models.yaml` at all.
+
+Hardware-verified 2026-08-17: `:4000` unauthenticated (any/no bearer token)
+still serves `resident-small`; `:4001` returns `401` with no/wrong key and
+`200` with the real one; both `<aipc-lan-ip>:4001` and `<aipc-tailscale-ip>:4001`
+(tailscale0) reachable with the key. ESP32 firmware itself cannot join the
+tailnet (no practical WireGuard stack for this class of microcontroller) —
+the tailscale path is for debugging from off-LAN, not the ESP32's own route.
+
 ## Dependencies
 
 - `llm-lemonade` (NPU + iGPU/Vulkan backend for `resident-small`,
