@@ -325,11 +325,54 @@ since retiring the module entirely wasn't part of this change.
 - `amd-xdna` driver loaded and NPU visible via `lspci`.
 - Lemonade server container image, pinned by digest in
   `files/etc/systemd/system/lemonade.service`:
-  `ghcr.io/lemonade-sdk/lemonade-server@sha256:e727643d...` (= tag `v10.8.1`,
-  verified against the ghcr manifest 2026-07-02). The previously referenced
-  `amd/lemonade-sdk` image does not exist on Docker Hub; upstream publishes to
-  ghcr via `lemonade-sdk/lemonade`'s `build-and-push-container.yml`. Bump by
-  resolving a newer tag's digest and updating both the unit file and this line.
+  `ghcr.io/lemonade-sdk/lemonade-server@sha256:87ee7ccb...` (= tag `v11.6.0`,
+  verified against the ghcr manifest 2026-08-17, bumped from `v10.8.1`). The
+  previously referenced `amd/lemonade-sdk` image does not exist on Docker Hub;
+  upstream publishes to ghcr via `lemonade-sdk/lemonade`'s
+  `build-and-push-container.yml`. Bump by resolving a newer tag's digest and
+  updating both the unit file and this line.
+
+## v10.8.1 -> v11.6.0 bump (2026-08-17)
+
+Hardware-verified against a throwaway `podman run --rm` probe of the pulled
+`v11.6.0` image before touching the live unit:
+
+- **Image now runs as non-root `uid 10001` (gid 999), `HOME=/opt/lemonade`**
+  (`Config.User` + `podman exec ... id`), a breaking change from v11.0.0's
+  release notes. The three bind-mounted host paths are root-owned
+  (`cache`/`flm`) or owned by the primary user (`hf/`, shared with Ollama via
+  `aipc-models-dir.service`) — chowning either risks breaking that other
+  consumer, so the unit now passes `--user 0:0` to keep the container running
+  as root instead, and the three `-v` destinations moved from
+  `/root/.cache/...` / `/root/.config/flm` to `/opt/lemonade/.cache/...` /
+  `/opt/lemonade/.config/flm` to match where the image's own code actually
+  reads/writes now (confirmed via `podman exec ... find /opt/lemonade -iname
+  '*flm*'` and `ls /opt/lemonade/.cache`) — that path move is independent of
+  the uid and applies regardless of the `--user` override.
+- `flm:npu` backend version bumped too: `fastflowlm_0.9.46` (was pinned at
+  `min_ver 0.9.43` when `resident-small`'s catalog entry was last checked,
+  2026-07-12) — confirmed via `lemonade backends install flm:npu` on the
+  probe container.
+- CORS tightening (v11.5.0) and the `/v1/models` GGUF-subfolder listing
+  change (v11.6.0) don't affect this deployment: no browser client hits
+  `:8001` directly (only `llm-litellm`, server-to-server, no `Origin`
+  header), and no `extra_models_dir` is configured here.
+- **`lemonade backends install <spec>` can report "installed successfully"
+  without actually replacing an already-present-but-stale binary** —
+  hardware-hit 2026-08-17: after the bump, `backends` listed
+  `llamacpp:vulkan` as `update_required`; running `install llamacpp:vulkan`
+  printed success but left the June-dated `b9747` binary untouched on disk
+  (confirmed via the binary's mtime and `version.txt`), and the next
+  `coder-agentic` load crash-looped with `error: invalid argument:
+  --load-mode` (lemond v11.6.0 passing a flag the stale llama-server predates
+  — an unrelated crash-storm side effect: the failed load evicted every
+  resident model, including `resident-small` on the NPU, which is otherwise
+  unaffected by the GPU-side backend). `uninstall llamacpp:vulkan` then
+  `install llamacpp:vulkan` forced a real fetch (`b10375`, confirmed by a new
+  file size/mtime and a working load right after) — `uninstall`+`install` is
+  the reliable refresh path after a version bump, plain `install` on top of
+  an existing stale one is not. `flm:npu`'s install did not hit this (fresh
+  install, nothing stale to skip over).
 
 ## Known gap: no NPU/FLM embedding model
 

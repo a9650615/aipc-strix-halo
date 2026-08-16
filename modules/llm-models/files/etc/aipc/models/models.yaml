@@ -25,33 +25,35 @@
 # 2026-07-06 for phase-2-memory (see rag-embedder module) — mem0 and the
 # RAG watchers need a real embedding alias behind the gateway.
 models:
-  # Small, always-on general-purpose assistant model. Swapped 2026-07-12
-  # (0008 fleet refresh item 6) from gemma4-it-e4b-FLM to qwen3.5-4b-FLM —
-  # same NPU resident slot, not a second resident NPU model (hardware-
-  # tested: gemma4-it-e4b + qwen3.5:4b loaded together fail
-  # CREATE_HWCTX -22 at any context size; only a 1B-class model coexists
-  # with e4b). qwen3.5:4b is newer, smarter, keeps vision + tool calling,
-  # and gets a 256k context window (FLM catalog v0.9.43: min_ver 0.9.43,
-  # Image-Text-to-Text, Tool Calling: Yes, Q4_1) — audio is not lost in
-  # practice, since the voice pipeline is SenseVoice STT (:9001) -> text ->
-  # /chat (plain string content) -> Kokoro/CosyVoice TTS; the LLM here
-  # never receives audio either way. qwen3.5:4b is hybrid-thinking, so
-  # llm-litellm's entry needs enable_thinking: false (see that file) —
-  # gemma4-it-e4b-FLM did not need this flag. model_id below is a DERIVED
-  # name (":" -> "-" + "-FLM" suffix, same convention as
-  # gemma4-it:e4b -> gemma4-it-e4b-FLM) — not yet hardware-confirmed
-  # against the real `aipc models sync`/lemonade pull output; confirm
-  # before trusting this entry (see openspec/changes/0008-fleet-refresh).
-  # Runs on Lemonade's NPU/FLM backend, not Ollama — hardware-verified
-  # 2026-07-04 end-to-end (prior model) including persistence across a
-  # service restart — so an always-on model doesn't permanently occupy
-  # iGPU/GTT memory that coder-agentic/ornith-35b also need; the NPU
-  # otherwise sits idle. keep_alive/pinning is Lemonade's own concern now
-  # (see llm-lemonade), not Ollama's litellm_params.keep_alive.
+  # Small, always-on general-purpose assistant model.
+  #
+  # 2026-08-17 (lemonade v10.8.1 -> v11.6.0 bump): the 2026-07-12 plan below
+  # (swap to qwen3.5-4b-FLM) was never actually applied to this machine —
+  # hardware-checked before this change: the live server still had
+  # gemma4-it-e4b-FLM downloaded/resident, not qwen3.5-4b-FLM. Rather than
+  # apply the year-old plan as-is, re-checked the FLM catalog fresh against
+  # the newly-pulled v11.6.0 image (`lemonade backends install flm:npu` +
+  # `lemonade list` on a throwaway probe container) since a newer option
+  # exists now: qwen3vl-it-4b-FLM — dedicated Qwen3-VL vision-language
+  # architecture (vs qwen3.5-4b-FLM's bolted-on Image-Text-to-Text), smaller
+  # (3.9GB vs 5.2GB), labels vision+tool-calling. Picked over qwen3.5-4b-FLM
+  # for being the newer/purpose-built VL model at a smaller footprint; picked
+  # over staying on gemma4-it-e4b-FLM (9.1GB, adds audio+reasoning labels)
+  # for size, since this machine's voice pipeline doesn't feed audio to this
+  # model anyway (SenseVoice STT :9001 -> text -> /chat -> Kokoro/CosyVoice
+  # TTS). The CREATE_HWCTX -22 coexistence constraint the 2026-07-12 note
+  # flagged is moot here since resident-small is the only model ever loaded
+  # on the NPU/FLM backend, no second FLM model is ever resident alongside
+  # it. Hardware-verified 2026-08-17: real pull + load on the running box
+  # (not just the probe container), a plain-text completion, and a vision
+  # completion (128x128 solid-color PNG, correctly identified) both against
+  # `/api/v1/health`-confirmed `device: npu` residency. Real
+  # `max_context_window` is 40960 (not the model card's larger claim) — see
+  # llm-litellm's config.yaml comment for where that number is used.
   - alias: resident-small
     backend: lemonade
-    model_id: qwen3.5-4b-FLM
-    size_gb: 2.5
+    model_id: qwen3vl-it-4b-FLM
+    size_gb: 3.9
     # NPU/FLM — outside the GPU/GTT pool, invisible to the 0012 memory
     # scheduler (it only budgets Vulkan models).
     pool: npu

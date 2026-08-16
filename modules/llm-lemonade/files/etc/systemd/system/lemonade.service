@@ -25,9 +25,20 @@ ExecStartPre=/usr/bin/mkdir -p /var/lib/aipc-lemonade/cache /var/lib/aipc-lemona
 # model weights — Ollama blobs and Lemonade HF downloads — share one root.
 # See configure-lemonade.sh for what this does and why.
 ExecStartPre=/usr/lib/aipc/llm-lemonade/configure-lemonade.sh
+# --user 0:0: v11.0.0 switched the image's default USER to non-root uid
+# 10001 (gid 999) and moved its HOME/cache root to /opt/lemonade — hardware-
+# checked 2026-08-17 against the pulled v11.6.0 image (`podman exec ... id`).
+# The three bind-mounts below are host paths owned by root (cache/flm) and
+# by the primary user uid 1000 (hf/, a tree /var/lib/aipc-models shares with
+# Ollama, managed by aipc-models-dir.service) — chowning either to 10001:999
+# risks breaking that other consumer. Overriding back to root here is the
+# smaller, reversible change and matches every other service on this box
+# (nothing else runs rootless). Revisit only if upstream removes the ability
+# to run as root.
 ExecStart=/usr/bin/podman run \
     --name lemonade \
     --rm \
+    --user 0:0 \
     --device=/dev/accel/accel0:/dev/accel/accel0 \
     --device=/dev/kfd:/dev/kfd \
     --device=/dev/dri:/dev/dri \
@@ -35,10 +46,10 @@ ExecStart=/usr/bin/podman run \
     --ulimit memlock=-1:-1 \
     -e HSA_OVERRIDE_GFX_VERSION=11.5.1 \
     -p 127.0.0.1:8001:8001 \
-    -v /var/lib/aipc-lemonade/cache:/root/.cache/lemonade:Z \
-    -v /var/lib/aipc-lemonade/flm:/root/.config/flm:Z \
-    -v /var/lib/aipc-models/hf:/root/.cache/huggingface:Z \
-    ghcr.io/lemonade-sdk/lemonade-server@sha256:e727643dad3b0680ececbcf7ee1430e5f447a3bdf3700824335d3ee18a3dcfb5 \
+    -v /var/lib/aipc-lemonade/cache:/opt/lemonade/.cache/lemonade:Z \
+    -v /var/lib/aipc-lemonade/flm:/opt/lemonade/.config/flm:Z \
+    -v /var/lib/aipc-models/hf:/opt/lemonade/.cache/huggingface:Z \
+    ghcr.io/lemonade-sdk/lemonade-server@sha256:87ee7ccb3fc059787a63038927e1d488107ff74a3cc5aa71ae77daab234661ad \
     ./lemond --host 0.0.0.0 --port 8001
 ExecStop=/usr/bin/podman stop -t 20 lemonade
 ExecStopPost=-/usr/bin/podman rm -f lemonade
